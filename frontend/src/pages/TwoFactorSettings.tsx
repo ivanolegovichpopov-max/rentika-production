@@ -66,7 +66,7 @@ export function TwoFactorSettings() {
         </p>
         <form onSubmit={disable} className="inline-form">
           <input placeholder="Код для отключения" value={disableCode} onChange={(e) => setDisableCode(e.target.value)} />
-          <button type="submit" className="danger">Отключить 2FA</button>
+          <button type="submit" className="btn btn-danger">Отключить 2FA</button>
         </form>
         {error && <div className="form-error">{error}</div>}
       </div>
@@ -98,7 +98,7 @@ export function TwoFactorSettings() {
         <p className="muted small">Provisioning URI (для отладки): {provisioningUri}</p>
         <form onSubmit={confirmSetup} className="inline-form">
           <input autoFocus placeholder="Код из приложения" value={code} onChange={(e) => setCode(e.target.value)} />
-          <button type="submit">Подтвердить и включить</button>
+          <button type="submit" className="btn btn-primary">Подтвердить и включить</button>
         </form>
         {error && <div className="form-error">{error}</div>}
       </div>
@@ -112,7 +112,7 @@ export function TwoFactorSettings() {
         Дополнительная защита входа кодом из приложения-аутентификатора. Совместимо с Google
         Authenticator, Microsoft Authenticator и Яндекс Ключ (стандарт TOTP, RFC 6238).
       </p>
-      <button onClick={startSetup}>Включить 2FA</button>
+      <button className="btn btn-primary" onClick={startSetup}>Включить 2FA</button>
       {error && <div className="form-error">{error}</div>}
     </div>
   );

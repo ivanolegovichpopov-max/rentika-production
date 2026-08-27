@@ -54,7 +54,7 @@ export function Login() {
           <p className="muted">Введите код из приложения-аутентификатора (Google Authenticator, Microsoft Authenticator, Яндекс Ключ) или backup-код.</p>
           <input autoFocus placeholder="000000" value={code} onChange={(e) => setCode(e.target.value)} />
           {error && <div className="form-error">{error}</div>}
-          <button type="submit" disabled={busy}>Подтвердить</button>
+          <button type="submit" className="btn btn-primary" disabled={busy}>Подтвердить</button>
         </form>
       </div>
     );
@@ -73,7 +73,7 @@ export function Login() {
           <input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
         </label>
         {error && <div className="form-error">{error}</div>}
-        <button type="submit" disabled={busy}>Войти</button>
+        <button type="submit" className="btn btn-primary" disabled={busy}>Войти</button>
         <p className="muted">
           Нет аккаунта? <Link to="/register">Зарегистрировать свой бизнес</Link>
         </p>

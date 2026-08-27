@@ -856,7 +856,15 @@ export function RentalsTab({
         );
       })}
 
-      {sorted.length === 0 && <div className="empty-note">Аренд по заданным условиям не найдено.</div>}
+      {sorted.length === 0 && (
+        <div className="panel">
+          <div className="panel-body">
+            <div className="empty-note">
+              Ничего не найдено{search ? ` по запросу «${search}»` : " в этом фильтре"}.
+            </div>
+          </div>
+        </div>
+      )}
 
       {showCreate && (
         <CreateRentalModal

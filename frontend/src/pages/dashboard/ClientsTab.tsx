@@ -90,55 +90,56 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
         </form>
       )}
 
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Имя</th>
-              <th>Документ</th>
-              <th>Рейтинг</th>
-              <th>Аренды</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((c) => {
-              const clientRentals = rentals.filter((r) => r.client_id === c.id);
-              const activeCount = clientRentals.filter((r) => {
-                const s = rentalDisplayStatus(r);
-                return s === "active" || s === "overdue";
-              }).length;
-              return (
-                <tr key={c.id} onClick={() => setOpenClientId(c.id)} style={{ cursor: "pointer" }}>
-                  <td>
-                    <div className="cell-name">{c.name}</div>
-                    <div className="cell-sub">{c.phone ?? "—"}</div>
-                  </td>
-                  <td>{c.doc ?? "—"}</td>
-                  <td>
-                    <Badge meta={RATING_META[c.rating]} />
-                  </td>
-                  <td>
-                    {clientRentals.length} всего{activeCount > 0 ? `, ${activeCount} сейчас` : ""}
-                  </td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <button className="btn btn-sm btn-danger-ghost" onClick={() => handleDelete(c.id)}>
-                      Удалить
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-            {list.length === 0 && (
+      {list.length === 0 ? (
+        <div className="panel">
+          <div className="panel-body">
+            <div className="empty-note">Ничего не найдено{q ? ` по запросу «${search}»` : ""}.</div>
+          </div>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
               <tr>
-                <td colSpan={5} className="empty-note">
-                  {q ? `Ничего не найдено по запросу «${search}».` : "Клиентов пока нет."}
-                </td>
+                <th>Имя</th>
+                <th>Документ</th>
+                <th>Рейтинг</th>
+                <th>Аренды</th>
+                <th />
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {list.map((c) => {
+                const clientRentals = rentals.filter((r) => r.client_id === c.id);
+                const activeCount = clientRentals.filter((r) => {
+                  const s = rentalDisplayStatus(r);
+                  return s === "active" || s === "overdue";
+                }).length;
+                return (
+                  <tr key={c.id} onClick={() => setOpenClientId(c.id)} style={{ cursor: "pointer" }}>
+                    <td>
+                      <div className="cell-name">{c.name}</div>
+                      <div className="cell-sub">{c.phone ?? "—"}</div>
+                    </td>
+                    <td>{c.doc ?? "—"}</td>
+                    <td>
+                      <Badge meta={RATING_META[c.rating]} />
+                    </td>
+                    <td>
+                      {clientRentals.length} всего{activeCount > 0 ? `, ${activeCount} сейчас` : ""}
+                    </td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <button className="btn btn-sm btn-danger-ghost" onClick={() => handleDelete(c.id)}>
+                        Удалить
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {openClientId && <div className="slideover-backdrop" onClick={() => setOpenClientId(null)} />}
       {openClientId && (

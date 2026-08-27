@@ -48,7 +48,7 @@ export function Register() {
         </label>
         <p className="muted small">Минимум 12 символов. Мы проверим пароль по базе известных утечек.</p>
         {error && <div className="form-error">{error}</div>}
-        <button type="submit" disabled={busy}>Создать бизнес</button>
+        <button type="submit" className="btn btn-primary" disabled={busy}>Создать бизнес</button>
         <p className="muted">
           Уже есть аккаунт? <Link to="/login">Войти</Link>
         </p>

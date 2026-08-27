@@ -633,63 +633,64 @@ export function EquipmentTab({
         </button>
       </div>
 
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              {EQUIPMENT_SORT_COLUMNS.map((col) => {
-                const active = sort.key === col.key;
+      {list.length === 0 ? (
+        <div className="panel">
+          <div className="panel-body">
+            <div className="empty-note">Ничего не найдено{q ? ` по запросу «${search}»` : ""}.</div>
+          </div>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                {EQUIPMENT_SORT_COLUMNS.map((col) => {
+                  const active = sort.key === col.key;
+                  return (
+                    <th
+                      key={col.key}
+                      className={"sortable" + (active ? " active" : "")}
+                      onClick={() => toggleSort(col.key)}
+                    >
+                      {col.label}
+                      <span className={"sort-arrow" + (active ? "" : " sort-arrow-idle")}>
+                        {active ? (sort.dir === "desc" ? "▼" : "▲") : "↕"}
+                      </span>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((it) => {
+                const status = equipmentDisplayStatus(it, rentals, today);
+                let freeFrom: string | null = null;
+                if (status === "rented" || status === "overdue") {
+                  const nf = nextFreeDate(it, rentals);
+                  if (nf) freeFrom = fmtDate(isoAddDays(nf, 1));
+                } else if (status === "maintenance" && it.maintenance_until) {
+                  freeFrom = fmtDate(isoAddDays(it.maintenance_until, 1));
+                }
                 return (
-                  <th
-                    key={col.key}
-                    className={"sortable" + (active ? " active" : "")}
-                    onClick={() => toggleSort(col.key)}
-                  >
-                    {col.label}
-                    <span className={"sort-arrow" + (active ? "" : " sort-arrow-idle")}>
-                      {active ? (sort.dir === "desc" ? "▼" : "▲") : "↕"}
-                    </span>
-                  </th>
+                  <tr key={it.id} data-clickable="true" onClick={() => setOpenId(it.id)}>
+                    <td>
+                      <div className="cell-name">{it.name}</div>
+                      <div className="cell-sub">№ {it.code ?? "—"}</div>
+                    </td>
+                    <td>{it.category}</td>
+                    <td>
+                      <Badge meta={EQ_META[status]} />
+                      {freeFrom && <div className="cell-sub">своб. с {freeFrom}</div>}
+                    </td>
+                    <td className="mono">{rateLabel(it)}</td>
+                    <td className="mono">{money(it.deposit)}</td>
+                  </tr>
                 );
               })}
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((it) => {
-              const status = equipmentDisplayStatus(it, rentals, today);
-              let freeFrom: string | null = null;
-              if (status === "rented" || status === "overdue") {
-                const nf = nextFreeDate(it, rentals);
-                if (nf) freeFrom = fmtDate(isoAddDays(nf, 1));
-              } else if (status === "maintenance" && it.maintenance_until) {
-                freeFrom = fmtDate(isoAddDays(it.maintenance_until, 1));
-              }
-              return (
-                <tr key={it.id} data-clickable="true" onClick={() => setOpenId(it.id)}>
-                  <td>
-                    <div className="cell-name">{it.name}</div>
-                    <div className="cell-sub">№ {it.code ?? "—"}</div>
-                  </td>
-                  <td>{it.category}</td>
-                  <td>
-                    <Badge meta={EQ_META[status]} />
-                    {freeFrom && <div className="cell-sub">своб. с {freeFrom}</div>}
-                  </td>
-                  <td className="mono">{rateLabel(it)}</td>
-                  <td className="mono">{money(it.deposit)}</td>
-                </tr>
-              );
-            })}
-            {list.length === 0 && (
-              <tr>
-                <td colSpan={5} className="empty-note">
-                  {q ? `Ничего не найдено по запросу «${search}».` : "Пока нет ни одной позиции оборудования."}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <EquipmentFormModal
         open={modalMode !== null}

@@ -76,7 +76,7 @@ export function FinanceTab({
 
   return (
     <div>
-      <div className="view-toolbar">
+      <div className="tab-toolbar">
         <div className="segmented">
           {PRESETS.map((p) => (
             <button

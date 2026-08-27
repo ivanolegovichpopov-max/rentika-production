@@ -25,7 +25,7 @@ export function AdminBusinesses() {
         <div className="brand">RENTIKA <span className="badge-tag">ADMIN</span></div>
         <div className="topbar-spacer" />
         <span className="muted">{user?.email}</span>
-        <button className="link" onClick={() => void logout()}>Выйти</button>
+        <button className="btn btn-ghost" onClick={() => void logout()}>Выйти</button>
       </header>
       <main className="content">
         <h2>Все бизнесы на платформе</h2>

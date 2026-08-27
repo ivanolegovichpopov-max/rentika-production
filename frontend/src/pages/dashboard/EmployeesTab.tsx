@@ -96,7 +96,7 @@ export function EmployeesTab({ businessId }: { businessId: string }) {
     <div>
       <div className="tab-toolbar">
         <h2>Сотрудники</h2>
-        <button onClick={() => setShowInvite((v) => !v)}>{showInvite ? "Отмена" : "+ Добавить сотрудника"}</button>
+        <button className="btn btn-primary" onClick={() => setShowInvite((v) => !v)}>{showInvite ? "Отмена" : "+ Добавить сотрудника"}</button>
       </div>
 
       {showInvite && (
@@ -124,7 +124,7 @@ export function EmployeesTab({ businessId }: { businessId: string }) {
           </label>
           <p className="muted small">Передайте сотруднику лично — рассылка по почте пока не реализована.</p>
           {error && <div className="form-error">{error}</div>}
-          <button type="submit">Добавить</button>
+          <button type="submit" className="btn btn-primary">Добавить</button>
         </form>
       )}
 
@@ -145,7 +145,7 @@ export function EmployeesTab({ businessId }: { businessId: string }) {
               <td>{emp.status === "active" ? "Активен" : emp.status === "disabled" ? "Отключён" : "Приглашён"}</td>
               <td>
                 {!emp.is_owner && emp.status === "active" && (
-                  <button className="link danger" onClick={() => handleDisableEmployee(emp.id)}>Отключить</button>
+                  <button className="btn btn-sm btn-danger-ghost" onClick={() => handleDisableEmployee(emp.id)}>Отключить</button>
                 )}
               </td>
             </tr>
@@ -156,7 +156,7 @@ export function EmployeesTab({ businessId }: { businessId: string }) {
       <h2 style={{ marginTop: "2rem" }}>Должности и права доступа</h2>
       <form className="inline-form" onSubmit={handleCreatePosition}>
         <input placeholder="Название новой должности" value={newPositionTitle} onChange={(e) => setNewPositionTitle(e.target.value)} />
-        <button type="submit">+ Добавить должность</button>
+        <button type="submit" className="btn btn-primary">+ Добавить должность</button>
       </form>
 
       {positions.map((p) => (

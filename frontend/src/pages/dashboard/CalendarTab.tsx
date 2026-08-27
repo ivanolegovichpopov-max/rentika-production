@@ -516,6 +516,9 @@ export function CalendarTab({ businessId, search }: { businessId: string; search
             <button type="button" onClick={navNext}>{calRange === "month" ? "След. месяц →" : "Вперёд →"}</button>
           </div>
           <div className="cal-jump">
+            <button type="button" className="btn btn-sm btn-ghost" title="Перейти к сегодняшнему дню" onClick={navToday}>
+              Сегодня
+            </button>
             <input
               type="date"
               value={start}

@@ -120,7 +120,7 @@ a { color: var(--accent); }
 .btn-danger { background: var(--critical); border-color: var(--critical); color: #fff; }
 .btn-sm { padding: 5px 10px; font-size: 12.5px; border-radius: 16px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-button.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; border: none; background: none; color: var(--ink-secondary); cursor: pointer; }
+button.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border-radius: 50%; border: none; background: none; color: var(--ink-secondary); cursor: pointer; }
 button.icon-btn:hover { background: var(--surface-2); }
 
 /* ---------- Формы ---------- */
@@ -137,6 +137,11 @@ label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; colo
 .muted { color: var(--muted); }
 .muted.small { font-size: 12px; }
 .empty-note { color: var(--muted); font-size: 13px; padding: 10px 0; }
+/* Внутри ячейки таблицы .empty-note нужен обычный отступ ячейки
+   (tbody td даёт 12px 16px), а не свои "10px 0" — иначе текст заезжает
+   вплотную к левому краю таблицы, т.к. класс отменяет паддинг ячейки
+   (класс всегда переопределяет элементный селектор tbody td). */
+td.empty-note { padding: 12px 16px; }
 
 /* ---------- Бейджи (статус-тон-система) ---------- */
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border); white-space: nowrap; }
@@ -169,7 +174,7 @@ button.subtitle.critical:hover { text-decoration: underline; }
 
 /* ---------- Брендинг (логотип — два перекрывающихся квадрата) ---------- */
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 6px; }
-button.brand { font: inherit; text-align: left; background: none; border: none; cursor: pointer; border-radius: 8px; margin: 0; transition: opacity .15s ease; }
+button.brand { font: inherit; text-align: left; background: none; border: none; padding: 0; cursor: pointer; border-radius: 8px; margin: 0; transition: opacity .15s ease; }
 button.brand:hover { opacity: 0.75; }
 button.brand:active { opacity: 0.6; }
 .brand-mark { width: 30px; height: 30px; flex: none; position: relative; }
@@ -273,6 +278,7 @@ tbody tr[data-clickable="true"]:hover { background: var(--surface-2); }
 .rental-card.clickable { cursor: pointer; transition: box-shadow .15s ease, background .15s ease, transform .1s ease; }
 .rental-card.clickable:hover { background: var(--surface-2); box-shadow: var(--shadow-lg); transform: translateY(-1px); }
 .rental-card.clickable:active { transform: translateY(0); }
+.rental-main { min-width: 0; }
 .rental-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
 .rental-client { font-weight: 700; font-size: 14px; }
 .rental-items { font-size: 13px; margin-bottom: 6px; }
@@ -344,7 +350,7 @@ tbody tr[data-clickable="true"]:hover { background: var(--surface-2); }
   background: var(--col-select-soft); color: var(--ink); font-size: 12.5px; font-weight: 600; white-space: nowrap;
 }
 .cal-col-indicator button {
-  display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border-radius: 50%;
   border: none; background: var(--surface); color: var(--ink-secondary); cursor: pointer; flex: none;
 }
 .cal-col-indicator button:hover { background: var(--surface-2); color: var(--ink); }
@@ -440,6 +446,18 @@ dialog#modal::backdrop { background: rgba(0,0,0,0.4); }
   .print-btn { display: none !important; }
 }
 
+/* ---------- Диапазон дат «Финансы» ---------- */
+/* Класс использовался в FinanceTab.tsx, но не был перенесён в CSS вообще —
+   без display:flex/gap блок с датами схлопывался в обычный <div> и садился
+   почти вплотную под сегмент-табами 7/30/90 дней (жалоба пользователя). */
+.finance-range { display: flex; align-items: center; gap: 8px; }
+.finance-range input[type="date"] {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 10px; font-size: 12.5px; color: var(--ink);
+}
+.finance-range input[type="date"]:focus-visible { background: var(--surface); }
+.finance-range span { color: var(--muted); font-size: 12.5px; }
+
 /* ---------- Финансовый график ---------- */
 .fin-chart { display: flex; align-items: flex-end; gap: 4px; height: 140px; padding: 8px 0; }
 .fin-chart-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; min-width: 0; }
@@ -484,21 +502,24 @@ dialog#modal::backdrop { background: rgba(0,0,0,0.4); }
 }
 
 /* ---------- Совместимость: экраны без прямого аналога в демо ---------- */
-/* AdminBusinesses (обзор для суперадмина), EmployeesTab, TwoFactorSettings —
- * в демо-прототипе таких экранов не было (демо — однотенантный, без ACL/2FA),
- * поэтому дизайн для них не переносился построчно, а просто приведён к тем
- * же токенам/форме компонентов, что и остальное приложение. */
-button {
-  font-family: inherit; cursor: pointer; border: none; border-radius: 20px; padding: 8px 14px;
-  background: var(--accent); color: var(--accent-ink); font-weight: 600; font-size: 13.5px;
-}
-button:hover { background: var(--accent-hover); }
-button.link { background: none; color: var(--accent); padding: 4px 6px; border-radius: 8px; }
-button.link:hover { background: var(--accent-soft); }
-button.link.danger { color: var(--critical); }
-button.link.danger:hover { background: var(--critical-soft); }
-button.danger { background: var(--critical); }
-button.danger:hover { background: var(--critical-ink); }
+/* AdminBusinesses (обзор для суперадмина), EmployeesTab, TwoFactorSettings,
+ * Login/Register — в демо-прототипе таких экранов не было (демо — одно-
+ * тенантный, без ACL/2FA/входа), поэтому дизайн для них не переносился
+ * построчно, а просто приведён к тем же токенам/компонентам, что и
+ * остальное приложение — явными классами .btn/.btn-primary/.btn-danger/
+ * .btn-ghost/.btn-danger-ghost на каждой кнопке (см. эти файлы).
+ *
+ * Раньше здесь был общий fallback-стиль голого <button> (сплошной синий
+ * фон + синий hover) — специально для ЭТИХ экранов, чтобы не расставлять
+ * классы вручную. Он оказался системным багом: почти любая кнопка/сегмент-
+ * таб в остальном приложении, которая явно не переопределяла :hover
+ * (например .segmented button — там своего hover нет вообще, как и в
+ * демо), имела РАВНУЮ CSS-специфичность с этим fallback'ом (0,0,1,1 у
+ * обоих) — и побеждал он просто по порядку объявления в файле, заливая
+ * синим при наведении кнопки, которые не должны были быть синими нигде,
+ * кроме реальных .btn-primary. Убрано полностью — эта категория багов
+ * больше не может повториться, т.к. голых <button> без класса теперь нет
+ * ни в одном компоненте (см. классы выше в этих файлах). */
 
 .app-shell { min-height: 100vh; display: flex; flex-direction: column; }
 .content { padding: 24px 28px 60px; max-width: 1100px; width: 100%; margin: 0 auto; }
