@@ -109,10 +109,7 @@ export function buildIssueDoc(r: Rental, client: Client | undefined, equipment: 
 
       <ItemsTable r={r} equipment={equipment} />
 
-      {/* В модели Rental в проде нет отдельного текстового поля для заметок о
-          состоянии оборудования при выдаче (в демо это был свободный текст) —
-          упрощение, поле хардкожено. */}
-      <p><b>Состояние на момент выдачи:</b> не указано</p>
+      <p><b>Состояние на момент выдачи:</b> {r.issue_notes || "не указано"}</p>
 
       <div className="doc-sign">
         <div className="line">Передал / {COMPANY_NAME}</div>
@@ -137,9 +134,7 @@ export function buildReturnDoc(r: Rental, client: Client | undefined, equipment:
 
       <ItemsTable r={r} equipment={equipment} />
 
-      {/* Как и в акте выдачи — свободнотекстового поля состояния при возврате
-          backend не хранит, упрощение, значение хардкожено. */}
-      <p><b>Состояние на момент возврата:</b> не указано</p>
+      <p><b>Состояние на момент возврата:</b> {r.return_notes || "не указано"}</p>
 
       <table>
         <tbody>

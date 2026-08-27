@@ -10,13 +10,20 @@ from app.core.deps import BusinessContext, require_permission
 from app.database import get_db
 from app.models.business import PermissionLevel, ResourceType
 from app.models.inventory import Client, Equipment, EquipmentStatus, Rental, RentalItem, RentalStatus
-from app.schemas.inventory import RentalCreate, RentalOut, RentalReturn
+from app.schemas.inventory import RentalCreate, RentalEdit, RentalIssue, RentalOut, RentalReturn
 from app.services.pricing import compute_rental_breakdown
 
 router = APIRouter(prefix="/businesses/{business_id}/rentals", tags=["rentals"])
 
 view_dep = require_permission(ResourceType.rentals, PermissionLevel.view)
 edit_dep = require_permission(ResourceType.rentals, PermissionLevel.edit)
+
+# Дефолтные тексты состояния — 1-в-1 из демо-прототипа: это значения по
+# умолчанию соответствующих <textarea> в формах "Выдать оборудование" /
+# "Принять возврат" (см. claude/oborot-crm-prototype.html:issueRentalForm/
+# returnRentalForm), подставляются, когда сотрудник не поменял текст поля.
+DEFAULT_ISSUE_NOTES = "Комплектация полная, состояние исправное."
+DEFAULT_RETURN_NOTES = "Без повреждений, комплектация полная."
 
 
 def _to_out(db: Session, rental: Rental) -> RentalOut:
@@ -59,6 +66,8 @@ def _to_out(db: Session, rental: Rental) -> RentalOut:
         status=rental.status,
         damage_fee=float(rental.damage_fee),
         discount=float(rental.discount),
+        issue_notes=rental.issue_notes,
+        return_notes=rental.return_notes,
         created_at=rental.created_at,
         planned_days=breakdown["planned_days"],
         actual_days=breakdown["actual_days"],
@@ -135,12 +144,18 @@ def _get_rental_or_404(db: Session, ctx: BusinessContext, rental_id: uuid.UUID) 
 
 
 @router.post("/{rental_id}/issue", response_model=RentalOut)
-async def issue_rental(rental_id: uuid.UUID, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)):
+async def issue_rental(
+    rental_id: uuid.UUID,
+    body: RentalIssue | None = None,
+    ctx: BusinessContext = Depends(edit_dep),
+    db: Session = Depends(get_db),
+):
     """Забронировано → выдано (в работе)."""
     rental = _get_rental_or_404(db, ctx, rental_id)
     if rental.status != RentalStatus.booked:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Выдать можно только бронь")
     rental.status = RentalStatus.active
+    rental.issue_notes = (body.issue_notes if body and body.issue_notes else None) or DEFAULT_ISSUE_NOTES
     for it in db.scalars(select(RentalItem).where(RentalItem.rental_id == rental.id)):
         equipment = db.get(Equipment, it.equipment_id)
         if equipment:
@@ -179,6 +194,7 @@ async def return_rental(
     rental.actual_return = body.actual_return or date.today()
     rental.damage_fee = body.damage_fee
     rental.discount = body.discount
+    rental.return_notes = body.return_notes or DEFAULT_RETURN_NOTES
 
     for it in db.scalars(select(RentalItem).where(RentalItem.rental_id == rental.id)):
         equipment = db.get(Equipment, it.equipment_id)
@@ -194,6 +210,163 @@ async def return_rental(
         resource_id=str(rental_id),
         meta={"damage_fee": body.damage_fee, "discount": body.discount},
     )
+    db.commit()
+    db.refresh(rental)
+    return _to_out(db, rental)
+
+
+def _find_blocking_rental(
+    db: Session,
+    *,
+    business_id: uuid.UUID,
+    equipment_id: uuid.UUID,
+    start_date: date,
+    end_date: date,
+    exclude_rental_id: uuid.UUID | None = None,
+) -> Rental | None:
+    """Портирование isEquipmentFree/nextFreeDate из демо-прототипа: занятым
+    оборудование считается, если пересекается по датам с любой ЧУЖОЙ бронью
+    или активной арендой (отменённые/возвращённые не блокируют). Возвращает
+    саму блокирующую аренду (для сообщения "занято до …"), либо None, если
+    оборудование свободно на весь запрошенный диапазон."""
+    query = (
+        select(Rental)
+        .join(RentalItem, RentalItem.rental_id == Rental.id)
+        .where(
+            Rental.business_id == business_id,
+            RentalItem.equipment_id == equipment_id,
+            Rental.status.in_((RentalStatus.booked, RentalStatus.active)),
+            Rental.start_date <= end_date,
+            Rental.end_date >= start_date,
+        )
+    )
+    if exclude_rental_id is not None:
+        query = query.where(Rental.id != exclude_rental_id)
+    return db.scalars(query.order_by(Rental.end_date.desc())).first()
+
+
+def _equipment_locked_elsewhere(
+    db: Session, *, business_id: uuid.UUID, equipment_id: uuid.UUID, exclude_rental_id: uuid.UUID
+) -> bool:
+    """При снятии позиции с изменяемой аренды оборудование возвращается в
+    "свободно" — но только если оно не занято какой-то ДРУГОЙ бронью/активной
+    арендой (например, если по ошибке оказалось сразу в двух арендах)."""
+    query = (
+        select(Rental.id)
+        .join(RentalItem, RentalItem.rental_id == Rental.id)
+        .where(
+            Rental.business_id == business_id,
+            RentalItem.equipment_id == equipment_id,
+            Rental.status.in_((RentalStatus.booked, RentalStatus.active)),
+            Rental.id != exclude_rental_id,
+        )
+        .limit(1)
+    )
+    return db.scalars(query).first() is not None
+
+
+@router.patch("/{rental_id}", response_model=RentalOut)
+async def edit_rental(
+    rental_id: uuid.UUID,
+    body: RentalEdit,
+    ctx: BusinessContext = Depends(edit_dep),
+    db: Session = Depends(get_db),
+):
+    """Правка брони/активной аренды — 1-в-1 портирование editRentalForm из
+    демо-прототипа (см. claude/oborot-crm-prototype.html)."""
+    rental = _get_rental_or_404(db, ctx, rental_id)
+    if rental.status not in (RentalStatus.booked, RentalStatus.active):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Эту аренду нельзя изменить в текущем статусе")
+
+    # Дата начала зафиксирована, если оборудование уже выдано клиенту — поле
+    # неактивно в форме демо-прототипа, поэтому переданное значение тихо
+    # игнорируется, а не отклоняется как ошибка.
+    new_start_date = rental.start_date if rental.status == RentalStatus.active else (body.start_date or rental.start_date)
+    new_end_date = body.end_date if body.end_date is not None else rental.end_date
+
+    if new_end_date < new_start_date:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Дата окончания раньше начала")
+
+    existing_items = {
+        it.equipment_id: it for it in db.scalars(select(RentalItem).where(RentalItem.rental_id == rental.id)).all()
+    }
+
+    if body.equipment_ids is not None:
+        if not body.equipment_ids:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Выберите хотя бы одно оборудование")
+
+        new_ids = list(dict.fromkeys(body.equipment_ids))  # de-dup, сохраняя порядок
+        equipment_by_id: dict[uuid.UUID, Equipment] = {}
+        for eq_id in new_ids:
+            equipment = db.get(Equipment, eq_id)
+            if equipment is None or equipment.business_id != ctx.business_id:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Оборудование {eq_id} не найдено в этом бизнесе")
+            equipment_by_id[eq_id] = equipment
+
+            # Уже входящие в эту же аренду позиции не проверяются на конфликт
+            # сами с собой — только вновь добавляемые.
+            if eq_id not in existing_items:
+                blocking = _find_blocking_rental(
+                    db,
+                    business_id=ctx.business_id,
+                    equipment_id=eq_id,
+                    start_date=new_start_date,
+                    end_date=new_end_date,
+                    exclude_rental_id=rental.id,
+                )
+                if blocking is not None:
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        f"«{equipment.name}» занято до {blocking.end_date.isoformat()}",
+                    )
+
+        new_id_set = set(new_ids)
+
+        # Снятые позиции — удаляются, снимок цены не нужен. Если аренда уже
+        # активна, снятое оборудование возвращается в "свободно" — если оно
+        # при этом не занято какой-то другой бронью/активной арендой.
+        for eq_id, item in list(existing_items.items()):
+            if eq_id in new_id_set:
+                continue
+            db.delete(item)
+            if rental.status == RentalStatus.active:
+                equipment = db.get(Equipment, eq_id)
+                if (
+                    equipment is not None
+                    and equipment.status == EquipmentStatus.rented
+                    and not _equipment_locked_elsewhere(
+                        db, business_id=ctx.business_id, equipment_id=eq_id, exclude_rental_id=rental.id
+                    )
+                ):
+                    equipment.status = EquipmentStatus.available
+
+        # Добавленные позиции получают СВЕЖИЙ снимок текущих тарифов каталога
+        # (демо: snapshotItem вызывается только для вновь выбранных позиций).
+        # Уже существующие позиции сознательно не трогаются ниже — их снимок
+        # цены (зафиксированный на момент брони) остаётся как есть.
+        for eq_id in new_ids:
+            if eq_id in existing_items:
+                continue
+            equipment = equipment_by_id[eq_id]
+            db.add(
+                RentalItem(
+                    rental_id=rental.id,
+                    equipment_id=equipment.id,
+                    daily_rate_snapshot=equipment.daily_rate,
+                    period_days_snapshot=equipment.period_days,
+                    period_price_snapshot=equipment.period_price,
+                    period_price_after_snapshot=equipment.period_price_after,
+                )
+            )
+            if rental.status == RentalStatus.active:
+                equipment.status = EquipmentStatus.rented
+
+    rental.start_date = new_start_date
+    rental.end_date = new_end_date
+    if body.discount is not None:
+        rental.discount = body.discount
+
+    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="edit", resource="rental", resource_id=str(rental_id))
     db.commit()
     db.refresh(rental)
     return _to_out(db, rental)

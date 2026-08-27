@@ -254,6 +254,7 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
             <span className="hint">{overallPct}% в среднем</span>
           </div>
           <div className="panel-body">
+            {catKeys.length === 0 && <div className="empty-note">Нет данных</div>}
             {catKeys.map((cat, i) => {
               const d = byCategory[cat];
               const pct = Math.round((d.rented / d.total) * 100);

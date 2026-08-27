@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { useData } from "../../context/DataContext";
-import { money, fmtDate, dayDiff } from "../../lib/format";
+import { money, fmtDate } from "../../lib/format";
 import { rentalDisplayStatus } from "../../lib/statusMeta";
 import {
   periodFor,
@@ -8,23 +9,28 @@ import {
   topClientsByRevenue,
   financeBuckets,
   depositsHeldNow,
+  accruedRevenueForPeriod,
   type FinancePeriod,
 } from "../../lib/financeCalc";
+import { DocModal } from "./documents";
+import { IconPrinter } from "../../lib/icons";
 
 /**
  * Вкладка «Финансы» — перенесена 1:1 из демо-прототипа (renderFinance()).
  * Периодом управляет родитель (Dashboard.tsx) — здесь только тело страницы,
  * заголовок <h1>Финансы</h1> рисует топбар шелла.
  *
- * Известные упрощения относительно демо (см. итоговый отчёт):
- *  - кнопка «Печать отчёта» не перенесена вовсе (см. ниже, перед тулбаром);
- *  - панель «Начислено по активным арендам» использует приближённую формулу
- *    вместо точного демо-расчёта с пропорциональным делением по дням
- *    пересечения (accruedRevenueForPeriod);
- *  - «Топ клиентов» и строки «Истории возвратов» не кликабельны — в этом
- *    изолированном пассе нет карточки клиента, на которую можно было бы
- *    перейти (в демо это были button.due-item / <tr data-action="open-client">).
+ * Известное упрощение относительно демо: «Топ клиентов» и строки «Истории
+ * возвратов» не кликабельны — в этом изолированном пассе нет карточки
+ * клиента, на которую можно было бы перейти (в демо это были
+ * button.due-item / <tr data-action="open-client">).
  */
+
+// В проде нет сущности "реквизиты компании" — как и в демо (COMPANY_NAME) и
+// как в documents.tsx, это статичный плейсхолдер в шаблоне печати, который
+// бизнес правит от руки перед печатью. documents.tsx его не экспортирует,
+// поэтому здесь — свой локальный константный дубль с тем же текстом.
+const COMPANY_NAME = "[Название вашей компании]";
 
 const PRESETS: { key: "7" | "30" | "90" | "all"; label: string }[] = [
   { key: "7", label: "7 дней" },
@@ -43,6 +49,7 @@ export function FinanceTab({
   setPeriod: (p: FinancePeriod) => void;
 }) {
   const { equipment, clients, rentals } = useData();
+  const [reportOpen, setReportOpen] = useState(false);
 
   const rows = returnsInPeriod(rentals, period.from, period.to);
   const sumBase = rows.reduce((s, r) => s + r.base, 0);
@@ -55,18 +62,7 @@ export function FinanceTab({
   const equipmentById = (id: string) => equipment.find((e) => e.id === id);
 
   const depositsHeld = depositsHeldNow(rentals, rentalDisplayStatus);
-
-  // Приближение демо-формулы accruedRevenueForPeriod: та честно делит сумму
-  // аренды пропорционально пересечению дней аренды с выбранным периодом.
-  // Здесь — упрощённо: берём весь r.total активных/просроченных аренд,
-  // начавшихся не позже конца периода, без пропорционального деления по дням.
-  const accrued = rentals
-    .filter((r) => {
-      const s = rentalDisplayStatus(r);
-      return s === "active" || s === "overdue";
-    })
-    .filter((r) => r.start_date <= period.to && dayDiff(r.start_date) <= 0)
-    .reduce((s, r) => s + r.total, 0);
+  const accrued = accruedRevenueForPeriod(rentals, period.from, period.to);
 
   const buckets = financeBuckets(period.from, period.to, rows);
   const maxVal = Math.max(1, ...buckets.map((b) => b.total));
@@ -107,11 +103,14 @@ export function FinanceTab({
             onChange={(e) => setPeriod({ ...period, to: e.target.value, key: "custom" })}
           />
         </div>
-        {/* Кнопка «Печать отчёта» из демо сознательно не перенесена: печатного
-            представления финансового отчёта в проде ещё нет — печать/PDF
-            в этом пассе реализована только для актов/договоров по отдельной
-            аренде. Пустая disabled-кнопка выглядела бы как баг, поэтому её
-            здесь просто нет — это явный пробел, см. итоговый отчёт. */}
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={() => setReportOpen(true)}
+          title="Печать / сохранить PDF отчёта за период"
+        >
+          <IconPrinter /> Печать отчёта
+        </button>
       </div>
 
       <div className="stat-grid fin-stat-grid">
@@ -288,6 +287,108 @@ export function FinanceTab({
           </div>
         )}
       </div>
+
+      <DocModal title="Финансовый отчёт" open={reportOpen} onClose={() => setReportOpen(false)}>
+        <div className="doc-page">
+          <h2>Финансовый отчёт</h2>
+          <div className="doc-sub">
+            за период {fmtDate(period.from)} — {fmtDate(period.to)} · {COMPANY_NAME}
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Показатель</th>
+                <th>Сумма</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>Выручка за период</td><td className="mono"><b>{money(sumTotal)}</b></td></tr>
+              <tr><td>В т.ч. аренда</td><td className="mono">{money(sumBase)}</td></tr>
+              <tr><td>В т.ч. просрочка</td><td className="mono">{money(sumLate)}</td></tr>
+              <tr><td>В т.ч. компенсации</td><td className="mono">{money(sumDamage)}</td></tr>
+              <tr><td>В т.ч. скидки</td><td className="mono">{sumDiscount ? "−" + money(sumDiscount) : money(0)}</td></tr>
+              <tr><td>Возвратов в периоде</td><td className="mono">{rows.length}</td></tr>
+              <tr><td>Начислено по активным арендам (не входит в выручку периода)</td><td className="mono">{money(accrued)}</td></tr>
+              <tr><td>Депозиты на удержании (сейчас)</td><td className="mono">{money(depositsHeld)}</td></tr>
+            </tbody>
+          </table>
+
+          <p style={{ marginTop: 18 }}><b>Топ клиентов по выручке</b></p>
+          <table>
+            <thead>
+              <tr>
+                <th>Клиент</th>
+                <th>Выручка</th>
+              </tr>
+            </thead>
+            <tbody>
+              {topClients.length ? (
+                topClients.map((x) => (
+                  <tr key={x.id}>
+                    <td>{clientById(x.id)?.name ?? "—"}</td>
+                    <td className="mono">{money(x.revenue)}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr><td colSpan={2}>Нет данных</td></tr>
+              )}
+            </tbody>
+          </table>
+
+          <p style={{ marginTop: 18 }}><b>Выручка по категориям</b></p>
+          <table>
+            <thead>
+              <tr>
+                <th>Категория</th>
+                <th>Выручка</th>
+              </tr>
+            </thead>
+            <tbody>
+              {catKeys.length ? (
+                catKeys.map((cat) => (
+                  <tr key={cat}>
+                    <td>{cat}</td>
+                    <td className="mono">{money(Math.round(catRevenue[cat]))}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr><td colSpan={2}>Нет данных</td></tr>
+              )}
+            </tbody>
+          </table>
+
+          <p style={{ marginTop: 18 }}><b>История возвратов</b></p>
+          <table>
+            <thead>
+              <tr>
+                <th>Дата</th>
+                <th>Клиент</th>
+                <th>Оборудование</th>
+                <th>Итого</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length ? (
+                rows.map((r) => {
+                  const client = clientById(r.client_id);
+                  const itemNames = r.items.map((it) => equipmentById(it.equipment_id)?.name ?? "—").join(", ");
+                  return (
+                    <tr key={r.id}>
+                      <td>{fmtDate(r.actual_return || r.end_date)}</td>
+                      <td>{client?.name ?? "—"}</td>
+                      <td>{itemNames}</td>
+                      <td className="mono">{money(r.total)}</td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr><td colSpan={4}>Возвратов не было</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </DocModal>
     </div>
   );
 }

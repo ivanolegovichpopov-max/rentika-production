@@ -76,6 +76,10 @@ export interface Rental {
   status: "booked" | "active" | "overdue" | "returned" | "cancelled";
   damage_fee: number;
   discount: number;
+  // Свободный текст состояния при выдаче/возврате (демо: r.issueNotes/
+  // r.returnNotes) — печатается в актах приёма-передачи и возврата.
+  issue_notes: string | null;
+  return_notes: string | null;
   created_at: string;
   // Финансовая разбивка — считается backend'ом (см. app/services/pricing.py
   // compute_rental_breakdown), 1:1 повторяет формулы демо-прототипа.

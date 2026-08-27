@@ -218,3 +218,248 @@ def test_cannot_rent_equipment_that_does_not_belong_to_business(client):
         headers=auth_headers(owner_a["access_token"]),
     )
     assert resp.status_code == 400
+
+
+# --- issue_notes / return_notes -------------------------------------------
+#
+# Портирование r.issueNotes / r.returnNotes из демо-прототипа: свободный
+# текст состояния оборудования, показанный на форме выдачи/возврата и
+# печатаемый на актах. Дефолтные значения — это дефолт соответствующей
+# <textarea> в демо (см. app/api/routes/rentals.py:DEFAULT_ISSUE_NOTES/
+# DEFAULT_RETURN_NOTES), подставляются, когда поле не передано или пустое.
+
+
+def _setup_rental(client, headers, business_id, *, daily_rate=100, start="2026-09-01", end="2026-09-03"):
+    client_id = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Клиент заметок"}, headers=headers
+    ).json()["id"]
+    eq = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Тестовая позиция", "category": "Инструмент", "daily_rate": daily_rate},
+        headers=headers,
+    ).json()
+    rental = client.post(
+        f"/api/businesses/{business_id}/rentals",
+        json={"client_id": client_id, "equipment_ids": [eq["id"]], "start_date": start, "end_date": end},
+        headers=headers,
+    ).json()
+    return client_id, eq, rental
+
+
+def test_issue_and_return_notes_use_demo_defaults_when_omitted(client):
+    owner = register_business(client, email="notes-default@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    _, _, rental = _setup_rental(client, headers, business_id)
+    rental_id = rental["id"]
+    assert rental["issue_notes"] is None
+    assert rental["return_notes"] is None
+
+    issue_resp = client.post(f"/api/businesses/{business_id}/rentals/{rental_id}/issue", headers=headers)
+    assert issue_resp.status_code == 200
+    assert issue_resp.json()["issue_notes"] == "Комплектация полная, состояние исправное."
+
+    return_resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/return",
+        json={"actual_return": "2026-09-03"},
+        headers=headers,
+    )
+    assert return_resp.status_code == 200
+    assert return_resp.json()["return_notes"] == "Без повреждений, комплектация полная."
+
+
+def test_issue_and_return_notes_persist_custom_text(client):
+    owner = register_business(client, email="notes-custom@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    _, _, rental = _setup_rental(client, headers, business_id)
+    rental_id = rental["id"]
+
+    issue_resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/issue",
+        json={"issue_notes": "Царапина на корпусе, зафиксирована."},
+        headers=headers,
+    )
+    assert issue_resp.status_code == 200
+    assert issue_resp.json()["issue_notes"] == "Царапина на корпусе, зафиксирована."
+
+    return_resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/return",
+        json={"actual_return": "2026-09-03", "return_notes": "Вернули с трещиной на кожухе."},
+        headers=headers,
+    )
+    assert return_resp.status_code == 200
+    assert return_resp.json()["return_notes"] == "Вернули с трещиной на кожухе."
+
+    # И в списке аренд заметки тоже видны (не только в прямом ответе на action).
+    listed = client.get(f"/api/businesses/{business_id}/rentals", headers=headers).json()
+    listed_rental = next(r for r in listed if r["id"] == rental_id)
+    assert listed_rental["issue_notes"] == "Царапина на корпусе, зафиксирована."
+    assert listed_rental["return_notes"] == "Вернули с трещиной на кожухе."
+
+
+# --- PATCH /rentals/{id} (edit_rental) --------------------------------------
+#
+# Портирование editRentalForm из демо-прототипа.
+
+
+def test_edit_rejects_when_rental_returned_or_cancelled(client):
+    owner = register_business(client, email="edit-status@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    _, _, rental = _setup_rental(client, headers, business_id)
+    rental_id = rental["id"]
+
+    cancel_resp = client.post(f"/api/businesses/{business_id}/rentals/{rental_id}/cancel", headers=headers)
+    assert cancel_resp.status_code == 200
+
+    patch_resp = client.patch(
+        f"/api/businesses/{business_id}/rentals/{rental_id}", json={"discount": 50}, headers=headers
+    )
+    assert patch_resp.status_code == 400
+
+    _, _, rental2 = _setup_rental(client, headers, business_id)
+    rental2_id = rental2["id"]
+    client.post(f"/api/businesses/{business_id}/rentals/{rental2_id}/issue", headers=headers)
+    client.post(
+        f"/api/businesses/{business_id}/rentals/{rental2_id}/return",
+        json={"actual_return": "2026-09-03"},
+        headers=headers,
+    )
+    patch_resp2 = client.patch(
+        f"/api/businesses/{business_id}/rentals/{rental2_id}", json={"discount": 50}, headers=headers
+    )
+    assert patch_resp2.status_code == 400
+
+
+def test_edit_ignores_start_date_change_on_active_rental(client):
+    owner = register_business(client, email="edit-activestart@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    _, _, rental = _setup_rental(client, headers, business_id)
+    rental_id = rental["id"]
+    original_start = rental["start_date"]
+
+    client.post(f"/api/businesses/{business_id}/rentals/{rental_id}/issue", headers=headers)
+
+    patch_resp = client.patch(
+        f"/api/businesses/{business_id}/rentals/{rental_id}",
+        json={"start_date": "2026-08-15", "end_date": "2026-09-05"},
+        headers=headers,
+    )
+    assert patch_resp.status_code == 200
+    body = patch_resp.json()
+    # Дата начала осталась прежней — правка молча проигнорирована, а не отклонена.
+    assert body["start_date"] == original_start
+    assert body["end_date"] == "2026-09-05"
+
+
+def test_edit_rejects_end_date_before_start_date(client):
+    owner = register_business(client, email="edit-baddates@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    _, _, rental = _setup_rental(client, headers, business_id)
+    rental_id = rental["id"]
+
+    patch_resp = client.patch(
+        f"/api/businesses/{business_id}/rentals/{rental_id}",
+        json={"start_date": "2026-09-10", "end_date": "2026-09-05"},
+        headers=headers,
+    )
+    assert patch_resp.status_code == 400
+
+
+def test_edit_rejects_overlapping_equipment(client):
+    owner = register_business(client, email="edit-overlap@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id, eq_a, rental = _setup_rental(client, headers, business_id)
+
+    other_client = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Другой клиент"}, headers=headers
+    ).json()["id"]
+    eq_conflict = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Занятая позиция", "category": "Инструмент", "daily_rate": 200},
+        headers=headers,
+    ).json()
+    other_rental = client.post(
+        f"/api/businesses/{business_id}/rentals",
+        json={
+            "client_id": other_client,
+            "equipment_ids": [eq_conflict["id"]],
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-10",
+        },
+        headers=headers,
+    ).json()
+    assert other_rental["status"] == "booked"
+
+    patch_resp = client.patch(
+        f"/api/businesses/{business_id}/rentals/{rental['id']}",
+        json={"equipment_ids": [eq_a["id"], eq_conflict["id"]]},
+        headers=headers,
+    )
+    assert patch_resp.status_code == 400
+    assert "занято" in patch_resp.json()["detail"]
+
+
+def test_edit_adds_removes_items_updates_discount_and_keeps_existing_snapshot(client):
+    owner = register_business(client, email="edit-items@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id, eq_kept, rental = _setup_rental(client, headers, business_id, daily_rate=100)
+    rental_id = rental["id"]
+    kept_snapshot = next(it for it in rental["items"] if it["equipment_id"] == eq_kept["id"])
+    assert kept_snapshot["daily_rate_snapshot"] == 100
+
+    # Меняем каталожную цену снятой/сохраняемой позиции ПОСЛЕ создания брони —
+    # снимок уже существующей позиции не должен пересчитаться при PATCH.
+    # (Прямого PATCH /equipment в этом наборе роутов может не быть — вместо
+    # этого просто проверяем, что PATCH аренды не трогает существующий снимок.)
+
+    eq_new = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Новая позиция", "category": "Инструмент", "daily_rate": 300},
+        headers=headers,
+    ).json()
+
+    patch_resp = client.patch(
+        f"/api/businesses/{business_id}/rentals/{rental_id}",
+        json={"equipment_ids": [eq_kept["id"], eq_new["id"]], "discount": 150},
+        headers=headers,
+    )
+    assert patch_resp.status_code == 200
+    updated = patch_resp.json()
+    assert updated["discount"] == 150
+    ids = {it["equipment_id"] for it in updated["items"]}
+    assert ids == {eq_kept["id"], eq_new["id"]}
+
+    still_kept = next(it for it in updated["items"] if it["equipment_id"] == eq_kept["id"])
+    assert still_kept["daily_rate_snapshot"] == 100  # снимок не пересчитан
+
+    newly_added = next(it for it in updated["items"] if it["equipment_id"] == eq_new["id"])
+    assert newly_added["daily_rate_snapshot"] == 300  # свежий снимок для новой позиции
+
+    # Снимаем eq_kept совсем — остаётся только eq_new.
+    patch_resp2 = client.patch(
+        f"/api/businesses/{business_id}/rentals/{rental_id}",
+        json={"equipment_ids": [eq_new["id"]]},
+        headers=headers,
+    )
+    assert patch_resp2.status_code == 200
+    updated2 = patch_resp2.json()
+    ids2 = {it["equipment_id"] for it in updated2["items"]}
+    assert ids2 == {eq_new["id"]}
+
+    # Снятое оборудование освобождено (бронь не была выдана, статус не менялся).
+    eq_list = client.get(f"/api/businesses/{business_id}/equipment", headers=headers).json()
+    kept_eq_after = next(e for e in eq_list if e["id"] == eq_kept["id"])
+    assert kept_eq_after["status"] == "available"

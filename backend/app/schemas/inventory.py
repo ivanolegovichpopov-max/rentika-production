@@ -17,6 +17,26 @@ class EquipmentCreate(BaseModel):
     period_price_after: float | None = Field(default=None, ge=0)
 
 
+class EquipmentUpdate(BaseModel):
+    """Частичное обновление оборудования — все поля необязательны (в отличие
+    от EquipmentCreate). Используется и полной формой редактирования (шлёт
+    все поля), и точечными действиями слайдовера (смена статуса/даты
+    окончания обслуживания по одному полю), как в демо-прототипе
+    (openEquipmentDetail: кнопки статуса и поле maintenanceUntil шлют
+    изменения независимо от формы редактирования)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    category: str | None = Field(default=None, min_length=1, max_length=255)
+    code: str | None = None
+    daily_rate: float | None = Field(default=None, ge=0)
+    deposit: float | None = Field(default=None, ge=0)
+    period_days: int | None = Field(default=None, ge=1)
+    period_price: float | None = Field(default=None, ge=0)
+    period_price_after: float | None = Field(default=None, ge=0)
+    status: EquipmentStatus | None = None
+    maintenance_until: date | None = None
+
+
 class EquipmentOut(BaseModel):
     id: uuid.UUID
     name: str
@@ -82,6 +102,10 @@ class RentalOut(BaseModel):
     status: RentalStatus
     damage_fee: float
     discount: float
+    # Свободный текст состояния при выдаче/возврате (демо: r.issueNotes /
+    # r.returnNotes) — печатается на актах приёма-передачи и возврата.
+    issue_notes: str | None
+    return_notes: str | None
     created_at: datetime
     # Финансовая раскладка — см. app/services/pricing.py:compute_rental_breakdown.
     # amount оставлен как алиас total ради обратной совместимости (сравнивался
@@ -104,7 +128,26 @@ class RentalOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RentalIssue(BaseModel):
+    # Пусто/не передано → подставляется дефолтный текст демо-прототипа
+    # (см. app/api/routes/rentals.py:DEFAULT_ISSUE_NOTES).
+    issue_notes: str | None = Field(default=None, max_length=1000)
+
+
 class RentalReturn(BaseModel):
     damage_fee: float = Field(ge=0, default=0)
     discount: float = Field(ge=0, default=0)
     actual_return: date | None = None
+    # Пусто/не передано → подставляется дефолтный текст демо-прототипа
+    # (см. app/api/routes/rentals.py:DEFAULT_RETURN_NOTES).
+    return_notes: str | None = Field(default=None, max_length=1000)
+
+
+class RentalEdit(BaseModel):
+    """Правка брони/активной аренды — мирроит editRentalForm демо-прототипа.
+    Все поля опциональны: передаётся только то, что реально меняется."""
+
+    start_date: date | None = None
+    end_date: date | None = None
+    equipment_ids: list[uuid.UUID] | None = None
+    discount: float | None = Field(default=None, ge=0)

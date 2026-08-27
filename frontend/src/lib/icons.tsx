@@ -81,3 +81,16 @@ export const IconSecurity = (p: SVGProps<SVGSVGElement>) => (
 export const IconAdmin = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18" /><path d="M9 21V9" /></Svg>
 );
+export const IconCalendar = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></Svg>
+);
+export const IconChevronDown = (p: SVGProps<SVGSVGElement>) => (
+  <Svg strokeWidth={2.4} {...p}><polyline points="6 9 12 15 18 9" /></Svg>
+);
+export const IconGrip = (p: SVGProps<SVGSVGElement>) => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" {...p}>
+    <circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" />
+    <circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" />
+    <circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" />
+  </svg>
+);

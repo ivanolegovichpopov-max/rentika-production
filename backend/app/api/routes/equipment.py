@@ -8,8 +8,8 @@ from app.core.audit import log_action
 from app.core.deps import BusinessContext, require_permission
 from app.database import get_db
 from app.models.business import PermissionLevel, ResourceType
-from app.models.inventory import Equipment, EquipmentStatus, RentalItem
-from app.schemas.inventory import EquipmentCreate, EquipmentOut
+from app.models.inventory import Equipment, EquipmentStatus, Rental, RentalItem, RentalStatus
+from app.schemas.inventory import EquipmentCreate, EquipmentOut, EquipmentUpdate
 
 router = APIRouter(prefix="/businesses/{business_id}/equipment", tags=["equipment"])
 
@@ -37,13 +37,44 @@ async def create_equipment(body: EquipmentCreate, ctx: BusinessContext = Depends
 
 @router.patch("/{equipment_id}", response_model=EquipmentOut)
 async def update_equipment(
-    equipment_id: uuid.UUID, body: EquipmentCreate, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
+    equipment_id: uuid.UUID, body: EquipmentUpdate, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
 ):
+    """Частичное обновление — только переданные поля меняются
+    (exclude_unset), в отличие от старой версии, которая требовала
+    EquipmentCreate целиком и потому 422-ила на точечных PATCH-запросах
+    слайдовера (смена статуса, дата окончания обслуживания)."""
     item = db.get(Equipment, equipment_id)
     if item is None or item.business_id != ctx.business_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Оборудование не найдено")
-    for field, value in body.model_dump().items():
+
+    changes = body.model_dump(exclude_unset=True)
+
+    if changes.get("status") == EquipmentStatus.retired:
+        # Тот же принцип, что и при удалении: нельзя списать позицию, по
+        # которой есть аренда в работе или бронь (см. demo's
+        # equipmentHasOpenRentals) — иначе статус "Списано" маскирует
+        # фактическое "В аренде".
+        open_rental = db.scalar(
+            select(RentalItem)
+            .join(Rental, Rental.id == RentalItem.rental_id)
+            .where(
+                RentalItem.equipment_id == equipment_id,
+                Rental.status.in_([RentalStatus.booked, RentalStatus.active]),
+            )
+        )
+        if open_rental is not None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Нельзя списать: по этой позиции есть аренда в работе или бронь. Сначала завершите её.",
+            )
+
+    for field, value in changes.items():
         setattr(item, field, value)
+    if changes.get("status") is not None and changes["status"] != EquipmentStatus.maintenance and "maintenance_until" not in changes:
+        # Как и в демо: при смене статуса на что-то, кроме "на обслуживании",
+        # дата окончания обслуживания сбрасывается, если она не была
+        # одновременно переустановлена этим же запросом.
+        item.maintenance_until = None
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="update", resource="equipment", resource_id=str(equipment_id))
     db.commit()
     db.refresh(item)

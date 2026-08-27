@@ -102,6 +102,11 @@ class Rental(Base):
     # сотрудником — вычитается из итога отдельно от damage_fee, как в
     # демо-прототипе (r.discount).
     discount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    # Свободный текст состояния при выдаче/возврате — переносится 1-в-1 из
+    # демо-прототипа (r.issueNotes/r.returnNotes), печатается на актах
+    # приёма-передачи и возврата.
+    issue_notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    return_notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_by_employee_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )

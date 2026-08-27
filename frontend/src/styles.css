@@ -34,6 +34,8 @@
   --critical-soft: #FCE8E6;
   --today: #9334E6;
   --today-soft: #F3E8FD;
+  --col-select: #12B5CB;
+  --col-select-soft: rgba(18,181,203,0.16);
   --seq-1: #E8F0FE;
   --seq-2: #AECBFA;
   --seq-3: #7BAAF7;
@@ -58,6 +60,7 @@
     --warning: #FDD663; --warning-ink: #FDD663; --warning-soft: #3D3122;
     --critical: #F28B82; --critical-ink: #F6AEA9; --critical-soft: #3C2624;
     --today: #D7AEFB; --today-soft: #3B2E4D;
+    --col-select: #6DD0DE; --col-select-soft: rgba(109,208,222,0.22);
     --seq-1: #1B2C42; --seq-2: #23395A; --seq-3: #2F4E7D; --seq-4: #3F6BAA; --seq-5: #5E90D6; --seq-6: #8AB4F8;
     --brand-deep: #3E63A6;
     --shadow-sm: 0 1px 2px 0 rgba(0,0,0,0.35), 0 1px 3px 1px rgba(0,0,0,0.25);
@@ -76,6 +79,7 @@
   --warning: #FDD663; --warning-ink: #FDD663; --warning-soft: #3D3122;
   --critical: #F28B82; --critical-ink: #F6AEA9; --critical-soft: #3C2624;
   --today: #D7AEFB; --today-soft: #3B2E4D;
+  --col-select: #6DD0DE; --col-select-soft: rgba(109,208,222,0.22);
   --seq-1: #1B2C42; --seq-2: #23395A; --seq-3: #2F4E7D; --seq-4: #3F6BAA; --seq-5: #5E90D6; --seq-6: #8AB4F8;
   --brand-deep: #3E63A6;
   --shadow-sm: 0 1px 2px 0 rgba(0,0,0,0.35), 0 1px 3px 1px rgba(0,0,0,0.25);
@@ -252,6 +256,11 @@ div.due-item, div.mini-item { display: flex; align-items: center; justify-conten
 .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 thead th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 700; padding: 12px 16px; background: var(--surface-2); text-align: left; white-space: nowrap; }
+thead th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+thead th.sortable:hover { color: var(--ink); }
+thead th.sortable.active { color: var(--accent); }
+.sort-arrow { display: inline-block; margin-left: 5px; font-size: 9px; }
+.sort-arrow-idle { opacity: 0.35; }
 tbody td { padding: 12px 16px; font-size: 13.5px; border-top: 1px solid var(--border); }
 tbody tr { cursor: default; }
 tbody tr[data-clickable="true"] { cursor: pointer; }
@@ -270,6 +279,97 @@ tbody tr[data-clickable="true"]:hover { background: var(--surface-2); }
 .rental-meta { display: flex; align-items: center; gap: 14px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
 .rental-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
 
+/* ---------- Календарь занятости ---------- */
+/* max-height + overflow-y: auto делают .cal-wrap собственной прокручиваемой панелью:
+   это единственный надёжный кросс-браузерный способ закрепить шапку с датами —
+   если оставить overflow-y "видимым", браузер всё равно молча приравнивает его
+   к overflow-x (auto), и sticky-заголовок тогда прилипает не к странице, а к
+   границам самого .cal-wrap, которые не двигаются при прокрутке страницы. */
+.cal-wrap { max-height: 72vh; overflow-x: auto; overflow-y: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); }
+.cal-grid { display: grid; min-width: 900px; user-select: none; }
+.cal-row { display: grid; grid-template-columns: 200px repeat(var(--days,14), 1fr); align-items: stretch; }
+.cal-row.head { position: sticky; top: 0; z-index: 3; background: var(--surface-2); }
+.cal-row.head .cal-cell { padding: 8px 4px; font-size: 11px; font-weight: 700; color: var(--muted); text-align: center; background: var(--surface-2); text-transform: uppercase; }
+.cal-row.head .cal-cell.weekend { background: var(--surface-3); }
+.cal-name-cell {
+  padding: 9px 14px; font-size: 13px; font-weight: 600; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column; justify-content: center; position: sticky; left: 0; background: var(--surface); z-index: 1;
+}
+.cal-name-cell .cat { font-size: 11px; font-weight: 500; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cal-name-cell.clickable { cursor: pointer; }
+.cal-name-cell.clickable:hover { color: var(--accent); }
+.cal-row.head .cal-name-cell { background: var(--surface-2); z-index: 2; }
+.cal-group-row {
+  background: var(--surface-2); border-bottom: 1px solid var(--border);
+  min-width: max-content; cursor: pointer;
+  transition: background .12s ease, box-shadow .12s ease;
+}
+.cal-group-row:hover { background: var(--surface-3); }
+.cal-group-row.dragging { opacity: 0.4; }
+.cal-group-row.drag-over { box-shadow: inset 0 2px 0 var(--accent); background: var(--accent-soft); }
+.cal-group-sticky {
+  position: sticky; left: 0; z-index: 1;
+  padding: 7px 14px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--ink-secondary); display: inline-flex; align-items: center; gap: 8px;
+}
+.cal-group-chevron { display: flex; color: var(--muted); flex: none; transition: transform .15s ease; }
+.cal-group-row.collapsed .cal-group-chevron { transform: rotate(-90deg); }
+.cal-group-drag { display: flex; color: var(--muted); flex: none; cursor: grab; }
+.cal-group-drag:active { cursor: grabbing; }
+.cal-group-count { font-family: "Roboto Mono"; font-weight: 500; color: var(--muted); font-size: 10.5px; }
+/* z-index:0 замыкает собственный стек внутри ячейки (today-обводка, подсветка выбора)
+   в её локальный контекст наложения — без этого их z-index сравнивался бы напрямую
+   с закреплённой колонкой названия/шапкой (у них тоже задан z-index) и мог перекрыть их
+   при горизонтальной прокрутке. */
+.cal-cell { border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); min-height: 40px; position: relative; z-index: 0; }
+.cal-cell.weekend { background: var(--surface-2); }
+/* Подсветка выбранного столбца — полупрозрачная заливка поверх .cal-fill (z-index:1 > auto),
+   чтобы бронь/аренда внутри оставались видны, а не перекрывались. */
+.cal-cell.col-selected::before {
+  content: ""; position: absolute; inset: 0; z-index: 1; background: var(--col-select-soft); pointer-events: none;
+}
+.cal-row.head .cal-cell.col-selected { background: var(--col-select-soft); }
+.cal-row.head .cal-cell[data-action="cal-col-select"] { cursor: pointer; }
+.cal-row.head .cal-cell[data-action="cal-col-select"]:hover { background: var(--surface-3); }
+/* Обводка "сегодня" — псевдоэлемент рисуется поверх .cal-fill и поверх подсветки выбора (z-index:2), поэтому не прячется под ними. */
+.cal-cell.today::after {
+  content: ""; position: absolute; inset: 0; z-index: 2; box-shadow: inset 0 0 0 2px var(--today); pointer-events: none;
+}
+.cal-row.head .cal-cell.today { background: var(--today-soft); color: var(--today); }
+.cal-cell.clickable { cursor: pointer; }
+.cal-cell.clickable:hover { box-shadow: inset 0 0 0 1.5px var(--border-strong); }
+.cal-cell.drag-highlight { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.cal-col-indicator {
+  display: inline-flex; align-items: center; gap: 4px; padding: 5px 5px 5px 12px; border-radius: 16px;
+  background: var(--col-select-soft); color: var(--ink); font-size: 12.5px; font-weight: 600; white-space: nowrap;
+}
+.cal-col-indicator button {
+  display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%;
+  border: none; background: var(--surface); color: var(--ink-secondary); cursor: pointer; flex: none;
+}
+.cal-col-indicator button:hover { background: var(--surface-2); color: var(--ink); }
+.cal-col-indicator button svg { width: 12px; height: 12px; }
+.cal-fill {
+  position: absolute; top: 3px; bottom: 3px; left: 3px; right: 3px; border-radius: 4px;
+  display: flex; align-items: center; justify-content: center; overflow: hidden; pointer-events: none;
+}
+.cal-fill.cont-left { left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.cal-fill.cont-right { right: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.cal-fill.st-available { background: transparent; }
+.cal-fill.st-booked { background: var(--info-soft); border: 1px dashed var(--info); }
+.cal-fill.st-booked.cont-left { border-left: none; }
+.cal-fill.st-booked.cont-right { border-right: none; }
+.cal-fill.st-active { background: var(--accent); }
+.cal-fill.st-overdue { background: var(--critical); }
+.cal-fill.st-maintenance { background: repeating-linear-gradient(45deg, var(--warning-soft), var(--warning-soft) 4px, var(--surface-3) 4px, var(--surface-3) 8px); }
+.cal-fill-label { font-size: 9px; font-weight: 700; color: #fff; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; padding: 0 2px; }
+.cal-fill-label.dark { color: var(--info); }
+.cal-jump { display: flex; align-items: center; gap: 6px; }
+.cal-jump input[type="date"] { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; color: var(--ink); }
+.cal-legend { display: flex; gap: 16px; margin-top: 10px; padding: 10px 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink-secondary); }
+.cal-legend .item { display: flex; align-items: center; gap: 6px; }
+.cal-legend .sw { width: 12px; height: 12px; border-radius: 3px; }
+
 /* ---------- Слайдовер / модалка деталей клиента-оборудования ---------- */
 .slideover-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 40; }
 .slideover { position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 100%); background: var(--surface); box-shadow: var(--shadow-lg); z-index: 41; overflow-y: auto; padding: 22px; }
@@ -286,8 +386,38 @@ dialog#modal { border: none; border-radius: 16px; padding: 0; box-shadow: var(--
 dialog#modal.wide { width: min(820px, 94vw); }
 dialog#modal::backdrop { background: rgba(0,0,0,0.4); }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.modal-head h3 { font-size: 16px; font-weight: 800; }
 .modal-body { padding: 18px 20px; overflow-y: auto; max-height: 65vh; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
+
+/* ---------- Поля формы модалок ---------- */
+.field label { display: block; font-size: 12px; font-weight: 700; color: var(--ink-secondary); margin-bottom: 5px; }
+.field input, .field select, .field textarea {
+  width: 100%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 11px; font-size: 13.5px; color: var(--ink);
+}
+.field input:focus-visible, .field select:focus-visible, .field textarea:focus-visible { background: var(--surface); }
+.field textarea { resize: vertical; min-height: 56px; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.field-row-3 { grid-template-columns: 1fr 1fr 1fr; }
+.field-hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+
+/* ---------- Пиклист оборудования (форма аренды) ---------- */
+.eq-picklist { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.field .eq-pick-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
+.eq-pick-row:last-child { border-bottom: none; }
+.eq-pick-row.disabled { opacity: 0.5; }
+.eq-pick-row input[type=checkbox] { width: 16px; height: 16px; flex: none; }
+.eq-pick-name { flex: 1; font-weight: 600; min-width: 120px; }
+.eq-pick-rate { font-family: "Roboto Mono"; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.eq-pick-conflict { font-size: 11px; color: var(--critical); }
+
+/* ---------- Сводка финансов аренды (форма возврата) ---------- */
+.summary-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.summary-row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+.summary-row.total { font-weight: 800; font-size: 14.5px; border-top: 1px solid var(--border-strong); margin-top: 6px; padding-top: 8px; }
+.summary-row .v { font-family: "Roboto Mono"; }
+.summary-row.critical .v { color: var(--critical); }
 
 .doc-page { background: #fff; color: #17202A; padding: 34px 38px; font-family: "Roboto", sans-serif; font-size: 13px; line-height: 1.55; border-radius: 3px; border: 1px solid var(--border); }
 .doc-page h2 { font-family: "Roboto", system-ui, sans-serif; font-weight: 600; font-size: 18px; margin-bottom: 4px; color: #17202A; }
@@ -350,6 +480,7 @@ dialog#modal::backdrop { background: rgba(0,0,0,0.4); }
 }
 @media (max-width: 520px) {
   .team-block { display: none; }
+  .field-row-3 { grid-template-columns: 1fr; }
 }
 
 /* ---------- Совместимость: экраны без прямого аналога в демо ---------- */

@@ -9,6 +9,7 @@ import { AdminOverviewTab } from "./dashboard/AdminOverviewTab";
 import { EquipmentTab } from "./dashboard/EquipmentTab";
 import { ClientsTab } from "./dashboard/ClientsTab";
 import { RentalsTab } from "./dashboard/RentalsTab";
+import { CalendarTab } from "./dashboard/CalendarTab";
 import { FinanceTab } from "./dashboard/FinanceTab";
 import { EmployeesTab } from "./dashboard/EmployeesTab";
 import { TwoFactorSettings } from "./TwoFactorSettings";
@@ -24,13 +25,14 @@ import {
   IconEquipment,
   IconClients,
   IconRentals,
+  IconCalendar,
   IconFinance,
   IconEmployees,
   IconSecurity,
   IconAdmin,
 } from "../lib/icons";
 
-export type View = "dashboard" | "equipment" | "clients" | "rentals" | "finance" | "employees" | "security" | "admin";
+export type View = "dashboard" | "equipment" | "clients" | "rentals" | "calendar" | "finance" | "employees" | "security" | "admin";
 
 const THEME_KEY = "rentika_theme_v1";
 
@@ -124,6 +126,7 @@ function DashboardShell({
       icon: IconRentals,
       count: rentals.filter((r) => { const s = rentalDisplayStatus(r); return s === "active" || s === "overdue"; }).length,
     },
+    { key: "calendar", label: "Календарь", icon: IconCalendar },
     { key: "finance", label: "Финансы", icon: IconFinance },
     { key: "employees", label: "Сотрудники", icon: IconEmployees, count: activeEmployees.length },
     { key: "security", label: "Безопасность", icon: IconSecurity },
@@ -138,6 +141,7 @@ function DashboardShell({
     equipment: ["Оборудование", equipment.length + " позиций в парке"],
     clients: ["Клиенты", clients.length + " в базе"],
     rentals: ["Аренды", overdueCount ? overdueCount + " просрочено — нужно связаться с клиентом" : "Все аренды под контролем"],
+    calendar: ["Календарь занятости", "Занятость оборудования"],
     finance: ["Финансы", "Доходы, депозиты и история возвратов"],
     employees: ["Сотрудники", "Должности и права доступа"],
     security: ["Безопасность", "Двухфакторная аутентификация"],
@@ -146,9 +150,13 @@ function DashboardShell({
 
   const currentBusiness = businesses.find((b) => b.id === businessId);
   const [title, subtitle] = TITLES[view];
-  const showSearch = view === "equipment" || view === "clients" || view === "rentals";
+  const showSearch = view === "equipment" || view === "clients" || view === "rentals" || view === "calendar";
   const searchPlaceholder =
-    view === "equipment" ? "Поиск по оборудованию…" : view === "clients" ? "Поиск по клиентам…" : "Поиск по клиентам и оборудованию…";
+    view === "equipment" || view === "calendar"
+      ? "Поиск по оборудованию…"
+      : view === "clients"
+      ? "Поиск по клиентам…"
+      : "Поиск по клиентам и оборудованию…";
 
   return (
     <div className="app">
@@ -262,6 +270,7 @@ function DashboardShell({
               {view === "rentals" && (
                 <RentalsTab businessId={businessId} search={search} filter={rentalFilter} setFilter={setRentalFilter} />
               )}
+              {view === "calendar" && <CalendarTab businessId={businessId} search={search} />}
               {view === "finance" && <FinanceTab period={financePeriod} setPeriod={setFinancePeriod} />}
               {view === "employees" && <EmployeesTab businessId={businessId} />}
               {view === "security" && <TwoFactorSettings />}

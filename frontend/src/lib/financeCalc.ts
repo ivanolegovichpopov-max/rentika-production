@@ -7,7 +7,7 @@
  * топ оборудования, бакеты для графика), точно так же, как в демо, которое
  * тоже считало все агрегаты на лету из полного in-memory списка.
  */
-import type { Equipment, Rental } from "../api/types";
+import type { Equipment, Rental, RentalItem } from "../api/types";
 import { dayDiff, isoAddDays, todayISO } from "./format";
 
 export function minRentalDate(rentals: Rental[]): string {
@@ -137,4 +137,67 @@ export function depositsHeldNow(rentals: Rental[], displayStatusOf: (r: Rental) 
       return s === "active" || s === "overdue";
     })
     .reduce((s, r) => s + r.deposit_total, 0);
+}
+
+/** Число дней пересечения двух диапазонов дат (0, если не пересекаются) —
+ * порт overlapDays() из демо. */
+export function overlapDays(aStart: string, aEnd: string, bStart: string, bEnd: string): number {
+  if (aStart > bEnd || bStart > aEnd) return 0;
+  const lo = aStart > bStart ? aStart : bStart;
+  const hi = aEnd < bEnd ? aEnd : bEnd;
+  return dayDiff(hi) - dayDiff(lo) + 1;
+}
+
+/** Стоимость ОДНОЙ позиции аренды за N дней с учётом ступенчатого тарифа
+ * (если задан period_days_snapshot/period_price_snapshot) — порт
+ * itemCostForDays() из демо: первые period_days_snapshot дней — по
+ * period_price_snapshot, каждый следующий полный период той же длины — по
+ * period_price_after_snapshot (или по той же цене, если "после" не задана),
+ * неполный хвостовой период — пропорционально дням. */
+export function itemCostForDays(it: RentalItem, days: number): number {
+  if (days <= 0) return 0;
+  if (!it.period_days_snapshot || !it.period_price_snapshot) return it.daily_rate_snapshot * days;
+  const P = it.period_days_snapshot;
+  const fullPeriods = Math.floor(days / P);
+  const remDays = days - fullPeriods * P;
+  let total = 0;
+  if (fullPeriods >= 1) {
+    total += it.period_price_snapshot;
+    if (fullPeriods > 1) total += (fullPeriods - 1) * (it.period_price_after_snapshot || it.period_price_snapshot);
+  }
+  if (remDays > 0) {
+    const perDay = (fullPeriods >= 1 ? (it.period_price_after_snapshot || it.period_price_snapshot) : it.period_price_snapshot) / P;
+    total += perDay * remDays;
+  }
+  return total;
+}
+
+/** Стоимость ВСЕХ позиций аренды за N дней — порт rentalItemsCost() из демо. */
+export function rentalItemsCost(items: RentalItem[], days: number): number {
+  return items.reduce((s, it) => s + itemCostForDays(it, days), 0);
+}
+
+/** Начисленная выручка по активным/просроченным арендам, попадающая в
+ * [from,to] — точный порт accruedRevenueForPeriod() из демо (маржинальный
+ * расчёт: стоимость дней аренды ДО начала пересечения вычитается из
+ * стоимости дней аренды ПО КОНЕЦ пересечения, так ступенчатый тариф
+ * применяется корректно относительно фактического начала аренды, а не
+ * начала периода отчёта). Использует r.status напрямую (не displayStatus) —
+ * ровно как демо: backend никогда не хранит "overdue" явно (см. types.ts),
+ * поэтому фильтр по "active"/"overdue" безопасен и без вычисляемого статуса. */
+export function accruedRevenueForPeriod(rentals: Rental[], from: string, to: string): number {
+  let total = 0;
+  rentals
+    .filter((r) => r.status === "active" || r.status === "overdue")
+    .forEach((r) => {
+      const endForCalc = dayDiff(r.end_date) < 0 ? todayISO() : r.end_date;
+      const ov = overlapDays(r.start_date, endForCalc, from, to);
+      if (ov <= 0) return;
+      const overlapStart = r.start_date > from ? r.start_date : from;
+      const daysBefore = dayDiff(overlapStart) - dayDiff(r.start_date);
+      const costThrough = rentalItemsCost(r.items, daysBefore + ov);
+      const costBefore = daysBefore > 0 ? rentalItemsCost(r.items, daysBefore) : 0;
+      total += costThrough - costBefore;
+    });
+  return Math.round(total);
 }
