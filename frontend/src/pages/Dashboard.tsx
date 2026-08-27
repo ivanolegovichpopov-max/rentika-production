@@ -5,6 +5,7 @@ import { DataProvider, useData } from "../context/DataContext";
 import { api } from "../api/client";
 import type { Employee } from "../api/types";
 import { DashboardTab } from "./dashboard/DashboardTab";
+import { AdminOverviewTab } from "./dashboard/AdminOverviewTab";
 import { EquipmentTab } from "./dashboard/EquipmentTab";
 import { ClientsTab } from "./dashboard/ClientsTab";
 import { RentalsTab } from "./dashboard/RentalsTab";
@@ -26,9 +27,10 @@ import {
   IconFinance,
   IconEmployees,
   IconSecurity,
+  IconAdmin,
 } from "../lib/icons";
 
-export type View = "dashboard" | "equipment" | "clients" | "rentals" | "finance" | "employees" | "security";
+export type View = "dashboard" | "equipment" | "clients" | "rentals" | "finance" | "employees" | "security" | "admin";
 
 const THEME_KEY = "rentika_theme_v1";
 
@@ -125,6 +127,10 @@ function DashboardShell({
     { key: "finance", label: "Финансы", icon: IconFinance },
     { key: "employees", label: "Сотрудники", icon: IconEmployees, count: activeEmployees.length },
     { key: "security", label: "Безопасность", icon: IconSecurity },
+    // Видно только платформенному админу — обзор ВСЕХ бизнесов на платформе
+    // (для техподдержки), встроенный сюда же вместо отдельного экрана без
+    // доступа к остальной CRM (см. историю решения в Home.tsx).
+    ...(user?.is_platform_admin ? [{ key: "admin" as const, label: "Все бизнесы", icon: IconAdmin }] : []),
   ];
 
   const TITLES: Record<View, [string, string]> = {
@@ -135,6 +141,7 @@ function DashboardShell({
     finance: ["Финансы", "Доходы, депозиты и история возвратов"],
     employees: ["Сотрудники", "Должности и права доступа"],
     security: ["Безопасность", "Двухфакторная аутентификация"],
+    admin: ["Все бизнесы", "Обзор платформы для техподдержки"],
   };
 
   const currentBusiness = businesses.find((b) => b.id === businessId);
@@ -258,6 +265,7 @@ function DashboardShell({
               {view === "finance" && <FinanceTab period={financePeriod} setPeriod={setFinancePeriod} />}
               {view === "employees" && <EmployeesTab businessId={businessId} />}
               {view === "security" && <TwoFactorSettings />}
+              {view === "admin" && <AdminOverviewTab />}
             </>
           )}
         </main>
