@@ -37,6 +37,8 @@ class EquipmentOut(BaseModel):
 class ClientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     phone: str | None = None
+    email: str | None = None
+    doc: str | None = None
     rating: ClientRating = ClientRating.normal
     notes: str | None = None
 
@@ -45,6 +47,8 @@ class ClientOut(BaseModel):
     id: uuid.UUID
     name: str
     phone: str | None
+    email: str | None
+    doc: str | None
     rating: ClientRating
     notes: str | None
     created_at: datetime
@@ -77,8 +81,24 @@ class RentalOut(BaseModel):
     actual_return: date | None
     status: RentalStatus
     damage_fee: float
+    discount: float
     created_at: datetime
+    # Финансовая раскладка — см. app/services/pricing.py:compute_rental_breakdown.
+    # amount оставлен как алиас total ради обратной совместимости (сравнивался
+    # напрямую в tests/test_rentals_flow.py и может использоваться где-то ещё).
+    planned_days: int
+    actual_days: int
+    late_days: int
+    base: float
+    late_fee: float
+    total: float
     amount: float
+    # Сумма ТЕКУЩИХ (не снятых на момент оформления) залогов по оборудованию
+    # в аренде — сознательное упрощение относительно демо-прототипа, который
+    # снимает снимок залога в момент бронирования. Здесь снимка залога нет,
+    # поэтому deposit_total читается "вживую" из Equipment.deposit на момент
+    # ответа и может измениться, если залог у оборудования потом поменяют.
+    deposit_total: float
     items: list[RentalItemOut] = []
 
     model_config = {"from_attributes": True}
@@ -86,4 +106,5 @@ class RentalOut(BaseModel):
 
 class RentalReturn(BaseModel):
     damage_fee: float = Field(ge=0, default=0)
+    discount: float = Field(ge=0, default=0)
     actual_return: date | None = None

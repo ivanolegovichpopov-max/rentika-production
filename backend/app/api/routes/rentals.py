@@ -11,7 +11,7 @@ from app.database import get_db
 from app.models.business import PermissionLevel, ResourceType
 from app.models.inventory import Client, Equipment, EquipmentStatus, Rental, RentalItem, RentalStatus
 from app.schemas.inventory import RentalCreate, RentalOut, RentalReturn
-from app.services.pricing import compute_rental_amount, item_cost_for_days, span_days
+from app.services.pricing import compute_rental_breakdown
 
 router = APIRouter(prefix="/businesses/{business_id}/rentals", tags=["rentals"])
 
@@ -19,24 +19,37 @@ view_dep = require_permission(ResourceType.rentals, PermissionLevel.view)
 edit_dep = require_permission(ResourceType.rentals, PermissionLevel.edit)
 
 
-def _rental_amount(rental: Rental, items: list[RentalItem]) -> float:
-    end_for_calc = rental.actual_return or rental.end_date
-    days = span_days(rental.start_date, end_for_calc)
-    costs = [
-        item_cost_for_days(
-            daily_rate=float(it.daily_rate_snapshot),
-            days=days,
-            period_days=it.period_days_snapshot,
-            period_price=float(it.period_price_snapshot) if it.period_price_snapshot is not None else None,
-            period_price_after=float(it.period_price_after_snapshot) if it.period_price_after_snapshot is not None else None,
-        )
-        for it in items
-    ]
-    return compute_rental_amount(costs, damage_fee=float(rental.damage_fee))
-
-
 def _to_out(db: Session, rental: Rental) -> RentalOut:
     items = db.scalars(select(RentalItem).where(RentalItem.rental_id == rental.id)).all()
+
+    breakdown = compute_rental_breakdown(
+        items=[
+            {
+                "daily_rate": float(it.daily_rate_snapshot),
+                "period_days": it.period_days_snapshot,
+                "period_price": float(it.period_price_snapshot) if it.period_price_snapshot is not None else None,
+                "period_price_after": float(it.period_price_after_snapshot)
+                if it.period_price_after_snapshot is not None
+                else None,
+            }
+            for it in items
+        ],
+        start_date=rental.start_date,
+        end_date=rental.end_date,
+        actual_return=rental.actual_return,
+        today=date.today(),
+        damage_fee=float(rental.damage_fee),
+        discount=float(rental.discount),
+    )
+
+    # deposit_total читается "вживую" из текущего Equipment.deposit — снимка
+    # залога на момент бронирования эта схема БД не хранит (см. RentalOut).
+    deposit_total = 0.0
+    for it in items:
+        equipment = db.get(Equipment, it.equipment_id)
+        if equipment is not None:
+            deposit_total += float(equipment.deposit)
+
     return RentalOut(
         id=rental.id,
         client_id=rental.client_id,
@@ -45,8 +58,16 @@ def _to_out(db: Session, rental: Rental) -> RentalOut:
         actual_return=rental.actual_return,
         status=rental.status,
         damage_fee=float(rental.damage_fee),
+        discount=float(rental.discount),
         created_at=rental.created_at,
-        amount=_rental_amount(rental, items),
+        planned_days=breakdown["planned_days"],
+        actual_days=breakdown["actual_days"],
+        late_days=breakdown["late_days"],
+        base=breakdown["base"],
+        late_fee=breakdown["late_fee"],
+        total=breakdown["total"],
+        amount=breakdown["total"],
+        deposit_total=deposit_total,
         items=items,
     )
 
@@ -157,6 +178,7 @@ async def return_rental(
     rental.status = RentalStatus.returned
     rental.actual_return = body.actual_return or date.today()
     rental.damage_fee = body.damage_fee
+    rental.discount = body.discount
 
     for it in db.scalars(select(RentalItem).where(RentalItem.rental_id == rental.id)):
         equipment = db.get(Equipment, it.equipment_id)
@@ -170,7 +192,7 @@ async def return_rental(
         action="return",
         resource="rental",
         resource_id=str(rental_id),
-        meta={"damage_fee": body.damage_fee},
+        meta={"damage_fee": body.damage_fee, "discount": body.discount},
     )
     db.commit()
     db.refresh(rental)

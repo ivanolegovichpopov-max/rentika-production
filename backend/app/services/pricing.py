@@ -56,3 +56,80 @@ def compute_rental_amount(item_costs: list[float], damage_fee: float = 0) -> int
     показываются нигде в проекте — округление до целого здесь единственное
     и финальное)."""
     return round(sum(item_costs) + damage_fee)
+
+
+def compute_rental_breakdown(
+    *,
+    items: list[dict],
+    start_date: date,
+    end_date: date,
+    actual_return: date | None,
+    today: date,
+    damage_fee: float = 0,
+    discount: float = 0,
+) -> dict:
+    """Полная финансовая раскладка аренды для карточки в интерфейсе (перенос
+    логики прототипа — см. index.html/index-supabase.html, отрисовка
+    plannedDays/actualDays/lateDays/base/lateFee/total в карточке аренды).
+
+    Ключевая идея прототипа: пени за просрочку — это НЕ отдельная штрафная
+    ставка, а тот же ступенчатый тариф, просто применённый к фактическому
+    (более длинному) числу дней вместо планового. late_fee — это разница
+    между стоимостью аренды на факт. дни и стоимостью на план. дни: продлевая
+    аренду сверх end_date, клиент просто "доезжает" по тому же тарифу дальше,
+    в том числе попадая в более выгодную ступень, если период достаточно
+    длинный — это НЕ штраф по дневной ставке.
+
+    `items` — список словарей со снимком цены каждой позиции оборудования
+    (те же ключи, что принимает item_cost_for_days: daily_rate, опционально
+    period_days/period_price/period_price_after) — сознательно не завязано
+    на ORM-модели, чтобы функция была чистой и юнит-тестируемой в изоляции
+    (см. tests/test_pricing.py).
+
+    `today` передаётся явно (а не date.today() внутри) — вызывающий код сам
+    решает, что считать "сегодня" (см. app/api/routes/rentals.py), функция
+    остаётся чистой и не зависит от системных часов.
+    """
+    planned_days = span_days(start_date, end_date)
+
+    if actual_return is not None:
+        calc_end_date = actual_return
+    elif end_date < today:
+        calc_end_date = today
+    else:
+        calc_end_date = end_date
+
+    actual_days = span_days(start_date, calc_end_date)
+    late_days = max(0, actual_days - planned_days)
+
+    def _cost_for(days: int) -> float:
+        return sum(
+            item_cost_for_days(
+                daily_rate=it["daily_rate"],
+                days=days,
+                period_days=it.get("period_days"),
+                period_price=it.get("period_price"),
+                period_price_after=it.get("period_price_after"),
+            )
+            for it in items
+        )
+
+    # base и actual_cost округляются отдельно, каждый до целого рубля — так
+    # late_fee (их разность) тоже получается целым числом рублей для показа
+    # в интерфейсе.
+    base = round(_cost_for(planned_days))
+    actual_cost = round(_cost_for(actual_days))
+    late_fee = max(0, actual_cost - base)
+
+    total = max(0, base + late_fee + damage_fee - discount)
+
+    return {
+        "planned_days": planned_days,
+        "actual_days": actual_days,
+        "late_days": late_days,
+        "base": base,
+        "late_fee": late_fee,
+        "damage_fee": damage_fee,
+        "discount": discount,
+        "total": total,
+    }

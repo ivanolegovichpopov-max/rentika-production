@@ -100,6 +100,96 @@ def test_full_rental_cycle_matches_reference_price(client):
     assert eq_final[0]["status"] == "available"
 
 
+def test_return_with_damage_fee_and_discount_reflects_in_breakdown(client):
+    owner = register_business(client, email="breakdown@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Клиент раскладки"}, headers=headers
+    ).json()["id"]
+
+    eq = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Тестовая техника", "category": "Инструмент", "daily_rate": 500, "deposit": 2000},
+        headers=headers,
+    ).json()
+
+    rental = client.post(
+        f"/api/businesses/{business_id}/rentals",
+        json={
+            "client_id": client_id,
+            "equipment_ids": [eq["id"]],
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-03",
+        },
+        headers=headers,
+    ).json()
+    assert rental["planned_days"] == 3
+    assert rental["base"] == 1500
+    assert rental["deposit_total"] == 2000
+    rental_id = rental["id"]
+
+    client.post(f"/api/businesses/{business_id}/rentals/{rental_id}/issue", headers=headers)
+
+    return_resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/return",
+        json={"actual_return": "2026-09-03", "damage_fee": 200, "discount": 300},
+        headers=headers,
+    )
+    assert return_resp.status_code == 200
+    returned = return_resp.json()
+    assert returned["base"] == 1500
+    assert returned["late_fee"] == 0
+    assert returned["damage_fee"] == 200
+    assert returned["discount"] == 300
+    assert returned["total"] == 1500 + 0 + 200 - 300
+    assert returned["amount"] == returned["total"]
+    assert returned["deposit_total"] == 2000
+
+
+def test_client_email_and_doc_round_trip_through_create_and_update(client):
+    owner = register_business(client, email="clientfields@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    create_resp = client.post(
+        f"/api/businesses/{business_id}/clients",
+        json={"name": "Клиент с почтой", "email": "client@example.com", "doc": "1234 567890"},
+        headers=headers,
+    )
+    assert create_resp.status_code == 201
+    created = create_resp.json()
+    assert created["email"] == "client@example.com"
+    assert created["doc"] == "1234 567890"
+    client_id = created["id"]
+
+    # email намеренно без уникальности — второй клиент с тем же email должен
+    # спокойно создаваться (см. app/models/inventory.py:Client.email).
+    other_resp = client.post(
+        f"/api/businesses/{business_id}/clients",
+        json={"name": "Другой клиент, та же почта", "email": "client@example.com"},
+        headers=headers,
+    )
+    assert other_resp.status_code == 201
+
+    update_resp = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}",
+        json={"name": "Клиент с почтой", "email": "updated@example.com", "doc": "9999 111222"},
+        headers=headers,
+    )
+    assert update_resp.status_code == 200
+    updated = update_resp.json()
+    assert updated["email"] == "updated@example.com"
+    assert updated["doc"] == "9999 111222"
+
+    list_resp = client.get(f"/api/businesses/{business_id}/clients", headers=headers)
+    assert list_resp.status_code == 200
+    listed = next(c for c in list_resp.json() if c["id"] == client_id)
+    assert listed["email"] == "updated@example.com"
+    assert listed["doc"] == "9999 111222"
+
+
 def test_cannot_rent_equipment_that_does_not_belong_to_business(client):
     owner_a = register_business(client, email="rentalsA@example.com", password="correct horse battery staple")
     owner_b = register_business(client, email="rentalsB@example.com", password="correct horse battery staple")

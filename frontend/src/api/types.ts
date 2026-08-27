@@ -49,6 +49,8 @@ export interface Client {
   id: string;
   name: string;
   phone: string | null;
+  email: string | null;
+  doc: string | null;
   rating: "normal" | "watch" | "blacklist";
   notes: string | null;
   created_at: string;
@@ -68,9 +70,22 @@ export interface Rental {
   start_date: string;
   end_date: string;
   actual_return: string | null;
+  // "overdue" в этом статусе backend никогда не хранит явно (см. financeCalc.ts /
+  // rentalDisplayStatus) — реальные значения в БД только booked/active/returned/
+  // cancelled, "просрочено" вычисляется на фронте по датам, как в демо-прототипе.
   status: "booked" | "active" | "overdue" | "returned" | "cancelled";
   damage_fee: number;
+  discount: number;
   created_at: string;
-  amount: number;
+  // Финансовая разбивка — считается backend'ом (см. app/services/pricing.py
+  // compute_rental_breakdown), 1:1 повторяет формулы демо-прототипа.
+  planned_days: number;
+  actual_days: number;
+  late_days: number;
+  base: number;
+  late_fee: number;
+  total: number;
+  amount: number; // алиас total, для обратной совместимости
+  deposit_total: number; // сумма ТЕКУЩИХ deposit оборудования в позициях (не снимок на момент брони — см. заметки о деплое)
   items: RentalItem[];
 }

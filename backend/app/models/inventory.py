@@ -70,6 +70,10 @@ class Client(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # email намеренно без unique — один и тот же email в реальности нередко
+    # указывают несколько разных клиентов одного бизнеса (см. демо-прототип).
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    doc: Mapped[str | None] = mapped_column(String(255), nullable=True)  # паспорт/иной документ, для договора
     rating: Mapped[ClientRating] = mapped_column(
         Enum(ClientRating, name="client_rating"), default=ClientRating.normal, nullable=False
     )
@@ -94,6 +98,10 @@ class Rental(Base):
         Enum(RentalStatus, name="rental_status"), default=RentalStatus.booked, nullable=False
     )
     damage_fee: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    # Фиксированная скидка в рублях (не процент!), вручную вводимая
+    # сотрудником — вычитается из итога отдельно от damage_fee, как в
+    # демо-прототипе (r.discount).
+    discount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
     created_by_employee_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )
