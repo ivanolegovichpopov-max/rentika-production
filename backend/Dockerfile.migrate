@@ -1,0 +1,14 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+# Отдельный образ (не USER appuser!) — сервису миграций нужны права
+# суперпользователя Postgres для создания роли rentika_app и включения RLS
+# (см. alembic/versions/0001_initial.py). Он подключается к БД через
+# DATABASE_ADMIN_URL и не обслуживает никакие HTTP-запросы.
+CMD ["alembic", "upgrade", "head"]

@@ -1,0 +1,34 @@
+{$DOMAIN} {
+	# Caddy сам получает и обновляет TLS-сертификат Let's Encrypt для домена
+	# из переменной DOMAIN — никакой ручной настройки Certbot не нужно.
+	# Если тестируете локально без домена, замените {$DOMAIN} на ":80" и
+	# уберите зависимость от переменной окружения DOMAIN в .env.
+
+	encode gzip
+
+	# --- Security-заголовки (см. PRODUCTION_ARCHITECTURE.md §5) ---
+	# Проставляются здесь, на единственной точке входа, — действуют
+	# одинаково и на API, и на статику фронтенда.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		-Server
+	}
+
+	# API — всё под /api/* уходит на backend (см. app/main.py: API_PREFIX)
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle /health {
+		reverse_proxy backend:8000
+	}
+
+	# Всё остальное — статика собранного React-приложения
+	handle {
+		reverse_proxy frontend:80
+	}
+}

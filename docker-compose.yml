@@ -1,0 +1,99 @@
+
+# Разворачивается одной командой: docker compose up -d --build
+# (после того как заполнен .env — см. .env.example).
+#
+# Наружу (в интернет) смотрит ТОЛЬКО reverse-proxy. db, redis, backend,
+# frontend доступны исключительно внутри приватной docker-сети — это
+# намеренная защита в глубину: даже если у backend найдётся уязвимость,
+# сама Postgres не достижима извне контейнерной сети напрямую.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Только для rate-limiting состояния между репликами backend — не
+    # хранит бизнес-данные, поэтому без персистентного volume: перезапуск
+    # просто обнуляет счётчики лимитов, ничего не теряется по сути.
+    networks: [internal]
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.migrate
+    restart: "no"
+    environment:
+      DATABASE_ADMIN_URL: ${DATABASE_ADMIN_URL}
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_ADMIN_URL: ${DATABASE_ADMIN_URL}
+      REDIS_URL: ${REDIS_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL}
+      ENVIRONMENT: ${ENVIRONMENT}
+      PASSWORD_CHECK_HIBP: ${PASSWORD_CHECK_HIBP}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    networks: [internal]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+    restart: unless-stopped
+    networks: [internal]
+
+  reverse-proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN}
+    depends_on: [backend, frontend]
+    networks: [internal]
+
+networks:
+  internal:
+
+volumes:
+  db_data:
+  caddy_data:
+  caddy_config:
