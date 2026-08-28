@@ -8,7 +8,7 @@ import { DashboardTab } from "./dashboard/DashboardTab";
 import { AdminOverviewTab } from "./dashboard/AdminOverviewTab";
 import { EquipmentTab, EquipmentDetailPanel } from "./dashboard/EquipmentTab";
 import { ClientsTab, ClientDetailPanel } from "./dashboard/ClientsTab";
-import { RentalsTab } from "./dashboard/RentalsTab";
+import { RentalsTab, CreateRentalModal } from "./dashboard/RentalsTab";
 import { CalendarTab } from "./dashboard/CalendarTab";
 import { FinanceTab } from "./dashboard/FinanceTab";
 import { EmployeesTab } from "./dashboard/EmployeesTab";
@@ -83,7 +83,7 @@ function DashboardShell({
   setCurrentBusinessId: (id: string) => void;
 }) {
   const { user, logout } = useAuth();
-  const { equipment, clients, rentals, loading, reloadClients } = useData();
+  const { equipment, clients, rentals, loading, reloadClients, reloadRentals, reloadEquipment } = useData();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [view, setView] = useState<View>("dashboard");
   const [search, setSearch] = useState("");
@@ -192,12 +192,12 @@ function DashboardShell({
     localStorage.setItem(THEME_KEY, next);
   }
 
-  // Сигнал "открыть форму новой аренды" — счётчик, а не boolean: кнопка
-  // "Новая аренда" в шапке может быть нажата несколько раз подряд без смены
-  // вида (например, если сотрудник закрыл форму и тут же открыл её снова) —
-  // инкремент гарантированно триггерит useEffect в RentalsTab на каждое
-  // нажатие, в отличие от boolean, который бы не менялся между true→true.
-  const [createRentalSignal, setCreateRentalSignal] = useState(0);
+  // Форма "Новая аренда" из шапки — теперь рендерится прямо здесь, на
+  // уровне общей оболочки (тем же приёмом, что и карточки клиента/
+  // оборудования с дашборда выше), а не через переход на вкладку "Аренды":
+  // по итогам обзора это лучше, чем прыгать на другую вкладку ради формы,
+  // которая и так открывается поверх всего интерфейса.
+  const [showCreateRental, setShowCreateRental] = useState(false);
   // Сотрудник, на строку которого нужно проскроллить и подсветить при
   // переходе на вкладку "Сотрудники" по клику из блока "Команда" в сайдбаре —
   // тем же счётчиковым паттерном, чтобы повторный клик по уже подсвеченной
@@ -213,7 +213,6 @@ function DashboardShell({
       rentalFilter?: string;
       search?: string;
       finance30?: boolean;
-      openCreateRental?: boolean;
       highlightEmployeeId?: string;
     }
   ) {
@@ -222,7 +221,6 @@ function DashboardShell({
     if (opts?.equipmentFilter) setEquipmentFilter(opts.equipmentFilter);
     if (opts?.rentalFilter) setRentalFilter(opts.rentalFilter);
     if (opts?.finance30) setFinancePeriod(periodFor("30", rentals));
-    if (opts?.openCreateRental) setCreateRentalSignal((n) => n + 1);
     if (opts?.highlightEmployeeId) setHighlightEmployee((prev) => ({ id: opts.highlightEmployeeId!, signal: (prev?.signal ?? 0) + 1 }));
   }
 
@@ -341,8 +339,11 @@ function DashboardShell({
           </div>
         </div>
 
-        <div className="sidebar-spacer" />
-
+        {/* Раньше здесь был sidebar-spacer, прижимавший "Выйти" к самому низу
+            страницы — тем же способом, что раньше прижимал блок "Команда"
+            (см. коммент выше про team-block). Убрано по тому же принципу:
+            кнопка выхода теперь идёт сразу за списком команды, без
+            вынужденного пустого места на высоких экранах. */}
         <button className="reset-link" onClick={() => void logout()}>Выйти ({user?.email})</button>
       </aside>
 
@@ -376,15 +377,7 @@ function DashboardShell({
             </div>
           )}
           {(view === "rentals" || view === "dashboard") && (
-            <button
-              className="btn btn-primary"
-              onClick={() =>
-                navigate("rentals", {
-                  rentalFilter: view === "dashboard" ? "active" : rentalFilter,
-                  openCreateRental: true,
-                })
-              }
-            >
+            <button className="btn btn-primary" onClick={() => setShowCreateRental(true)}>
               <IconPlus /> Новая аренда
             </button>
           )}
@@ -419,7 +412,6 @@ function DashboardShell({
                   search={search}
                   filter={rentalFilter}
                   setFilter={setRentalFilter}
-                  openCreateSignal={createRentalSignal}
                 />
               )}
               {view === "calendar" && <CalendarTab businessId={businessId} search={search} />}
@@ -480,6 +472,25 @@ function DashboardShell({
             navigate("equipment", { equipmentFilter: "all", search: item?.name ?? "" });
           }}
           onDeleted={() => setDashEquipmentId(null)}
+        />
+      )}
+
+      {/* "Новая аренда" из шапки — тот же приём: рендерится здесь, поверх
+          оболочки, доступна с любой вкладки, где видна кнопка (дашборд и
+          "Аренды"), без setView. Своя отдельная кнопка "+ Новая аренда"
+          внутри самой вкладки "Аренды" использует такую же модалку локально
+          (см. RentalsTab.tsx) — они не конфликтуют, каждая ведёт своим
+          независимым state. */}
+      {showCreateRental && (
+        <CreateRentalModal
+          businessId={businessId}
+          clients={clients}
+          equipment={equipment}
+          rentals={rentals}
+          onClose={() => setShowCreateRental(false)}
+          onCreated={async () => {
+            await Promise.all([reloadRentals(), reloadEquipment()]);
+          }}
         />
       )}
 

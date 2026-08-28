@@ -218,6 +218,7 @@ function StatTile({
   label,
   value,
   mono,
+  money,
   critical,
   delta,
   onClick,
@@ -226,15 +227,22 @@ function StatTile({
   label: string;
   value: string | number;
   mono?: boolean;
+  // Денежные плашки (выручка/депозиты/компенсации/ожидаемая выручка)
+  // получают отдельный акцент — по итогам обзора: "тайлы с показателями
+  // выглядят лучше, но финансовые всё равно отличаются по размеру и шрифту
+  // цифр (mono), логично выделить их и цветом". Полосу + цвет значения
+  // берём из уже существующего --good (тот же зелёный, что и у
+  // положительной дельты ниже), а не заводим новый токен.
+  money?: boolean;
   critical?: boolean;
   delta?: { pct: number; tone: DeltaTone } | null;
   onClick: () => void;
   disabled?: boolean;
 }) {
   return (
-    <button className="stat-tile" onClick={disabled ? undefined : onClick} disabled={disabled}>
+    <button className={"stat-tile" + (money ? " stat-tile-money" : "")} onClick={disabled ? undefined : onClick} disabled={disabled}>
       <div className="stat-label">{label}</div>
-      <div className={"stat-value" + (mono ? " mono" : "") + (critical ? " critical" : "")}>{value}</div>
+      <div className={"stat-value" + (mono ? " mono" : "") + (critical ? " critical" : "") + (money ? " money" : "")}>{value}</div>
       {delta && (
         <div className={"stat-delta " + delta.tone}>
           {delta.tone === "good" ? <IconTrendUp /> : delta.tone === "critical" ? <IconTrendDown /> : null}
@@ -314,20 +322,6 @@ function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { bus
     }
   }
 
-  // Отметка "выполнено" — простой чекбокс, НЕ полноценный чек-лист/трекер
-  // задач (сознательно не реализовывали — см. обсуждение UX-обзора):
-  // доступна тому же, кому доступно удаление записи (n.can_delete).
-  async function toggleDone(note: DashboardNote) {
-    const nextDone = !note.done;
-    setNotes((prev) => prev.map((n) => (n.id === note.id ? { ...n, done: nextDone } : n)));
-    try {
-      await api.patch(`/businesses/${businessId}/notes/${note.id}`, { done: nextDone });
-    } catch (err) {
-      setNotes((prev) => prev.map((n) => (n.id === note.id ? { ...n, done: note.done } : n)));
-      alert(err instanceof ApiError ? err.message : "Не удалось изменить отметку");
-    }
-  }
-
   async function changeMode(mode: NotesMode) {
     if (mode === notesMode) return;
     try {
@@ -379,17 +373,8 @@ function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { bus
         ) : (
           <div className="notes-feed">
             {notes.map((n) => (
-              <div className={"note-item" + (n.done ? " note-done" : "")} key={n.id}>
+              <div className="note-item" key={n.id}>
                 <div className="note-item-head">
-                  {n.can_delete && (
-                    <input
-                      type="checkbox"
-                      className="note-done-check"
-                      checked={n.done}
-                      title={n.done ? "Отметить невыполненным" : "Отметить выполненным"}
-                      onChange={() => void toggleDone(n)}
-                    />
-                  )}
                   <span className="note-author">{n.author_name}</span>
                   <span className="note-date">
                     {fmtDate(n.created_at.slice(0, 10))} · {new Date(n.created_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
@@ -704,6 +689,7 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
             label={statLabel(id)}
             value={money(revenuePeriod)}
             mono
+            money
             delta={revenueDelta}
             disabled={editMode}
             onClick={() => navigate("finance", { finance30: true })}
@@ -711,11 +697,11 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
         );
       case "stat-deposits":
         return (
-          <StatTile label={statLabel(id)} value={money(depositsHeld)} mono disabled={editMode} onClick={() => navigate("finance", { finance30: true })} />
+          <StatTile label={statLabel(id)} value={money(depositsHeld)} mono money disabled={editMode} onClick={() => navigate("finance", { finance30: true })} />
         );
       case "stat-damage30":
         return (
-          <StatTile label={statLabel(id)} value={money(damagePeriod)} mono disabled={editMode} onClick={() => navigate("finance", { finance30: true })} />
+          <StatTile label={statLabel(id)} value={money(damagePeriod)} mono money disabled={editMode} onClick={() => navigate("finance", { finance30: true })} />
         );
       case "stat-forecast":
         return (
@@ -723,6 +709,7 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
             label={statLabel(id)}
             value={money(forecastRevenue)}
             mono
+            money
             disabled={editMode}
             onClick={() => navigate("rentals", { rentalFilter: "booked" })}
           />

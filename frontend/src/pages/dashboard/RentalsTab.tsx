@@ -317,7 +317,7 @@ function EquipmentPicklist({
 }
 
 /* ---------- Новая аренда ---------- */
-function CreateRentalModal({
+export function CreateRentalModal({
   businessId,
   clients,
   equipment,
@@ -695,17 +695,11 @@ export function RentalsTab({
   search,
   filter,
   setFilter,
-  openCreateSignal,
 }: {
   businessId: string;
   search: string;
   filter: string;
   setFilter: (f: string) => void;
-  // Инкрементируемый счётчик из шапки (Dashboard.tsx) — кнопка "Новая
-  // аренда" в топбаре теперь открывает форму СРАЗУ, а не просто переходит на
-  // вкладку с фильтром, как раньше (см. UX-обзор, п.2). Счётчик, а не
-  // boolean — чтобы повторное нажатие без смены вида тоже срабатывало.
-  openCreateSignal?: number;
 }) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
   const [sort, setSort] = useState("date");
@@ -716,11 +710,6 @@ export function RentalsTab({
   const [returnRental, setReturnRental] = useState<Rental | null>(null);
   const [docModal, setDocModal] = useState<{ title: string; node: ReactNode } | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
-
-  useEffect(() => {
-    if (openCreateSignal) setShowCreate(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openCreateSignal]);
 
   const list = rentals.filter((r) => {
     const st = rentalDisplayStatus(r);

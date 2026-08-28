@@ -200,7 +200,6 @@ nav.nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-item.active { background: var(--accent-soft); color: var(--accent); }
 .nav-count { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--muted); }
 .nav-item.active .nav-count { color: var(--accent); }
-.sidebar-spacer { flex: 1; }
 .team-block { border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 8px; }
 .team-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; padding: 0 6px; }
 .team-list { display: flex; flex-direction: column; gap: 2px; }
@@ -245,6 +244,12 @@ button.stat-tile:active { transform: translateY(0); }
 .stat-value { font-family: "Roboto"; font-weight: 500; font-size: 32px; line-height: 1.15; margin-top: 6px; letter-spacing: -0.01em; }
 .stat-value.mono { font-family: "Roboto Mono"; font-variant-numeric: tabular-nums; font-size: 23px; font-weight: 500; }
 .stat-value.critical { color: var(--critical); }
+/* Денежные плашки (выручка/депозиты/компенсации/ожидаемая выручка) — те же,
+   что уже используют mono-цифры, просто добавляем цветовой акцент, чтобы
+   отличать их от количественных плашек (В аренде/Свободно/Просрочено) на
+   тот же взгляд, что и mono уже отличает их шрифтом. */
+.stat-tile-money { border-left: 3px solid var(--good); }
+.stat-value.money { color: var(--good-ink); }
 .stat-delta { font-size: 12px; margin-top: 6px; display: flex; align-items: center; gap: 4px; font-weight: 600; }
 .stat-delta.good { color: var(--good); } .stat-delta.critical { color: var(--critical); } .stat-delta.flat { color: var(--muted); }
 
@@ -329,9 +334,6 @@ div.due-item, div.mini-item { display: flex; align-items: center; justify-conten
 .note-delete { width: 22px; height: 22px; color: var(--muted); flex: none; }
 .note-delete:hover { color: var(--critical); background: var(--surface); }
 .note-text { font-size: 13px; white-space: pre-wrap; word-break: break-word; }
-.note-done-check { width: 15px; height: 15px; flex: none; cursor: pointer; accent-color: var(--accent); }
-.note-item.note-done { opacity: 0.6; }
-.note-item.note-done .note-text { text-decoration: line-through; text-decoration-color: var(--muted); }
 .segmented-sm button { padding: 4px 9px; font-size: 11.5px; }
 
 /* ---------- Таблицы ---------- */
@@ -569,7 +571,6 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
   .nav-item { flex-direction: column; gap: 3px; padding: 6px 11px; font-size: 10.5px; white-space: nowrap; width: auto; }
   .nav-item span.nav-label { font-size: 10.5px; }
   .nav-count { margin-left: 0; }
-  .sidebar-spacer { display: none; }
   .team-block { border-top: none; border-left: 1px solid var(--border); padding: 0 0 0 14px; flex: none; flex-direction: row; align-items: center; }
   .team-label { display: none; }
   .team-list { flex-direction: row; gap: 2px; }
