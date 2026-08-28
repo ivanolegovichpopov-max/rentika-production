@@ -99,6 +99,15 @@ export const IconSliders = (p: SVGProps<SVGSVGElement>) => (
 export const IconTrash = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></Svg>
 );
+export const IconMessages = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></Svg>
+);
+export const IconUser = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></Svg>
+);
+export const IconSend = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></Svg>
+);
 export const IconGrip = (p: SVGProps<SVGSVGElement>) => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" {...p}>
     <circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" />

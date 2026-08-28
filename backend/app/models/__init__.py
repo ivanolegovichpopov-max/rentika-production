@@ -1,6 +1,7 @@
 from app.models.audit import AuditLog
-from app.models.business import Business, Employee, Permission, Position
+from app.models.business import Business, DashboardNote, Employee, Permission, Position
 from app.models.inventory import Client, Equipment, Rental, RentalItem
+from app.models.messaging import Conversation, ConversationParticipant, Message
 from app.models.user import RefreshToken, User
 
 __all__ = [
@@ -15,4 +16,8 @@ __all__ = [
     "Rental",
     "RentalItem",
     "AuditLog",
+    "DashboardNote",
+    "Conversation",
+    "ConversationParticipant",
+    "Message",
 ]

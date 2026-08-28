@@ -32,6 +32,7 @@ from app.database import get_db
 from app.models.business import Business, Employee
 from app.models.user import RefreshToken, User
 from app.schemas.auth import (
+    ChangePasswordRequest,
     LoginRequest,
     LoginResponse,
     RegisterRequest,
@@ -216,3 +217,48 @@ async def logout(request: Request, response: Response, db: Session = Depends(get
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(get_current_user)):
     return user
+
+
+@router.post("/change-password", response_model=TokenResponse)
+async def change_password(
+    request: Request,
+    response: Response,
+    body: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Текущий пароль указан неверно")
+
+    try:
+        await validate_password_policy(body.new_password, email=user.email)
+    except PasswordPolicyError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    user.password_hash = hash_password(body.new_password)
+
+    # Смена пароля — сигнал "возможно, аккаунт был скомпрометирован", поэтому
+    # отзываем ВСЕ существующие refresh-токены пользователя (все ДРУГИЕ
+    # сессии/устройства разлогиниваются и должны войти заново с новым
+    # паролем). Текущую же сессию не обрываем — сразу же выпускаем новую пару
+    # токенов через _issue_tokens (ниже), как при обычном логине: иначе
+    # получилось бы, что смена собственного пароля выкидывает из аккаунта и
+    # самого пользователя, который её только что подтвердил своим текущим
+    # паролем — неожиданное и недружелюбное поведение, не дающее лишней
+    # защиты (только что введённый пароль уже был проверен).
+    db.execute(
+        RefreshToken.__table__.update().where(RefreshToken.user_id == user.id).values(revoked=True)
+    )
+
+    log_action(
+        db,
+        business_id=None,
+        user_id=user.id,
+        action="change_password",
+        resource="user",
+        resource_id=str(user.id),
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
+
+    return _issue_tokens(db, user, response)

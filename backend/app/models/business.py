@@ -51,6 +51,21 @@ class NotesMode(str, enum.Enum):
     everyone = "everyone"
 
 
+class MessagingPermission(str, enum.Enum):
+    """Кто кому может писать личные сообщения (см. app/models/messaging.py).
+    owner_only (по умолчанию, консервативный вариант): обычные сотрудники
+    могут писать ЛС только владельцу бизнеса — друг другу переписку начать
+    не могут (владелец при этом может писать всем и создавать групповые
+    чаты). everyone: любой активный сотрудник может написать ЛС любому
+    другому и создавать групповые чаты — открытая переписка внутри команды.
+    Не путать с ACL-правом "employees" (Position/Permission) — это право
+    регулирует доступ к разделу «Сотрудники» (администрирование персонала),
+    а не то, кто кому может отправить сообщение."""
+
+    owner_only = "owner_only"
+    everyone = "everyone"
+
+
 class Business(Base):
     """Тенант. Каждый бизнес-клиент Ивана — это одна строка здесь; все
     операционные данные (оборудование/клиенты/аренды) привязаны к business_id
@@ -69,6 +84,13 @@ class Business(Base):
     # не может писать на общую доску, пока владелец сам не разрешит).
     notes_mode: Mapped[NotesMode] = mapped_column(
         Enum(NotesMode, name="notes_mode"), default=NotesMode.owner_only, nullable=False
+    )
+    # Режим личных сообщений — см. MessagingPermission выше. По умолчанию
+    # owner_only — тем же консервативным принципом, что и notes_mode.
+    messaging_permission: Mapped[MessagingPermission] = mapped_column(
+        Enum(MessagingPermission, name="messaging_permission"),
+        default=MessagingPermission.owner_only,
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

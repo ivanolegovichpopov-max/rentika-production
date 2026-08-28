@@ -58,3 +58,8 @@ class UserOut(BaseModel):
     totp_enabled: bool
 
     model_config = {"from_attributes": True}
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=1, max_length=128)

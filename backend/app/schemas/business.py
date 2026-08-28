@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from app.models.business import BusinessStatus, EmployeeStatus, NotesMode, PermissionLevel, ResourceType
+from app.models.business import BusinessStatus, EmployeeStatus, MessagingPermission, NotesMode, PermissionLevel, ResourceType
 
 
 class BusinessOut(BaseModel):
@@ -11,6 +11,7 @@ class BusinessOut(BaseModel):
     name: str
     status: BusinessStatus
     notes_mode: NotesMode
+    messaging_permission: MessagingPermission
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -51,6 +52,7 @@ class EmployeeOut(BaseModel):
     position_id: uuid.UUID | None
     is_owner: bool
     status: EmployeeStatus
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 

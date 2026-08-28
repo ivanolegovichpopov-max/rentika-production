@@ -3,7 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { useBusiness } from "../context/BusinessContext";
 import { DataProvider, useData } from "../context/DataContext";
 import { api, ApiError } from "../api/client";
-import type { Business, Employee, NotesMode } from "../api/types";
+import type { Business, Conversation, Employee, MessagingPermission, NotesMode } from "../api/types";
 import { DashboardTab } from "./dashboard/DashboardTab";
 import { AdminOverviewTab } from "./dashboard/AdminOverviewTab";
 import { EquipmentTab, EquipmentDetailPanel } from "./dashboard/EquipmentTab";
@@ -12,7 +12,8 @@ import { RentalsTab } from "./dashboard/RentalsTab";
 import { CalendarTab } from "./dashboard/CalendarTab";
 import { FinanceTab } from "./dashboard/FinanceTab";
 import { EmployeesTab } from "./dashboard/EmployeesTab";
-import { TwoFactorSettings } from "./TwoFactorSettings";
+import { MessagesTab } from "./dashboard/MessagesTab";
+import { AccountSettings } from "./AccountSettings";
 import { rentalDisplayStatus } from "../lib/statusMeta";
 import { colorFromId, initials } from "../lib/format";
 import { periodFor, type FinancePeriod } from "../lib/financeCalc";
@@ -28,11 +29,20 @@ import {
   IconCalendar,
   IconFinance,
   IconEmployees,
-  IconSecurity,
+  IconMessages,
+  IconUser,
   IconAdmin,
 } from "../lib/icons";
 
-export type View = "dashboard" | "equipment" | "clients" | "rentals" | "calendar" | "finance" | "employees" | "security" | "admin";
+export type View = "dashboard" | "equipment" | "clients" | "rentals" | "calendar" | "finance" | "employees" | "messages" | "profile" | "admin";
+
+// Как часто опрашивать бэкенд на предмет непрочитанных сообщений для
+// значка в навигации (когда пользователь НЕ находится на вкладке
+// "Сообщения" — там своя, более частая логика внутри MessagesTab).
+// Лёгкий polling, а не WebSocket — осознанное решение (см. заметки проекта):
+// для внутренней CRM-переписки нескольких сотрудников это достаточно
+// отзывчиво и сильно проще в поддержке на free-tier хостинге.
+const UNREAD_POLL_MS = 20000;
 
 const THEME_KEY = "rentika_theme_v1";
 
@@ -110,6 +120,43 @@ function DashboardShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [businessId]);
 
+  // Режим личных сообщений ("кто кому может писать") — тот же паттерн, что и
+  // notesMode выше: хранится на Business, держим отдельным локальным
+  // состоянием, чтобы владелец видел смену режима мгновенно.
+  const [messagingPermission, setMessagingPermission] = useState<MessagingPermission>(
+    currentBusiness?.messaging_permission ?? "owner_only"
+  );
+  useEffect(() => {
+    setMessagingPermission(currentBusiness?.messaging_permission ?? "owner_only");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId]);
+
+  // Значок непрочитанных сообщений в навигации — лёгкий polling списка
+  // диалогов (нужен только unread_count, но отдельного "облегчённого"
+  // эндпоинта не заводили — список диалогов у сотрудника обычно небольшой).
+  // Не опрашиваем, пока сама вкладка "Сообщения" открыта — там счётчик и так
+  // обновляется актуальнее собственным polling'ом MessagesTab.
+  const [unreadTotal, setUnreadTotal] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    function poll() {
+      if (view === "messages") return;
+      api
+        .get<Conversation[]>(`/businesses/${businessId}/conversations`)
+        .then((list) => {
+          if (!cancelled) setUnreadTotal(list.reduce((s, c) => s + c.unread_count, 0));
+        })
+        .catch(() => {});
+    }
+    poll();
+    const interval = setInterval(poll, UNREAD_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId, view]);
+
   async function handleDashClientDelete(id: string) {
     if (!confirm("Удалить этого клиента?")) return;
     try {
@@ -162,7 +209,8 @@ function DashboardShell({
     { key: "calendar", label: "Календарь", icon: IconCalendar },
     { key: "finance", label: "Финансы", icon: IconFinance },
     { key: "employees", label: "Сотрудники", icon: IconEmployees, count: activeEmployees.length },
-    { key: "security", label: "Безопасность", icon: IconSecurity },
+    { key: "messages", label: "Сообщения", icon: IconMessages, count: unreadTotal || undefined },
+    { key: "profile", label: "Профиль", icon: IconUser },
     // Видно только платформенному админу — обзор ВСЕХ бизнесов на платформе
     // (для техподдержки), встроенный сюда же вместо отдельного экрана без
     // доступа к остальной CRM (см. историю решения в Home.tsx).
@@ -179,7 +227,8 @@ function DashboardShell({
     calendar: ["Календарь занятости", "Занятость оборудования"],
     finance: ["Финансы", "Доходы, депозиты и история возвратов"],
     employees: ["Сотрудники", "Должности и права доступа"],
-    security: ["Безопасность", "Двухфакторная аутентификация"],
+    messages: ["Сообщения", "Личная переписка с коллегами"],
+    profile: ["Профиль", "Личные данные, пароль и безопасность"],
     admin: ["Все бизнесы", "Обзор платформы для техподдержки"],
   };
 
@@ -317,7 +366,18 @@ function DashboardShell({
               {view === "calendar" && <CalendarTab businessId={businessId} search={search} />}
               {view === "finance" && <FinanceTab period={financePeriod} setPeriod={setFinancePeriod} />}
               {view === "employees" && <EmployeesTab businessId={businessId} />}
-              {view === "security" && <TwoFactorSettings />}
+              {view === "messages" && (
+                <MessagesTab
+                  businessId={businessId}
+                  isOwner={isOwner}
+                  messagingPermission={messagingPermission}
+                  onMessagingPermissionChange={setMessagingPermission}
+                  onUnreadTotalChange={setUnreadTotal}
+                />
+              )}
+              {view === "profile" && (
+                <AccountSettings myEmployee={myEmployee} isOwner={isOwner} businessName={currentBusiness?.name ?? null} />
+              )}
               {view === "admin" && <AdminOverviewTab />}
             </>
           )}

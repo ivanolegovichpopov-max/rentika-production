@@ -10,11 +10,17 @@ export interface User {
 
 export type NotesMode = "owner_only" | "everyone";
 
+// Кто кому может писать личные сообщения (см. MessagesTab.tsx) — отдельная
+// от notes_mode настройка, тоже owner_only по умолчанию. НЕ путать с ACL-правом
+// "employees" (доступ к разделу «Сотрудники») — это разные вопросы.
+export type MessagingPermission = "owner_only" | "everyone";
+
 export interface Business {
   id: string;
   name: string;
   status: "active" | "suspended";
   notes_mode: NotesMode;
+  messaging_permission: MessagingPermission;
   created_at: string;
 }
 
@@ -31,6 +37,7 @@ export interface Employee {
   position_id: string | null;
   is_owner: boolean;
   status: "invited" | "active" | "disabled";
+  created_at: string;
 }
 
 export interface Equipment {
@@ -118,4 +125,36 @@ export interface DashboardNote {
   text: string;
   created_at: string;
   can_delete: boolean;
+}
+
+// Личные сообщения — GET /businesses/{id}/messaging-directory (кому можно
+// написать), GET/POST /businesses/{id}/conversations, GET/POST
+// .../conversations/{id}/messages, PUT /businesses/{id}/messaging-mode.
+export type ConversationType = "dm" | "group";
+
+export interface DirectoryEmployee {
+  id: string;
+  name: string;
+  is_owner: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  author_name: string;
+  text: string;
+  created_at: string;
+  is_mine: boolean;
+}
+
+export interface Conversation {
+  id: string;
+  type: ConversationType;
+  // Для group — название группы; для dm — имя собеседника (уже вычислено
+  // бэкендом — фронту не нужно самому разбирать участников).
+  display_name: string;
+  participant_count: number;
+  last_message_preview: string | null;
+  last_message_at: string | null;
+  unread_count: number;
+  created_at: string;
 }
