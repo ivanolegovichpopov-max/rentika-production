@@ -63,6 +63,22 @@ class ClientCreate(BaseModel):
     notes: str | None = None
 
 
+class ClientUpdate(BaseModel):
+    """Частичное обновление клиента — все поля необязательны, меняются
+    только переданные (см. PATCH /clients/{id}). Раньше этот эндпоинт
+    принимал ClientCreate (требует name), из-за чего точечное действие
+    «сменить рейтинг» из карточки клиента (шлёт только {rating}) падало
+    с 422 — тем же паттерном, что был найден и исправлен для оборудования
+    во втором проходе. Исправлено по аналогии."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    phone: str | None = None
+    email: str | None = None
+    doc: str | None = None
+    rating: ClientRating | None = None
+    notes: str | None = None
+
+
 class ClientOut(BaseModel):
     id: uuid.UUID
     name: str

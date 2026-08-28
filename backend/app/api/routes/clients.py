@@ -9,7 +9,7 @@ from app.core.deps import BusinessContext, require_permission
 from app.database import get_db
 from app.models.business import PermissionLevel, ResourceType
 from app.models.inventory import Client, Rental
-from app.schemas.inventory import ClientCreate, ClientOut
+from app.schemas.inventory import ClientCreate, ClientOut, ClientUpdate
 
 router = APIRouter(prefix="/businesses/{business_id}/clients", tags=["clients"])
 
@@ -34,12 +34,12 @@ async def create_client(body: ClientCreate, ctx: BusinessContext = Depends(edit_
 
 @router.patch("/{client_id}", response_model=ClientOut)
 async def update_client(
-    client_id: uuid.UUID, body: ClientCreate, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
+    client_id: uuid.UUID, body: ClientUpdate, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
 ):
     client = db.get(Client, client_id)
     if client is None or client.business_id != ctx.business_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
-    for field, value in body.model_dump().items():
+    for field, value in body.model_dump(exclude_unset=True).items():
         setattr(client, field, value)
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="update", resource="client", resource_id=str(client_id))
     db.commit()

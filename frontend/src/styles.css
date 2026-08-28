@@ -218,7 +218,13 @@ nav.nav { display: flex; flex-direction: column; gap: 2px; }
 button.stat-tile { font: inherit; color: inherit; text-align: left; width: 100%; cursor: pointer; transition: box-shadow .15s ease, border-color .15s ease, transform .1s ease; }
 button.stat-tile:hover { border-color: var(--accent); box-shadow: var(--shadow-lg); transform: translateY(-1px); }
 button.stat-tile:active { transform: translateY(0); }
-.stat-label { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+/* min-height: держит одинаковую высоту подписи независимо от того,
+   переносится ли она на 2 строки в узкой плашке (например "В т.ч.
+   компенсации" в 6-колоночной сетке "Финансов") — иначе значение под
+   короткой однострочной подписью в соседней плашке визуально "прыгает"
+   выше значения под перенесённой двухстрочной, хотя сами плашки одной
+   высоты (это создавало у ряда плашек впечатление "разных уровней"). */
+.stat-label { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; display: block; min-height: 26px; }
 .stat-value { font-family: "Roboto"; font-weight: 500; font-size: 32px; line-height: 1.15; margin-top: 6px; letter-spacing: -0.01em; }
 .stat-value.mono { font-family: "Roboto Mono"; font-variant-numeric: tabular-nums; font-size: 23px; font-weight: 500; }
 .stat-value.critical { color: var(--critical); }

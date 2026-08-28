@@ -4,7 +4,7 @@ import { useData } from "../../context/DataContext";
 import type { Client, Equipment, Rental, RentalItem } from "../../api/types";
 import { money, fmtDate, dayDiff, todayISO, isoAddDays, spanDays } from "../../lib/format";
 import { RENTAL_META, Badge, rentalDisplayStatus, type StatusMeta } from "../../lib/statusMeta";
-import { IconPrinter, IconEdit, IconClose } from "../../lib/icons";
+import { IconPrinter, IconEdit, IconClose, IconAlert } from "../../lib/icons";
 import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc } from "./documents";
 
 /**
@@ -14,12 +14,17 @@ import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc } from "./doc
  * концепций, которых нет в продовой модели данных:
  *  - бейдж "Продлевалась N раз" (r.extensions[]) — у Rental в проде нет
  *    истории продлений, только текущие start_date/end_date;
- *  - фильтр по менеджеру (ui.rentalOwnerFilter) и переключатель "Только
- *    рискованные" (ui.rentalRiskOnly) в тулбаре, а также поле "Ответственный"
- *    в форме создания — держатся на ownerId/team (список сотрудников демо),
+ *  - фильтр по менеджеру (ui.rentalOwnerFilter) и поле "Ответственный" в
+ *    форме создания — держатся на ownerId/team (список сотрудников демо),
  *    в проде аренда привязывается к сотруднику через created_by_employee_id
  *    на backend'е автоматически, выбора нет.
  * Это задокументированный, неизбежный разрыв с демо, а не недосмотр.
+ *
+ * Переключатель "Только рискованные" (ui.rentalRiskOnly в демо) — В ОТЛИЧИЕ
+ * от фильтра по менеджеру, он держится не на ownerId, а на client.rating
+ * ("на контроле"/"чёрный список"), которое в проде есть — по ошибке был
+ * ранее записан в один список с фильтром по менеджеру и не перенесён.
+ * Исправлено при третьей сверке с демо — реализован ниже (riskOnly).
  */
 
 const FILTERS: { id: string; label: string }[] = [
@@ -697,6 +702,7 @@ export function RentalsTab({
 }) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
   const [sort, setSort] = useState("date");
+  const [riskOnly, setRiskOnly] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [editRental, setEditRental] = useState<Rental | null>(null);
   const [issueRental, setIssueRental] = useState<Rental | null>(null);
@@ -711,6 +717,8 @@ export function RentalsTab({
     const client = clients.find((c) => c.id === r.client_id);
     const names = r.items.map((it) => equipment.find((e) => e.id === it.equipment_id)?.name ?? "").join(" ");
     if (search && !((client?.name ?? "") + " " + names).toLowerCase().includes(search.toLowerCase())) return false;
+
+    if (riskOnly && (!client || client.rating === "normal")) return false;
 
     return true;
   });
@@ -757,6 +765,14 @@ export function RentalsTab({
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            className={"btn btn-sm" + (riskOnly ? " btn-primary" : "")}
+            title="Показать только клиентов «на контроле» или из чёрного списка"
+            onClick={() => setRiskOnly((v) => !v)}
+          >
+            <IconAlert /> Только рискованные
+          </button>
           <button className="btn btn-primary" type="button" onClick={() => setShowCreate(true)}>
             + Новая аренда
           </button>

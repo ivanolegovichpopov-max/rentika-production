@@ -190,6 +190,48 @@ def test_client_email_and_doc_round_trip_through_create_and_update(client):
     assert listed["doc"] == "9999 111222"
 
 
+def test_client_rating_can_be_updated_with_partial_body(client):
+    """Регрессия: карточка клиента шлёт PATCH только с {"rating": ...} —
+    когда PATCH-эндпоинт валидировал по ClientCreate (требует name), такой
+    запрос падал с 422 и переключатель надёжности в интерфейсе молча не
+    работал. Обнаружено при третьей сверке с демо, тот же паттерн бага, что
+    и был раньше найден и исправлен для PATCH /equipment/{id}."""
+    owner = register_business(client, email="clientrating@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    create_resp = client.post(
+        f"/api/businesses/{business_id}/clients",
+        json={"name": "Клиент рейтинга", "phone": "+7 900 000-00-00"},
+        headers=headers,
+    )
+    assert create_resp.status_code == 201
+    created = create_resp.json()
+    assert created["rating"] == "normal"
+    client_id = created["id"]
+
+    update_resp = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}",
+        json={"rating": "watch"},
+        headers=headers,
+    )
+    assert update_resp.status_code == 200
+    updated = update_resp.json()
+    assert updated["rating"] == "watch"
+    # Поля, не переданные в PATCH, не должны обнуляться.
+    assert updated["name"] == "Клиент рейтинга"
+    assert updated["phone"] == "+7 900 000-00-00"
+
+    second_update = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}",
+        json={"rating": "blacklist"},
+        headers=headers,
+    )
+    assert second_update.status_code == 200
+    assert second_update.json()["rating"] == "blacklist"
+    assert second_update.json()["name"] == "Клиент рейтинга"
+
+
 def test_cannot_rent_equipment_that_does_not_belong_to_business(client):
     owner_a = register_business(client, email="rentalsA@example.com", password="correct horse battery staple")
     owner_b = register_business(client, email="rentalsB@example.com", password="correct horse battery staple")
