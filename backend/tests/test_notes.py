@@ -199,3 +199,66 @@ def test_note_text_length_is_capped(client):
         headers=auth_headers(owner["access_token"]),
     )
     assert resp.status_code == 422
+
+
+def test_note_done_toggle(client):
+    """PATCH .../notes/{id} — простая отметка "выполнено" (см. миграцию 0007
+    и NoteUpdate). Новые записи создаются done=false; переключать может
+    автор записи или владелец бизнеса (та же проверка, что и на удаление),
+    остальные сотрудники — нет."""
+    owner = register_business(client, email="notes8@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    employee_token = _invite(client, business_id, owner["access_token"], "worker8@example.com")
+
+    # Переключаем режим доски на "everyone", чтобы сотрудник тоже мог писать
+    # и получить свою собственную запись для проверки прав автора.
+    mode_resp = client.put(
+        f"/api/businesses/{business_id}/notes/mode",
+        json={"mode": "everyone"},
+        headers=auth_headers(owner["access_token"]),
+    )
+    assert mode_resp.status_code == 200, mode_resp.text
+
+    owner_note = client.post(
+        f"/api/businesses/{business_id}/notes",
+        json={"text": "Задача владельца"},
+        headers=auth_headers(owner["access_token"]),
+    ).json()
+    assert owner_note["done"] is False
+
+    employee_note = client.post(
+        f"/api/businesses/{business_id}/notes",
+        json={"text": "Задача сотрудника"},
+        headers=auth_headers(employee_token),
+    ).json()
+
+    # Сотрудник не может отметить чужую (владельца) запись выполненной.
+    forbidden = client.patch(
+        f"/api/businesses/{business_id}/notes/{owner_note['id']}",
+        json={"done": True},
+        headers=auth_headers(employee_token),
+    )
+    assert forbidden.status_code == 403
+
+    # Но может отметить свою собственную.
+    own_ok = client.patch(
+        f"/api/businesses/{business_id}/notes/{employee_note['id']}",
+        json={"done": True},
+        headers=auth_headers(employee_token),
+    )
+    assert own_ok.status_code == 200, own_ok.text
+    assert own_ok.json()["done"] is True
+
+    # Владелец (модерация) может отметить/снять отметку у чьей угодно записи.
+    owner_toggle = client.patch(
+        f"/api/businesses/{business_id}/notes/{employee_note['id']}",
+        json={"done": False},
+        headers=auth_headers(owner["access_token"]),
+    )
+    assert owner_toggle.status_code == 200
+    assert owner_toggle.json()["done"] is False
+
+    # Отметка видна и в общем списке.
+    listing = client.get(f"/api/businesses/{business_id}/notes", headers=auth_headers(owner["access_token"]))
+    by_id = {n["id"]: n for n in listing.json()}
+    assert by_id[employee_note["id"]]["done"] is False

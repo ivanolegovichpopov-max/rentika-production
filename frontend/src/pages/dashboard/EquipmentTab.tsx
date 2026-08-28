@@ -5,6 +5,7 @@ import type { Equipment, Rental } from "../../api/types";
 import { EQ_META, RENTAL_META, Badge, equipmentDisplayStatus, nextFreeDate, rentalDisplayStatus } from "../../lib/statusMeta";
 import { money, fmtDate, isoAddDays, todayISO } from "../../lib/format";
 import { IconClose } from "../../lib/icons";
+import { useConfirm } from "../../components/ConfirmDialog";
 
 const FILTERS: { id: string; label: string }[] = [
   { id: "all", label: "Все" },
@@ -371,6 +372,7 @@ export function EquipmentDetailPanel({
   const { equipment, clients, rentals, reloadEquipment } = useData();
   const item = equipment.find((e) => e.id === equipmentId);
   const [maintUntil, setMaintUntil] = useState(item?.maintenance_until ?? "");
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   useEffect(() => {
     setMaintUntil(item?.maintenance_until ?? "");
@@ -413,21 +415,19 @@ export function EquipmentDetailPanel({
     }
   }
 
-  function handleDelete() {
+  async function handleDelete() {
     if (equipmentHasOpenRentals(equipmentId, rentals)) {
       alert("Нельзя удалить: по этой позиции есть аренда в работе или бронь. Сначала завершите её.");
       return;
     }
-    if (!confirm(`«${item!.name}» будет удалено безвозвратно.`)) return;
-    void (async () => {
-      try {
-        await api.delete(`/businesses/${businessId}/equipment/${equipmentId}`);
-        onDeleted();
-        await reloadEquipment();
-      } catch (err) {
-        alert(err instanceof ApiError ? err.message : "Не удалось удалить");
-      }
-    })();
+    if (!(await confirm(`«${item!.name}» будет удалено безвозвратно.`, { danger: true }))) return;
+    try {
+      await api.delete(`/businesses/${businessId}/equipment/${equipmentId}`);
+      onDeleted();
+      await reloadEquipment();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : "Не удалось удалить");
+    }
   }
 
   return (
@@ -531,10 +531,12 @@ export function EquipmentDetailPanel({
         <button className="btn" onClick={() => onEdit(equipmentId)}>
           Изменить
         </button>
-        <button className="btn btn-danger-ghost" onClick={handleDelete}>
+        <button className="btn btn-danger-ghost" onClick={() => void handleDelete()}>
           Удалить
         </button>
       </div>
+
+      {confirmDialog}
     </div>
   );
 }

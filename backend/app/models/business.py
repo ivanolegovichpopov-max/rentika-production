@@ -92,6 +92,9 @@ class Business(Base):
         default=MessagingPermission.owner_only,
         nullable=False,
     )
+    # Логотип бизнеса — ссылка ИЛИ data: URL (см. миграцию 0007 и
+    # BusinessLogoUpdate/AccountSettings.tsx). NULL — логотип не задан.
+    logo_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -183,4 +186,9 @@ class DashboardNote(Base):
     )
     author_name: Mapped[str] = mapped_column(String(255), nullable=False)
     text: Mapped[str] = mapped_column(Text(), nullable=False)
+    # Простая отметка "выполнено" — НЕ полноценный чек-лист/трекер задач
+    # (сознательно, см. UX-обзор дашборда). Переключать может тот же, кому
+    # доступно удаление записи (автор или владелец бизнеса) — см.
+    # app/api/routes/notes.py.
+    done: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

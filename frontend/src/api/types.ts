@@ -21,6 +21,11 @@ export interface Business {
   status: "active" | "suspended";
   notes_mode: NotesMode;
   messaging_permission: MessagingPermission;
+  // Логотип бизнеса — либо ссылка на изображение, либо data: URL (см.
+  // AccountSettings.tsx — загрузка читает файл через FileReader и шлёт его
+  // как data: URL, отдельного файлового хранилища у проекта нет). null —
+  // логотип не задан, тогда сайдбар рисует дефолтную геометрическую марку.
+  logo_url: string | null;
   created_at: string;
 }
 
@@ -125,6 +130,10 @@ export interface DashboardNote {
   text: string;
   created_at: string;
   can_delete: boolean;
+  // Отметка "выполнено" — простой чекбокс на записи, НЕ полноценный
+  // чек-лист/трекер задач (см. app/models/business.py::DashboardNote).
+  // Переключать может тот же, кому доступно удаление (can_delete).
+  done: boolean;
 }
 
 // Личные сообщения — GET /businesses/{id}/messaging-directory (кому можно

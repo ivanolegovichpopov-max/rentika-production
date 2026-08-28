@@ -6,6 +6,7 @@ import { money, fmtDate, dayDiff, todayISO, isoAddDays, spanDays } from "../../l
 import { RENTAL_META, Badge, rentalDisplayStatus, type StatusMeta } from "../../lib/statusMeta";
 import { IconPrinter, IconEdit, IconClose, IconAlert } from "../../lib/icons";
 import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc } from "./documents";
+import { useConfirm } from "../../components/ConfirmDialog";
 
 /**
  * Порт renderRentals()/addRentalForm()/editRentalForm()/issueRentalForm()/
@@ -694,11 +695,17 @@ export function RentalsTab({
   search,
   filter,
   setFilter,
+  openCreateSignal,
 }: {
   businessId: string;
   search: string;
   filter: string;
   setFilter: (f: string) => void;
+  // Инкрементируемый счётчик из шапки (Dashboard.tsx) — кнопка "Новая
+  // аренда" в топбаре теперь открывает форму СРАЗУ, а не просто переходит на
+  // вкладку с фильтром, как раньше (см. UX-обзор, п.2). Счётчик, а не
+  // boolean — чтобы повторное нажатие без смены вида тоже срабатывало.
+  openCreateSignal?: number;
 }) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
   const [sort, setSort] = useState("date");
@@ -708,6 +715,12 @@ export function RentalsTab({
   const [issueRental, setIssueRental] = useState<Rental | null>(null);
   const [returnRental, setReturnRental] = useState<Rental | null>(null);
   const [docModal, setDocModal] = useState<{ title: string; node: ReactNode } | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
+
+  useEffect(() => {
+    if (openCreateSignal) setShowCreate(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openCreateSignal]);
 
   const list = rentals.filter((r) => {
     const st = rentalDisplayStatus(r);
@@ -734,7 +747,7 @@ export function RentalsTab({
   });
 
   async function handleCancel(r: Rental) {
-    if (!confirm("Отменить эту аренду?")) return;
+    if (!(await confirm("Отменить эту аренду?", { danger: true, confirmLabel: "Отменить аренду" }))) return;
     try {
       await api.post(`/businesses/${businessId}/rentals/${r.id}/cancel`);
       await Promise.all([reloadRentals(), reloadEquipment()]);
@@ -941,6 +954,8 @@ export function RentalsTab({
       <DocModal title={docModal?.title ?? ""} open={!!docModal} onClose={() => setDocModal(null)}>
         {docModal?.node}
       </DocModal>
+
+      {confirmDialog}
     </div>
   );
 }

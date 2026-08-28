@@ -22,7 +22,7 @@ from app.core.audit import log_action
 from app.core.deps import BusinessContext, get_business_context
 from app.database import get_db
 from app.models.business import Business, DashboardNote, NotesMode
-from app.schemas.business import NoteCreate, NoteOut, NotesModeOut, NotesModeUpdate
+from app.schemas.business import NoteCreate, NoteOut, NotesModeOut, NotesModeUpdate, NoteUpdate
 
 router = APIRouter(prefix="/businesses/{business_id}/notes", tags=["notes"])
 
@@ -34,6 +34,7 @@ def _to_out(note: DashboardNote, ctx: BusinessContext) -> NoteOut:
         author_name=note.author_name,
         text=note.text,
         created_at=note.created_at,
+        done=note.done,
         can_delete=can_delete,
     )
 
@@ -102,6 +103,30 @@ async def delete_note(
     db.delete(note)
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="delete", resource="dashboard_note", resource_id=str(note_id))
     db.commit()
+
+
+@router.patch("/{note_id}", response_model=NoteOut)
+async def update_note(
+    note_id: uuid.UUID,
+    body: NoteUpdate,
+    ctx: BusinessContext = Depends(get_business_context),
+    db: Session = Depends(get_db),
+):
+    """Простая отметка "выполнено" на записи (см. NoteUpdate) — та же
+    проверка прав, что и на удаление: автор записи или владелец бизнеса."""
+    note = db.get(DashboardNote, note_id)
+    if note is None or note.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Запись не найдена")
+
+    is_author = ctx.employee is not None and note.employee_id == ctx.employee.id
+    if not ctx.full_access and not is_author:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Изменить отметку можно только на своей записи")
+
+    note.done = body.done
+    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="update", resource="dashboard_note", resource_id=str(note_id))
+    db.commit()
+    db.refresh(note)
+    return _to_out(note, ctx)
 
 
 @router.put("/mode", response_model=NotesModeOut)

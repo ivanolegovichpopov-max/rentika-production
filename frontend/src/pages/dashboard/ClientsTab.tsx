@@ -5,6 +5,7 @@ import type { Client } from "../../api/types";
 import { RATING_META, RENTAL_META, Badge, rentalDisplayStatus } from "../../lib/statusMeta";
 import { money, fmtDate } from "../../lib/format";
 import { IconClose } from "../../lib/icons";
+import { useConfirm } from "../../components/ConfirmDialog";
 
 interface ClientForm {
   name: string;
@@ -21,6 +22,7 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<ClientForm>(EMPTY_FORM);
   const [openClientId, setOpenClientId] = useState<string | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const q = search.trim().toLowerCase();
   const list = clients.filter(
@@ -46,7 +48,7 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("Удалить этого клиента?")) return;
+    if (!(await confirm("Удалить этого клиента?", { danger: true }))) return;
     try {
       await api.delete(`/businesses/${businessId}/clients/${id}`);
       if (openClientId === id) setOpenClientId(null);
@@ -150,6 +152,8 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
           onDelete={handleDelete}
         />
       )}
+
+      {confirmDialog}
     </div>
   );
 }

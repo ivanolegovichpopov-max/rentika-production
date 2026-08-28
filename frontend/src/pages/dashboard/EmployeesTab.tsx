@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import type { Employee, Position, PermissionLevel, ResourceType } from "../../api/types";
+import { useConfirm } from "../../components/ConfirmDialog";
 
 const RESOURCES: { key: ResourceType; label: string }[] = [
   { key: "equipment", label: "Оборудование" },
@@ -12,7 +13,17 @@ const RESOURCES: { key: ResourceType; label: string }[] = [
 
 const LEVEL_LABEL: Record<PermissionLevel, string> = { none: "Нет доступа", view: "Просмотр", edit: "Просмотр и редактирование" };
 
-export function EmployeesTab({ businessId }: { businessId: string }) {
+export function EmployeesTab({
+  businessId,
+  highlightEmployee,
+}: {
+  businessId: string;
+  // Сотрудник, к строке которого нужно проскроллить и на секунду подсветить
+  // при переходе сюда по клику из блока "Команда" в сайдбаре — signal
+  // инкрементируется при каждом клике (даже повторном по тому же человеку),
+  // чтобы useEffect ниже срабатывал каждый раз.
+  highlightEmployee?: { id: string; signal: number } | null;
+}) {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
@@ -22,6 +33,20 @@ export function EmployeesTab({ businessId }: { businessId: string }) {
   const [inviteForm, setInviteForm] = useState({ email: "", name: "", position_id: "", temporary_password: "" });
 
   const [newPositionTitle, setNewPositionTitle] = useState("");
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+  const [flashId, setFlashId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!highlightEmployee || loading) return;
+    const row = rowRefs.current[highlightEmployee.id];
+    if (!row) return;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    setFlashId(highlightEmployee.id);
+    const t = setTimeout(() => setFlashId(null), 1600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightEmployee?.signal, loading]);
 
   async function load() {
     setLoading(true);
@@ -85,7 +110,7 @@ export function EmployeesTab({ businessId }: { businessId: string }) {
   }
 
   async function handleDisableEmployee(id: string) {
-    if (!confirm("Отключить доступ этого сотрудника?")) return;
+    if (!(await confirm("Отключить доступ этого сотрудника?", { danger: true, confirmLabel: "Отключить" }))) return;
     await api.delete(`/businesses/${businessId}/employees/${id}`);
     await load();
   }
@@ -139,7 +164,11 @@ export function EmployeesTab({ businessId }: { businessId: string }) {
         </thead>
         <tbody>
           {employees.map((emp) => (
-            <tr key={emp.id}>
+            <tr
+              key={emp.id}
+              ref={(el) => { rowRefs.current[emp.id] = el; }}
+              className={flashId === emp.id ? "row-flash" : undefined}
+            >
               <td>{emp.name}{emp.is_owner && <span className="badge badge-owner">владелец</span>}</td>
               <td>{emp.is_owner ? "—" : positionTitle(emp.position_id)}</td>
               <td>{emp.status === "active" ? "Активен" : emp.status === "disabled" ? "Отключён" : "Приглашён"}</td>
@@ -189,6 +218,8 @@ export function EmployeesTab({ businessId }: { businessId: string }) {
           </table>
         </div>
       ))}
+
+      {confirmDialog}
     </div>
   );
 }

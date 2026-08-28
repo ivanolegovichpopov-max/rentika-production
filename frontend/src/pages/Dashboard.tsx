@@ -17,6 +17,7 @@ import { AccountSettings } from "./AccountSettings";
 import { rentalDisplayStatus } from "../lib/statusMeta";
 import { colorFromId, initials } from "../lib/format";
 import { periodFor, type FinancePeriod } from "../lib/financeCalc";
+import { useConfirm } from "../components/ConfirmDialog";
 import {
   IconSearch,
   IconPlus,
@@ -102,6 +103,8 @@ function DashboardShell({
   const [dashClientId, setDashClientId] = useState<string | null>(null);
   const [dashEquipmentId, setDashEquipmentId] = useState<string | null>(null);
 
+  const { confirm, dialog: confirmDialog } = useConfirm();
+
   useEffect(() => {
     api.get<Employee[]>(`/businesses/${businessId}/employees`).then(setEmployees).catch(() => {});
   }, [businessId]);
@@ -128,6 +131,15 @@ function DashboardShell({
   );
   useEffect(() => {
     setMessagingPermission(currentBusiness?.messaging_permission ?? "owner_only");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId]);
+
+  // Логотип бизнеса — тот же паттерн, что notesMode/messagingPermission выше:
+  // хранится на Business, держим отдельным локальным состоянием, чтобы
+  // владелец видел смену логотипа мгновенно после загрузки в "Профиле".
+  const [logoUrl, setLogoUrl] = useState<string | null>(currentBusiness?.logo_url ?? null);
+  useEffect(() => {
+    setLogoUrl(currentBusiness?.logo_url ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [businessId]);
 
@@ -158,7 +170,7 @@ function DashboardShell({
   }, [businessId, view]);
 
   async function handleDashClientDelete(id: string) {
-    if (!confirm("Удалить этого клиента?")) return;
+    if (!(await confirm("Удалить этого клиента?", { danger: true }))) return;
     try {
       await api.delete(`/businesses/${businessId}/clients/${id}`);
       if (dashClientId === id) setDashClientId(null);
@@ -180,17 +192,38 @@ function DashboardShell({
     localStorage.setItem(THEME_KEY, next);
   }
 
+  // Сигнал "открыть форму новой аренды" — счётчик, а не boolean: кнопка
+  // "Новая аренда" в шапке может быть нажата несколько раз подряд без смены
+  // вида (например, если сотрудник закрыл форму и тут же открыл её снова) —
+  // инкремент гарантированно триггерит useEffect в RentalsTab на каждое
+  // нажатие, в отличие от boolean, который бы не менялся между true→true.
+  const [createRentalSignal, setCreateRentalSignal] = useState(0);
+  // Сотрудник, на строку которого нужно проскроллить и подсветить при
+  // переходе на вкладку "Сотрудники" по клику из блока "Команда" в сайдбаре —
+  // тем же счётчиковым паттерном, чтобы повторный клик по уже подсвеченной
+  // строке срабатывал снова.
+  const [highlightEmployee, setHighlightEmployee] = useState<{ id: string; signal: number } | null>(null);
+
   /** Переход между разделами со сбросом поиска и (опционально) выставлением
    * фильтра — аналог обработчика "dash-stat"/"filter-by-category" в демо. */
   function navigate(
     target: View,
-    opts?: { equipmentFilter?: string; rentalFilter?: string; search?: string; finance30?: boolean }
+    opts?: {
+      equipmentFilter?: string;
+      rentalFilter?: string;
+      search?: string;
+      finance30?: boolean;
+      openCreateRental?: boolean;
+      highlightEmployeeId?: string;
+    }
   ) {
     setView(target);
     setSearch(opts?.search ?? "");
     if (opts?.equipmentFilter) setEquipmentFilter(opts.equipmentFilter);
     if (opts?.rentalFilter) setRentalFilter(opts.rentalFilter);
     if (opts?.finance30) setFinancePeriod(periodFor("30", rentals));
+    if (opts?.openCreateRental) setCreateRentalSignal((n) => n + 1);
+    if (opts?.highlightEmployeeId) setHighlightEmployee((prev) => ({ id: opts.highlightEmployeeId!, signal: (prev?.signal ?? 0) + 1 }));
   }
 
   const activeEmployees = employees.filter((e) => e.status !== "disabled");
@@ -251,8 +284,14 @@ function DashboardShell({
           onClick={() => navigate("dashboard")}
         >
           <div className="brand-mark">
-            <div className="sh1" />
-            <div className="sh2" />
+            {logoUrl ? (
+              <img className="brand-logo-img" src={logoUrl} alt="" />
+            ) : (
+              <>
+                <div className="sh1" />
+                <div className="sh2" />
+              </>
+            )}
           </div>
           <div>
             <div className="brand-name">
@@ -284,19 +323,25 @@ function DashboardShell({
           ))}
         </nav>
 
-        <div className="sidebar-spacer" />
-
         <div className="team-block">
           <div className="team-label">Команда</div>
           <div className="team-list">
             {activeEmployees.slice(0, 6).map((emp) => (
-              <div className="team-row" key={emp.id} title={emp.name}>
+              <button
+                type="button"
+                className="team-row team-row-clickable"
+                key={emp.id}
+                title={`Открыть ${emp.name} в разделе «Сотрудники»`}
+                onClick={() => navigate("employees", { highlightEmployeeId: emp.id })}
+              >
                 <span className="avatar" style={{ background: colorFromId(emp.id) }}>{initials(emp.name)}</span>
                 <span className="team-name">{emp.name}</span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
+
+        <div className="sidebar-spacer" />
 
         <button className="reset-link" onClick={() => void logout()}>Выйти ({user?.email})</button>
       </aside>
@@ -331,7 +376,15 @@ function DashboardShell({
             </div>
           )}
           {(view === "rentals" || view === "dashboard") && (
-            <button className="btn btn-primary" onClick={() => navigate("rentals", { rentalFilter: view === "dashboard" ? "active" : rentalFilter })}>
+            <button
+              className="btn btn-primary"
+              onClick={() =>
+                navigate("rentals", {
+                  rentalFilter: view === "dashboard" ? "active" : rentalFilter,
+                  openCreateRental: true,
+                })
+              }
+            >
               <IconPlus /> Новая аренда
             </button>
           )}
@@ -361,11 +414,17 @@ function DashboardShell({
               )}
               {view === "clients" && <ClientsTab businessId={businessId} search={search} />}
               {view === "rentals" && (
-                <RentalsTab businessId={businessId} search={search} filter={rentalFilter} setFilter={setRentalFilter} />
+                <RentalsTab
+                  businessId={businessId}
+                  search={search}
+                  filter={rentalFilter}
+                  setFilter={setRentalFilter}
+                  openCreateSignal={createRentalSignal}
+                />
               )}
               {view === "calendar" && <CalendarTab businessId={businessId} search={search} />}
               {view === "finance" && <FinanceTab period={financePeriod} setPeriod={setFinancePeriod} />}
-              {view === "employees" && <EmployeesTab businessId={businessId} />}
+              {view === "employees" && <EmployeesTab businessId={businessId} highlightEmployee={highlightEmployee} />}
               {view === "messages" && (
                 <MessagesTab
                   businessId={businessId}
@@ -376,7 +435,14 @@ function DashboardShell({
                 />
               )}
               {view === "profile" && (
-                <AccountSettings myEmployee={myEmployee} isOwner={isOwner} businessName={currentBusiness?.name ?? null} />
+                <AccountSettings
+                  myEmployee={myEmployee}
+                  isOwner={isOwner}
+                  businessName={currentBusiness?.name ?? null}
+                  businessId={businessId}
+                  logoUrl={logoUrl}
+                  onLogoChange={setLogoUrl}
+                />
               )}
               {view === "admin" && <AdminOverviewTab />}
             </>
@@ -416,6 +482,8 @@ function DashboardShell({
           onDeleted={() => setDashEquipmentId(null)}
         />
       )}
+
+      {confirmDialog}
     </div>
   );
 }

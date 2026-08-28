@@ -181,6 +181,11 @@ button.brand:active { opacity: 0.6; }
 .brand-mark .sh1, .brand-mark .sh2 { position: absolute; width: 21px; height: 21px; border-radius: 7px; }
 .brand-mark .sh1 { background: var(--accent); top: 3px; left: 0; opacity: 0.92; }
 .brand-mark .sh2 { background: var(--brand-deep); top: 8px; left: 8px; opacity: 0.92; }
+.brand-mark .brand-logo-img { width: 30px; height: 30px; border-radius: 7px; object-fit: cover; }
+
+/* ---------- Логотип бизнеса (настройки аккаунта) ---------- */
+.logo-preview { width: 64px; height: 64px; flex: none; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.logo-preview img { width: 100%; height: 100%; object-fit: cover; }
 .brand-name { font-family: "Roboto", system-ui, sans-serif; font-weight: 700; font-size: 16px; letter-spacing: -0.005em; color: var(--ink); }
 .brand-tag { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 1px 5px; border-radius: 4px; margin-left: 6px; vertical-align: 2px; color: var(--ink-secondary); background: var(--surface-2); border: 1px solid var(--border); }
 .brand-sub { font-size: 11px; color: var(--muted); margin-top: -1px; }
@@ -200,6 +205,8 @@ nav.nav { display: flex; flex-direction: column; gap: 2px; }
 .team-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700; padding: 0 6px; }
 .team-list { display: flex; flex-direction: column; gap: 2px; }
 .team-row { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 20px; width: 100%; }
+.team-row.team-row-clickable { background: none; border: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.team-row.team-row-clickable:hover { background: var(--surface-2); }
 .avatar { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 10.5px; font-weight: 700; flex: none; }
 .team-name { font-size: 12.5px; color: var(--ink-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reset-link { font-size: 11.5px; color: var(--muted); background: none; border: none; cursor: pointer; padding: 6px; text-align: left; }
@@ -224,7 +231,17 @@ button.stat-tile:active { transform: translateY(0); }
    короткой однострочной подписью в соседней плашке визуально "прыгает"
    выше значения под перенесённой двухстрочной, хотя сами плашки одной
    высоты (это создавало у ряда плашек впечатление "разных уровней"). */
-.stat-label { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; display: block; min-height: 26px; }
+/* height (не min-height!) — сознательно фиксированная, а не минимальная:
+   при min-height подписи из одной строки (например "СВОБОДНО") и из двух
+   строк после переноса (например "ВЫРУЧКА ЗА 90 ДНЕЙ") занимали разную
+   фактическую высоту, из-за чего .stat-value съезжал по вертикали между
+   соседними плашками одной строки .stat-grid — раньше это не было заметно
+   визуально при коротких подписях, но проявилось с добавлением плашек с
+   длинными подписями (период в названии). Фиксированная высота в 2 строки
+   резервирует место заранее для любой подписи, однострочные просто
+   оставляют пустое место снизу — так верх .stat-value всегда на одном
+   уровне независимо от длины текста конкретной плашки. */
+.stat-label { font-size: 11px; line-height: 1.35; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; display: block; height: 30px; overflow: hidden; }
 .stat-value { font-family: "Roboto"; font-weight: 500; font-size: 32px; line-height: 1.15; margin-top: 6px; letter-spacing: -0.01em; }
 .stat-value.mono { font-family: "Roboto Mono"; font-variant-numeric: tabular-nums; font-size: 23px; font-weight: 500; }
 .stat-value.critical { color: var(--critical); }
@@ -234,9 +251,10 @@ button.stat-tile:active { transform: translateY(0); }
 /* ---------- Панели дашборда/финансов ---------- */
 .dash-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; align-items: start; }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-sm); }
-.panel-head { display: flex; align-items: baseline; justify-content: space-between; padding: 16px 18px 4px; }
+.panel-head { display: flex; align-items: baseline; justify-content: space-between; padding: 16px 18px 4px; flex-wrap: wrap; gap: 8px; }
 .panel-head h2 { font-size: 15px; font-weight: 800; }
 .panel-head .hint { font-size: 12px; color: var(--muted); }
+.dash-panel-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .panel-body { padding: 14px 18px 18px; }
 
 .due-item, .util-row, .mini-item.clickable {
@@ -272,6 +290,7 @@ div.due-item, div.mini-item { display: flex; align-items: center; justify-conten
    — тот же паттерн HTML5 DnD (draggable + dragover/drop с классами
    dragging/drag-over), что уже используется для категорий в "Календаре". */
 .dash-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.dash-period-range { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .dash-block-cell { position: relative; }
 .dash-block-cell[draggable="true"] { cursor: grab; }
 .dash-block-cell.dragging { opacity: 0.4; }
@@ -310,6 +329,9 @@ div.due-item, div.mini-item { display: flex; align-items: center; justify-conten
 .note-delete { width: 22px; height: 22px; color: var(--muted); flex: none; }
 .note-delete:hover { color: var(--critical); background: var(--surface); }
 .note-text { font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+.note-done-check { width: 15px; height: 15px; flex: none; cursor: pointer; accent-color: var(--accent); }
+.note-item.note-done { opacity: 0.6; }
+.note-item.note-done .note-text { text-decoration: line-through; text-decoration-color: var(--muted); }
 .segmented-sm button { padding: 4px 9px; font-size: 11.5px; }
 
 /* ---------- Таблицы ---------- */
@@ -451,6 +473,15 @@ dialog#modal::backdrop { background: rgba(0,0,0,0.4); }
 .modal-body { padding: 18px 20px; overflow-y: auto; max-height: 65vh; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
 
+/* ---------- Модалка подтверждения (замена window.confirm()) ---------- */
+dialog#confirm-modal { border: none; border-radius: 16px; padding: 0; box-shadow: var(--shadow-lg); width: min(420px, 92vw); background: var(--surface); color: var(--ink); }
+dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
+.confirm-body { display: flex; gap: 12px; align-items: flex-start; padding: 20px 20px 4px; }
+.confirm-body h3 { font-size: 15px; font-weight: 800; margin-bottom: 4px; }
+.confirm-body p { font-size: 13.5px; color: var(--ink-secondary); line-height: 1.4; }
+.confirm-icon { display: flex; flex: none; width: 34px; height: 34px; align-items: center; justify-content: center; border-radius: 50%; background: var(--surface-2); color: var(--muted); }
+.confirm-icon.critical { background: var(--critical-soft); color: var(--critical); }
+
 /* ---------- Поля формы модалок ---------- */
 .field label { display: block; font-size: 12px; font-weight: 700; color: var(--ink-secondary); margin-bottom: 5px; }
 .field input, .field select, .field textarea {
@@ -588,6 +619,13 @@ dialog#modal::backdrop { background: rgba(0,0,0,0.4); }
 .data-table th, .data-table td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
 .data-table th { color: var(--muted); font-weight: 700; font-size: 11px; text-transform: uppercase; background: var(--surface-2); }
 .data-table.compact th, .data-table.compact td { padding: 6px 10px; }
+/* Кратковременная подсветка строки сотрудника при переходе сюда кликом по
+   аватару в блоке "Команда" сайдбара — угасающая заливка, не мигание. */
+.row-flash { animation: row-flash-fade 1.6s ease-out; }
+@keyframes row-flash-fade {
+  0% { background: var(--accent-soft, var(--surface-2)); }
+  100% { background: transparent; }
+}
 .row-actions { display: flex; gap: 8px; }
 .badge-owner { margin-left: 6px; background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 /* Легаси-алиасы статусных бейджей (используются только в ещё не

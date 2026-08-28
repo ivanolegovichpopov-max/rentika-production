@@ -64,6 +64,19 @@ export function FinanceTab({
   const depositsHeld = depositsHeldNow(rentals, rentalDisplayStatus);
   const accrued = accruedRevenueForPeriod(rentals, period.from, period.to);
 
+  // Доля повторных клиентов — за ВСЁ время (не только за выбранный период
+  // отчёта): показатель "многие ли возвращаются" мало что значит, если
+  // считать его только за узкое окно в несколько дней. Считаются все аренды
+  // независимо от статуса (в т.ч. отменённые) — это метрика вовлечённости
+  // клиента ("обращался больше одного раза"), а не выручки.
+  const rentalCountByClient: Record<string, number> = {};
+  rentals.forEach((r) => {
+    rentalCountByClient[r.client_id] = (rentalCountByClient[r.client_id] || 0) + 1;
+  });
+  const clientsWithRentals = Object.keys(rentalCountByClient).length;
+  const repeatClients = Object.values(rentalCountByClient).filter((n) => n >= 2).length;
+  const repeatRate = clientsWithRentals ? Math.round((repeatClients / clientsWithRentals) * 100) : 0;
+
   const buckets = financeBuckets(period.from, period.to, rows);
   const maxVal = Math.max(1, ...buckets.map((b) => b.total));
   const showEvery = Math.max(1, Math.ceil(buckets.length / 8));
@@ -165,7 +178,7 @@ export function FinanceTab({
         </div>
       </div>
 
-      <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+      <div className="stat-grid" style={{ gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 16 }}>
         <div className="panel">
           <div className="panel-head">
             <h2>Депозиты на удержании</h2>
@@ -184,6 +197,18 @@ export function FinanceTab({
           </div>
           <div className="panel-body">
             <div className="stat-value mono" style={{ padding: "2px 0 6px" }}>{money(accrued)}</div>
+          </div>
+        </div>
+        <div className="panel">
+          <div className="panel-head">
+            <h2>Повторные клиенты</h2>
+            <span className="hint" title="Клиенты с 2+ арендами за всё время, доля от всех, у кого была хотя бы одна">
+              за всё время
+            </span>
+          </div>
+          <div className="panel-body">
+            <div className="stat-value" style={{ padding: "2px 0 6px" }}>{repeatRate}%</div>
+            <div className="field-hint">{repeatClients} из {clientsWithRentals} клиентов — с повторной арендой</div>
           </div>
         </div>
       </div>

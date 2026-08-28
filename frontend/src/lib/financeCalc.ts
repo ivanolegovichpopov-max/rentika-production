@@ -66,11 +66,38 @@ export function equipmentRevenueMap(rentals: Rental[]): Record<string, number> {
   return map;
 }
 
-export function topEquipmentByRevenue(rentals: Rental[], equipment: Equipment[], limit = 5) {
-  const map = equipmentRevenueMap(rentals);
+/** range не задан — считаем за всё время (как раньше). range задан —
+ * учитываются только аренды, ВОЗВРАЩЁННЫЕ внутри [range.from, range.to] (тот
+ * же фильтр, что и в "Финансах", returnsInPeriod) — используется дашбордовой
+ * панелью "Топ оборудования по доходу" при добавлении переключателя периода. */
+export function topEquipmentByRevenue(
+  rentals: Rental[],
+  equipment: Equipment[],
+  limit = 5,
+  range?: { from: string; to: string }
+) {
+  const scoped = range ? returnsInPeriod(rentals, range.from, range.to) : rentals;
+  const map = equipmentRevenueMap(scoped);
   return Object.keys(map)
     .map((id) => ({ id, revenue: map[id] }))
     .filter((x) => equipment.some((e) => e.id === x.id))
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, limit);
+}
+
+/** Категориальный аналог topEquipmentByRevenue выше — тот же принцип
+ * необязательного диапазона, поверх уже существующего categoryRevenueMap
+ * (см. ниже), а не отдельная реализация. */
+export function topCategoriesByRevenue(
+  rentals: Rental[],
+  equipment: Equipment[],
+  limit = 5,
+  range?: { from: string; to: string }
+) {
+  const scoped = range ? returnsInPeriod(rentals, range.from, range.to) : rentals.filter((r) => r.status === "returned");
+  const map = categoryRevenueMap(scoped, equipment);
+  return Object.keys(map)
+    .map((category) => ({ category, revenue: map[category] }))
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, limit);
 }

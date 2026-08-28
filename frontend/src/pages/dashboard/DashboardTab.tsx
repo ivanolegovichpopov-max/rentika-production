@@ -29,8 +29,9 @@ import { api, ApiError } from "../../api/client";
 import type { Client, DashboardNote, DashboardPrefs, NotesMode, Rental } from "../../api/types";
 import { money, fmtDate, dayDiff, isoAddDays, todayISO } from "../../lib/format";
 import { RENTAL_META, RATING_META, Badge, rentalDisplayStatus, equipmentDisplayStatus } from "../../lib/statusMeta";
-import { topEquipmentByRevenue } from "../../lib/financeCalc";
-import { IconAlert, IconEye, IconEyeOff, IconGrip, IconSliders, IconTrash, IconTrendUp, IconTrendDown } from "../../lib/icons";
+import { topEquipmentByRevenue, topCategoriesByRevenue } from "../../lib/financeCalc";
+import { IconAlert, IconEye, IconEyeOff, IconGrip, IconSliders, IconTrash, IconTrendUp, IconTrendDown, IconReset } from "../../lib/icons";
+import { useConfirm } from "../../components/ConfirmDialog";
 import type { View } from "../Dashboard";
 
 export type NavigateFn = (
@@ -51,12 +52,13 @@ interface DashboardTabProps {
 type DeltaTone = "good" | "critical" | "flat";
 type StatPeriodKey = "1" | "7" | "30" | "90";
 
-const STAT_IDS = ["stat-active", "stat-free", "stat-overdue", "stat-revenue30", "stat-deposits", "stat-damage30"];
-const PANEL_IDS = ["panel-notes", "panel-due", "panel-categories", "panel-risky", "panel-topequip", "panel-pickup", "panel-duetoday"];
+const STAT_IDS = ["stat-active", "stat-free", "stat-overdue", "stat-revenue30", "stat-deposits", "stat-damage30", "stat-forecast"];
+const PANEL_IDS = ["panel-notes", "panel-due", "panel-categories", "panel-risky", "panel-topequip", "panel-pickup", "panel-duetoday", "panel-maintenance"];
 // По умолчанию "Заметки" — первым, самым заметным блоком; "Ближайшие
 // возвраты" и "Загрузка по категориям" — рядом на одном уровне, ровно как
 // было устроено до появления перетаскивания; остальные панели — по одной
-// в строке, друг под другом.
+// в строке, друг под другом. "Обслуживание" — новая, добавлена последней
+// строкой, чтобы не переставлять уже привычную раскладку остальных панелей.
 const DEFAULT_PANEL_ROWS: string[][] = [
   ["panel-notes"],
   ["panel-due", "panel-categories"],
@@ -64,6 +66,7 @@ const DEFAULT_PANEL_ROWS: string[][] = [
   ["panel-topequip"],
   ["panel-pickup"],
   ["panel-duetoday"],
+  ["panel-maintenance"],
 ];
 const PANEL_TITLES: Record<string, string> = {
   "panel-notes": "Заметки и новости",
@@ -73,6 +76,7 @@ const PANEL_TITLES: Record<string, string> = {
   "panel-topequip": "Топ оборудования по доходу",
   "panel-pickup": "Выдача ожидается сегодня",
   "panel-duetoday": "Возврат ожидается сегодня",
+  "panel-maintenance": "Скоро освободится после обслуживания",
 };
 const STAT_TITLES: Record<string, string> = {
   "stat-active": "В аренде сейчас",
@@ -81,6 +85,7 @@ const STAT_TITLES: Record<string, string> = {
   "stat-revenue30": "Выручка",
   "stat-deposits": "Депозиты на удержании",
   "stat-damage30": "Компенсации за повреждения",
+  "stat-forecast": "Ожидаемая выручка",
 };
 
 /** Известные id, отсутствующие в сохранённом порядке (например появились
@@ -263,6 +268,7 @@ function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { bus
   const [loaded, setLoaded] = useState(false);
   const [draft, setDraft] = useState("");
   const [posting, setPosting] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   useEffect(() => {
     let cancelled = false;
@@ -299,12 +305,26 @@ function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { bus
   }
 
   async function deleteNote(id: string) {
-    if (!confirm("Удалить эту запись?")) return;
+    if (!(await confirm("Удалить эту запись?", { danger: true }))) return;
     try {
       await api.delete(`/businesses/${businessId}/notes/${id}`);
       setNotes((prev) => prev.filter((n) => n.id !== id));
     } catch (err) {
       alert(err instanceof ApiError ? err.message : "Не удалось удалить");
+    }
+  }
+
+  // Отметка "выполнено" — простой чекбокс, НЕ полноценный чек-лист/трекер
+  // задач (сознательно не реализовывали — см. обсуждение UX-обзора):
+  // доступна тому же, кому доступно удаление записи (n.can_delete).
+  async function toggleDone(note: DashboardNote) {
+    const nextDone = !note.done;
+    setNotes((prev) => prev.map((n) => (n.id === note.id ? { ...n, done: nextDone } : n)));
+    try {
+      await api.patch(`/businesses/${businessId}/notes/${note.id}`, { done: nextDone });
+    } catch (err) {
+      setNotes((prev) => prev.map((n) => (n.id === note.id ? { ...n, done: note.done } : n)));
+      alert(err instanceof ApiError ? err.message : "Не удалось изменить отметку");
     }
   }
 
@@ -339,7 +359,7 @@ function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { bus
             <textarea
               value={draft}
               maxLength={2000}
-              placeholder={isOwner ? "Новость для сотрудников…" : "Быстрая заметка…"}
+              placeholder={isOwner ? "Заметки и новости для команды…" : "Быстрая заметка…"}
               onChange={(e) => setDraft(e.target.value)}
             />
             <button type="button" className="btn btn-primary btn-sm" disabled={!draft.trim() || posting} onClick={() => void postNote()}>
@@ -359,8 +379,17 @@ function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { bus
         ) : (
           <div className="notes-feed">
             {notes.map((n) => (
-              <div className="note-item" key={n.id}>
+              <div className={"note-item" + (n.done ? " note-done" : "")} key={n.id}>
                 <div className="note-item-head">
+                  {n.can_delete && (
+                    <input
+                      type="checkbox"
+                      className="note-done-check"
+                      checked={n.done}
+                      title={n.done ? "Отметить невыполненным" : "Отметить выполненным"}
+                      onChange={() => void toggleDone(n)}
+                    />
+                  )}
                   <span className="note-author">{n.author_name}</span>
                   <span className="note-date">
                     {fmtDate(n.created_at.slice(0, 10))} · {new Date(n.created_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
@@ -377,6 +406,7 @@ function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { bus
           </div>
         )}
       </div>
+      {confirmDialog}
     </div>
   );
 }
@@ -397,6 +427,18 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
   // раскладки блоков) — это лёгкий просмотровый переключатель, а не личная
   // настройка уровня "как выглядит мой дашборд".
   const [statPeriod, setStatPeriod] = useState<StatPeriodKey>("30");
+
+  // "Топ оборудования по доходу" — переключатели периода/группировки
+  // (запрошено пользователем отдельно от statPeriod выше: там речь про
+  // выручку/компенсации на плашках, здесь — своя область, поэтому свои
+  // локальные, тоже сессионные, не персистятся). usePeriod=false — как
+  // раньше, "за всё время"; true — использует тот же диапазон, что и
+  // statPeriod (общий переключатель периода наверху), чтобы не дублировать
+  // ещё один набор кнопок 1/7/30/90 на той же странице.
+  const [topEquipUsePeriod, setTopEquipUsePeriod] = useState(false);
+  const [topEquipGroupBy, setTopEquipGroupBy] = useState<"items" | "categories">("items");
+
+  const { confirm: confirmAction, dialog: confirmActionDialog } = useConfirm();
 
   useEffect(() => {
     let cancelled = false;
@@ -435,6 +477,14 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
 
   function toggleHidden(id: string) {
     persist({ hidden: hidden.includes(id) ? hidden.filter((x) => x !== id) : [...hidden, id] });
+  }
+
+  /** "Сбросить настройки" в режиме редактирования — возвращает раскладку к
+   * дефолтной (ничего не скрыто, порядок/строки как из коробки). Кнопка
+   * доступна только в editMode — сама персональная раскладка per-Employee,
+   * поэтому сброс касается только текущего сотрудника, не всей команды. */
+  function resetLayout() {
+    persist({ hidden: [], statOrder: STAT_IDS, panelRows: DEFAULT_PANEL_ROWS });
   }
   function isHidden(id: string): boolean {
     return hidden.includes(id);
@@ -558,7 +608,32 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
   });
   const riskyList = Object.values(riskyMap).sort((a, b) => b.priority - a.priority);
 
-  const topEquip = topEquipmentByRevenue(rentals, equipment, 5);
+  const topEquipRange = topEquipUsePeriod ? { from: periodFrom, to: periodTo } : undefined;
+  const topEquipItems = topEquipmentByRevenue(rentals, equipment, 5, topEquipRange);
+  const topEquipCats = topCategoriesByRevenue(rentals, equipment, 5, topEquipRange);
+
+  // "Ожидаемая выручка" — сумма по уже забронированным (ещё не выданным)
+  // арендам, чья дата НАЧАЛА попадает в текущее окно statPeriod. r.total уже
+  // содержит посчитанную backend'ом стоимость аренды целиком (см.
+  // app/services/pricing.py) — здесь просто суммируем по отфильтрованным
+  // броням, отдельного пересчёта по датам не требуется.
+  const forecastRentals = rentals.filter(
+    (r) => r.status === "booked" && r.start_date >= periodFrom && r.start_date <= periodTo
+  );
+  const forecastRevenue = forecastRentals.reduce((s, r) => s + r.total, 0);
+
+  // "Скоро освободится после обслуживания" — оборудование в статусе
+  // maintenance, отсортировано по дате окончания (раньше всех — первым; без
+  // указанной даты — в конец списка, как "неизвестно когда").
+  const maintenanceList = usableEquip
+    .filter((e) => e.status === "maintenance")
+    .slice()
+    .sort((a, b) => {
+      if (!a.maintenance_until && !b.maintenance_until) return 0;
+      if (!a.maintenance_until) return 1;
+      if (!b.maintenance_until) return -1;
+      return a.maintenance_until < b.maintenance_until ? -1 : 1;
+    });
 
   // "Возврат ожидается сегодня" — активные аренды, у которых плановая дата
   // возврата сегодня.
@@ -571,6 +646,11 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
   }
 
   async function handleIssue(rentalId: string) {
+    // Подтверждение — сознательно добавлено: "Выдать" отсюда, в отличие от
+    // "Принять возврат" в соседней панели, раньше срабатывало мгновенно по
+    // одному клику без какого-либо шага назад, хотя одинаково необратимо
+    // меняет статус аренды (см. UX-обзор дашборда).
+    if (!(await confirmAction("Выдать оборудование по этой аренде?", { confirmLabel: "Выдать" }))) return;
     try {
       await api.post(`/businesses/${businessId}/rentals/${rentalId}/issue`);
       await reloadRentals();
@@ -584,6 +664,7 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
     if (id === "stat-free") return "Свободно из " + usableEquip.length;
     if (id === "stat-revenue30") return periodDays === 1 ? "Выручка сегодня" : "Выручка за " + periodDays + " дней";
     if (id === "stat-damage30") return periodDays === 1 ? "Компенсации сегодня" : "Компенсации за " + periodDays + " дней";
+    if (id === "stat-forecast") return periodDays === 1 ? "Ожидаемая выручка сегодня" : "Ожидаемая выручка за " + periodDays + " дней";
     return STAT_TITLES[id] ?? id;
   };
 
@@ -635,6 +716,16 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
       case "stat-damage30":
         return (
           <StatTile label={statLabel(id)} value={money(damagePeriod)} mono disabled={editMode} onClick={() => navigate("finance", { finance30: true })} />
+        );
+      case "stat-forecast":
+        return (
+          <StatTile
+            label={statLabel(id)}
+            value={money(forecastRevenue)}
+            mono
+            disabled={editMode}
+            onClick={() => navigate("rentals", { rentalFilter: "booked" })}
+          />
         );
       default:
         return null;
@@ -777,22 +868,99 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
           <div className="panel">
             <div className="panel-head">
               <h2>{PANEL_TITLES[id]}</h2>
-              <span className="hint">за всё время</span>
+              <div className="dash-panel-controls">
+                <div className="segmented segmented-sm" title="Группировка">
+                  <button type="button" className={topEquipGroupBy === "items" ? "active" : ""} onClick={() => setTopEquipGroupBy("items")}>
+                    По позициям
+                  </button>
+                  <button type="button" className={topEquipGroupBy === "categories" ? "active" : ""} onClick={() => setTopEquipGroupBy("categories")}>
+                    По категориям
+                  </button>
+                </div>
+                <div className="segmented segmented-sm" title="Период">
+                  <button type="button" className={!topEquipUsePeriod ? "active" : ""} onClick={() => setTopEquipUsePeriod(false)}>
+                    За всё время
+                  </button>
+                  <button
+                    type="button"
+                    className={topEquipUsePeriod ? "active" : ""}
+                    onClick={() => setTopEquipUsePeriod(true)}
+                    title="Использует период, выбранный переключателем 1/7/30/90 выше"
+                  >
+                    За {statPeriod === "1" ? "сегодня" : statPeriod + " дн."}
+                  </button>
+                </div>
+              </div>
             </div>
             <div className="panel-body">
-              {topEquip.length === 0 ? (
+              {topEquipGroupBy === "items" ? (
+                topEquipItems.length === 0 ? (
+                  <div className="empty-note">Ничего не найдено.</div>
+                ) : (
+                  topEquipItems.map((x) => {
+                    const e = equipment.find((eq) => eq.id === x.id);
+                    if (!e) return null;
+                    return (
+                      <button key={x.id} className="due-item" onClick={() => onOpenEquipment(e.id)}>
+                        <div className="due-main">
+                          <div className="due-title">{e.name}</div>
+                          <div className="due-meta">{e.category}</div>
+                        </div>
+                        <span className="due-value">{money(x.revenue)}</span>
+                      </button>
+                    );
+                  })
+                )
+              ) : topEquipCats.length === 0 ? (
                 <div className="empty-note">Ничего не найдено.</div>
               ) : (
-                topEquip.map((x) => {
-                  const e = equipment.find((eq) => eq.id === x.id);
-                  if (!e) return null;
+                topEquipCats.map((x) => (
+                  <button
+                    key={x.category}
+                    className="due-item"
+                    onClick={() => navigate("equipment", { equipmentFilter: "all", search: x.category })}
+                  >
+                    <div className="due-main">
+                      <div className="due-title">{x.category}</div>
+                    </div>
+                    <span className="due-value">{money(x.revenue)}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        );
+
+      case "panel-maintenance":
+        return (
+          <div className="panel">
+            <div className="panel-head">
+              <h2>{PANEL_TITLES[id]}</h2>
+              <span className="hint">{maintenanceList.length} на обслуживании</span>
+            </div>
+            <div className="panel-body">
+              {maintenanceList.length === 0 ? (
+                <div className="empty-note">Сейчас ничего не на обслуживании.</div>
+              ) : (
+                maintenanceList.map((e) => {
+                  const daysLeft = e.maintenance_until ? dayDiff(e.maintenance_until) : null;
+                  const metaText =
+                    daysLeft === null
+                      ? "дата окончания не указана"
+                      : daysLeft < 0
+                        ? "обслуживание просрочено на " + Math.abs(daysLeft) + " дн."
+                        : daysLeft === 0
+                          ? "освобождается сегодня"
+                          : "освобождается через " + daysLeft + " дн. · " + fmtDate(e.maintenance_until!);
                   return (
-                    <button key={x.id} className="due-item" onClick={() => onOpenEquipment(e.id)}>
+                    <button key={e.id} className="due-item" onClick={() => onOpenEquipment(e.id)}>
                       <div className="due-main">
                         <div className="due-title">{e.name}</div>
-                        <div className="due-meta">{e.category}</div>
+                        <div className="due-meta">
+                          {e.category} · {metaText}
+                        </div>
                       </div>
-                      <span className="due-value">{money(x.revenue)}</span>
+                      {daysLeft !== null && daysLeft <= 0 && <Badge meta={{ label: "Просрочено", tone: "critical" }} />}
                     </button>
                   );
                 })
@@ -887,22 +1055,38 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
   return (
     <>
       <div className="dash-toolbar">
-        <div className="segmented segmented-sm" title="Период выручки и компенсаций на плашках">
-          {(["1", "7", "30", "90"] as StatPeriodKey[]).map((k) => (
-            <button key={k} type="button" className={statPeriod === k ? "active" : ""} onClick={() => setStatPeriod(k)}>
-              {k === "1" ? "Сегодня" : `${k} дн.`}
-            </button>
-          ))}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div className="segmented segmented-sm" title="Период выручки, компенсаций и ожидаемой выручки на плашках">
+            {(["1", "7", "30", "90"] as StatPeriodKey[]).map((k) => (
+              <button key={k} type="button" className={statPeriod === k ? "active" : ""} onClick={() => setStatPeriod(k)}>
+                {k === "1" ? "Сегодня" : `${k} дн.`}
+              </button>
+            ))}
+          </div>
+          {/* Диапазон дат текущего периода — раньше был виден только по
+              смыслу выбранной кнопки (например "30 дн."), без фактических
+              дат; теперь показан явно рядом с переключателем (см. UX-обзор,
+              п.1). Заголовок страницы (Dashboard.tsx) сознательно не
+              трогаем — там "Сегодня, {дата}", общий для всего дашборда, а не
+              про период именно этих плашек. */}
+          <span className="dash-period-range">{fmtDate(periodFrom)} — {fmtDate(periodTo)}</span>
         </div>
-        <button
-          type="button"
-          className={"btn btn-sm" + (editMode ? " btn-primary" : "")}
-          disabled={!prefsLoaded}
-          onClick={() => setEditMode((v) => !v)}
-          title="Скрыть ненужные плашки и панели дашборда или перетащить их в другое место"
-        >
-          <IconSliders /> {editMode ? "Готово" : "Настроить дашборд"}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {editMode && (
+            <button type="button" className="btn btn-sm btn-ghost" onClick={resetLayout} title="Вернуть раскладку дашборда к значениям по умолчанию">
+              <IconReset /> Сбросить настройки
+            </button>
+          )}
+          <button
+            type="button"
+            className={"btn btn-sm" + (editMode ? " btn-primary" : "")}
+            disabled={!prefsLoaded}
+            onClick={() => setEditMode((v) => !v)}
+            title="Скрыть ненужные плашки и панели дашборда или перетащить их в другое место"
+          >
+            <IconSliders /> {editMode ? "Готово" : "Настроить дашборд"}
+          </button>
+        </div>
       </div>
 
       <div className={editMode ? "dash-editing" : undefined}>
@@ -935,6 +1119,7 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
         })}
         <RowGap editMode={editMode} anchorId={null} onDropGap={movePanelToGap} />
       </div>
+      {confirmActionDialog}
     </>
   );
 }

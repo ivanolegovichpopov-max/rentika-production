@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -8,7 +8,7 @@ from app.core.deps import BusinessContext, get_business_context, get_current_use
 from app.database import get_db
 from app.models.business import Business, Employee
 from app.models.user import User
-from app.schemas.business import BusinessOut
+from app.schemas.business import BusinessLogoUpdate, BusinessOut
 
 router = APIRouter(prefix="/businesses", tags=["businesses"])
 
@@ -26,6 +26,27 @@ async def list_my_businesses(user: User = Depends(get_current_user), db: Session
 @router.get("/{business_id}", response_model=BusinessOut)
 async def get_business(business_id: uuid.UUID, ctx: BusinessContext = Depends(get_business_context), db: Session = Depends(get_db)):
     return db.get(Business, business_id)
+
+
+@router.patch("/{business_id}/logo", response_model=BusinessOut)
+async def update_business_logo(
+    business_id: uuid.UUID,
+    body: BusinessLogoUpdate,
+    ctx: BusinessContext = Depends(get_business_context),
+    db: Session = Depends(get_db),
+):
+    """Логотип бизнеса, показываемый в сайдбаре вместо дефолтной марки — см.
+    BusinessLogoUpdate и AccountSettings.tsx (файл читается на фронте через
+    FileReader и шлётся уже готовой строкой — своего файлового хранилища у
+    проекта нет). Менять может только владелец бизнеса — та же логика прав,
+    что и на notes_mode/messaging_permission (ctx.full_access)."""
+    if not ctx.full_access:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Менять логотип может только владелец бизнеса")
+    business = db.get(Business, business_id)
+    business.logo_url = body.logo_url
+    db.commit()
+    db.refresh(business)
+    return business
 
 
 @router.get("/admin/all", response_model=list[BusinessOut], dependencies=[Depends(require_platform_admin)])

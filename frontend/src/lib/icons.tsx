@@ -115,3 +115,8 @@ export const IconGrip = (p: SVGProps<SVGSVGElement>) => (
     <circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" />
   </svg>
 );
+// "Сбросить настройки дашборда" (кнопка в режиме редактирования) — обычная
+// стрелка-разворот по кругу, тот же idiom Svg(), что и остальные иконки выше.
+export const IconReset = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></Svg>
+);

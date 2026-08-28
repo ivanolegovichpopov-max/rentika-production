@@ -12,9 +12,19 @@ class BusinessOut(BaseModel):
     status: BusinessStatus
     notes_mode: NotesMode
     messaging_permission: MessagingPermission
+    logo_url: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class BusinessLogoUpdate(BaseModel):
+    # None — убрать логотип (вернуться к дефолтной марке). Ограничение длины
+    # — грубый предохранитель от чрезмерно больших data: URL (на фронте файл
+    # дополнительно ограничен по размеру ДО кодирования в base64, см.
+    # AccountSettings.tsx) — не точный лимит именно на изображение, а защита
+    # от отправки в БД произвольно огромной строки.
+    logo_url: str | None = Field(default=None, max_length=2_000_000)
 
 
 class PositionCreate(BaseModel):
@@ -120,9 +130,19 @@ class NoteOut(BaseModel):
     author_name: str
     text: str
     created_at: datetime
+    done: bool = False
     # Проставляется в роуте по контексту запроса (можно ли ЭТОМУ пользователю
     # удалить ИМЕННО эту запись) — не хранится в БД, поэтому не участвует в
     # model_config from_attributes напрямую (см. app/api/routes/notes.py).
     can_delete: bool = False
 
     model_config = {"from_attributes": True}
+
+
+class NoteUpdate(BaseModel):
+    """Простая отметка "выполнено" — НЕ полноценный чек-лист/трекер задач
+    (сознательно, см. UX-обзор дашборда). Кто может переключать — та же
+    проверка, что и на удаление (автор записи или владелец бизнеса), см.
+    app/api/routes/notes.py::update_note."""
+
+    done: bool
