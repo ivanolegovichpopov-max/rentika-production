@@ -3,13 +3,14 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from app.models.business import BusinessStatus, EmployeeStatus, PermissionLevel, ResourceType
+from app.models.business import BusinessStatus, EmployeeStatus, NotesMode, PermissionLevel, ResourceType
 
 
 class BusinessOut(BaseModel):
     id: uuid.UUID
     name: str
     status: BusinessStatus
+    notes_mode: NotesMode
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -61,23 +62,65 @@ class EmployeeUpdate(BaseModel):
 
 
 class DashboardPrefs(BaseModel):
-    """Личная настройка дашборда текущего сотрудника: id скрытых плашек/панелей
-    и переименованные подписи по id. Список валидных id — фиксированный набор
-    из 12 блоков дашборда на фронтенде (6 стат-плашек + 6 панелей); бэкенд
-    сознательно не валидирует конкретные значения id — это чисто "непрозрачная"
-    для сервера пользовательская настройка UI, а не бизнес-данные."""
+    """Личная настройка дашборда текущего сотрудника: какие плашки/панели
+    скрыты и в каком порядке/раскладке показывать остальные. Список валидных
+    id — фиксированный набор блоков дашборда на фронтенде (6 стат-плашек +
+    панели, включая "panel-notes"); бэкенд сознательно не валидирует
+    конкретные значения id — это непрозрачная для сервера настройка UI, а не
+    бизнес-данные. Именных подписей (rename) здесь больше нет — пользователь
+    попросил заменить переименование на перетаскивание блоков.
+
+    stat_order — порядок id стат-плашек верхнего ряда (только горизонтальный
+    reorder). panel_rows — раскладка панелей построчно сверху вниз, в каждой
+    строке 1 или 2 id (2 id в строке = панели показаны рядом на одном уровне,
+    как "Ближайшие возвраты"/"Загрузка по категориям" по умолчанию)."""
 
     hidden: list[str] = Field(default_factory=list, max_length=64)
-    labels: dict[str, str] = Field(default_factory=dict)
+    stat_order: list[str] = Field(default_factory=list, max_length=64)
+    panel_rows: list[list[str]] = Field(default_factory=list, max_length=64)
 
-    @field_validator("hidden")
+    @field_validator("hidden", "stat_order")
     @classmethod
-    def _cap_hidden_item_length(cls, value: list[str]) -> list[str]:
-        return [v[:64] for v in value]
+    def _cap_id_list(cls, value: list[str]) -> list[str]:
+        return [str(v)[:64] for v in value][:64]
 
-    @field_validator("labels")
+    @field_validator("panel_rows")
     @classmethod
-    def _cap_labels(cls, value: dict[str, str]) -> dict[str, str]:
+    def _validate_panel_rows(cls, value: list[list[str]]) -> list[list[str]]:
         if len(value) > 64:
-            raise ValueError("Слишком много переименованных блоков")
-        return {k[:64]: v[:120] for k, v in value.items()}
+            raise ValueError("Слишком много строк раскладки панелей")
+        cleaned: list[list[str]] = []
+        total = 0
+        for row in value:
+            if not isinstance(row, list) or len(row) < 1 or len(row) > 2:
+                raise ValueError("В каждой строке раскладки должно быть 1 или 2 блока")
+            total += len(row)
+            if total > 64:
+                raise ValueError("Слишком много блоков в раскладке панелей")
+            cleaned.append([str(v)[:64] for v in row])
+        return cleaned
+
+
+class NotesModeOut(BaseModel):
+    mode: NotesMode
+
+
+class NotesModeUpdate(BaseModel):
+    mode: NotesMode
+
+
+class NoteCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class NoteOut(BaseModel):
+    id: uuid.UUID
+    author_name: str
+    text: str
+    created_at: datetime
+    # Проставляется в роуте по контексту запроса (можно ли ЭТОМУ пользователю
+    # удалить ИМЕННО эту запись) — не хранится в БД, поэтому не участвует в
+    # model_config from_attributes напрямую (см. app/api/routes/notes.py).
+    can_delete: bool = False
+
+    model_config = {"from_attributes": True}

@@ -8,10 +8,13 @@ export interface User {
   totp_enabled: boolean;
 }
 
+export type NotesMode = "owner_only" | "everyone";
+
 export interface Business {
   id: string;
   name: string;
   status: "active" | "suspended";
+  notes_mode: NotesMode;
   created_at: string;
 }
 
@@ -94,10 +97,25 @@ export interface Rental {
   items: RentalItem[];
 }
 
-// Личная настройка дашборда текущего сотрудника (какие плашки/панели скрыты,
-// какие переименованы) — GET/PUT /businesses/{id}/dashboard-prefs. Набор
-// валидных id блоков объявлен рядом с использованием, в DashboardTab.tsx.
+// Личная настройка дашборда текущего сотрудника — GET/PUT
+// /businesses/{id}/dashboard-prefs. Набор валидных id блоков объявлен рядом
+// с использованием, в DashboardTab.tsx. hidden — скрытые блоки; stat_order —
+// порядок стат-плашек верхнего ряда (только горизонтальный reorder);
+// panel_rows — раскладка панелей построчно сверху вниз, 1 или 2 id в строке
+// (2 id = панели показаны рядом на одном уровне). Переименования (rename)
+// больше нет — заменено перетаскиванием блоков по прямой просьбе пользователя.
 export interface DashboardPrefs {
   hidden: string[];
-  labels: Record<string, string>;
+  stat_order: string[];
+  panel_rows: string[][];
+}
+
+// Одна запись доски «Заметки/новости» дашборда — GET/POST/DELETE
+// /businesses/{id}/notes, режим — PUT /businesses/{id}/notes/mode.
+export interface DashboardNote {
+  id: string;
+  author_name: string;
+  text: string;
+  created_at: string;
+  can_delete: boolean;
 }

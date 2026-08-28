@@ -1,21 +1,36 @@
 /**
- * Дашборд — перенесён 1:1 из демо-прототипа (oborot-crm-prototype.html), плюс
- * возможность, которой в демо не было (запрошена пользователем отдельно):
- * каждую стат-плашку и панель можно скрыть или переименовать лично для себя
- * (см. DashboardPrefs/EditBar ниже) — настройка хранится на бэкенде per-Employee,
- * поэтому переживает выход из аккаунта и не видна другим сотрудникам бизнеса.
- * Компонент рендерит только тело раздела (плитки статистики + панели) —
- * заголовок страницы и кнопку "+ Новая аренда" рисует родительская оболочка
- * (Dashboard.tsx).
+ * Дашборд — перенесён 1:1 из демо-прототипа (oborot-crm-prototype.html),
+ * плюс несколько возможностей, которых в демо не было (запрошены
+ * пользователем отдельно):
+ *
+ * 1. Каждую стат-плашку и панель можно скрыть лично для себя ("Настроить
+ *    дашборд"), а видимые — перетащить: плашки верхнего ряда только по
+ *    горизонтали, панели — по вертикали и с возможностью поставить две
+ *    рядом на одном уровне (как "Ближайшие возвраты"/"Загрузка по
+ *    категориям" по умолчанию). Раньше здесь было ещё и переименование
+ *    блоков — по прямой просьбе пользователя заменено на перетаскивание.
+ *    Настройка хранится на бэкенде per-Employee (см. DashboardPrefs).
+ * 2. Панель "Заметки/новости" — доска коротких записей с настраиваемым
+ *    владельцем бизнеса режимом доступа (только он пишет / пишут все) —
+ *    см. NotesPanel ниже. Тоже участвует в общей системе скрытия/раскладки.
+ * 3. Клик по клиенту/оборудованию открывает карточку ПРЯМО на дашборде
+ *    (через onOpenClient/onOpenEquipment, реализовано на уровне Dashboard.tsx)
+ *    вместо перехода на другую вкладку.
+ * 4. Период у денежных плашек (выручка/компенсации) стал настраиваемым
+ *    (7/30/90 дней вместо фиксированных 30).
+ *
+ * Компонент рендерит только тело раздела — заголовок страницы и кнопку
+ * "+ Новая аренда" рисует родительская оболочка (Dashboard.tsx).
  */
 import { useEffect, useState } from "react";
+import type { DragEvent, ReactNode } from "react";
 import { useData } from "../../context/DataContext";
 import { api, ApiError } from "../../api/client";
-import type { Client, DashboardPrefs, Rental } from "../../api/types";
-import { money, fmtDate, dayDiff, todayISO } from "../../lib/format";
+import type { Client, DashboardNote, DashboardPrefs, NotesMode, Rental } from "../../api/types";
+import { money, fmtDate, dayDiff, isoAddDays, todayISO } from "../../lib/format";
 import { RENTAL_META, RATING_META, Badge, rentalDisplayStatus, equipmentDisplayStatus } from "../../lib/statusMeta";
 import { topEquipmentByRevenue } from "../../lib/financeCalc";
-import { IconAlert, IconEye, IconEyeOff, IconSliders, IconTrendUp, IconTrendDown } from "../../lib/icons";
+import { IconAlert, IconEye, IconEyeOff, IconGrip, IconSliders, IconTrash, IconTrendUp, IconTrendDown } from "../../lib/icons";
 import type { View } from "../Dashboard";
 
 export type NavigateFn = (
@@ -26,57 +41,171 @@ export type NavigateFn = (
 interface DashboardTabProps {
   navigate: NavigateFn;
   businessId: string;
+  isOwner: boolean;
+  notesMode: NotesMode;
+  onNotesModeChange: (mode: NotesMode) => void;
+  onOpenClient: (id: string) => void;
+  onOpenEquipment: (id: string) => void;
 }
 
 type DeltaTone = "good" | "critical" | "flat";
+type StatPeriodKey = "7" | "30" | "90";
 
-const EMPTY_PREFS: DashboardPrefs = { hidden: [], labels: {} };
+const STAT_IDS = ["stat-active", "stat-free", "stat-overdue", "stat-revenue30", "stat-deposits", "stat-damage30"];
+const PANEL_IDS = ["panel-notes", "panel-due", "panel-categories", "panel-risky", "panel-topequip", "panel-pickup", "panel-duetoday"];
+// По умолчанию "Заметки" — первым, самым заметным блоком; "Ближайшие
+// возвраты" и "Загрузка по категориям" — рядом на одном уровне, ровно как
+// было устроено до появления перетаскивания; остальные панели — по одной
+// в строке, друг под другом.
+const DEFAULT_PANEL_ROWS: string[][] = [
+  ["panel-notes"],
+  ["panel-due", "panel-categories"],
+  ["panel-risky"],
+  ["panel-topequip"],
+  ["panel-pickup"],
+  ["panel-duetoday"],
+];
+const PANEL_TITLES: Record<string, string> = {
+  "panel-notes": "Заметки и новости",
+  "panel-due": "Ближайшие и просроченные возвраты",
+  "panel-categories": "Загрузка по категориям",
+  "panel-risky": "Клиенты, требующие внимания",
+  "panel-topequip": "Топ оборудования по доходу",
+  "panel-pickup": "Выдача ожидается сегодня",
+  "panel-duetoday": "Возврат ожидается сегодня",
+};
+const STAT_TITLES: Record<string, string> = {
+  "stat-active": "В аренде сейчас",
+  "stat-free": "Свободно",
+  "stat-overdue": "Просрочено возвратов",
+  "stat-revenue30": "Выручка",
+  "stat-deposits": "Депозиты на удержании",
+  "stat-damage30": "Компенсации за повреждения",
+};
 
-/**
- * Плавающая панель "переименовать / скрыть", показывается поверх блока только
- * в режиме настройки. defaultValue (не value) — инпут неконтролируемый,
- * значение уходит на сервер по onBlur/Enter, не на каждое нажатие клавиши;
- * key={id} гарантирует, что при повторном входе в режим настройки поле
- * подхватит актуальное значение, а не то, что осталось от прошлого рендера.
- */
-function EditBar({
+/** Известные id, отсутствующие в сохранённом порядке (например появились
+ * позже, чем сотрудник в последний раз настраивал дашборд), дописываются в
+ * конец; неизвестные (блок убрали) — молча отбрасываются. Пустой сохранённый
+ * список (сотрудник ещё ни разу не настраивал раскладку) — это НЕ то же
+ * самое, что "всё в одну колонку": в этом случае используем осмысленный
+ * дефолт (см. DEFAULT_PANEL_ROWS), а не результат нормализации пустого ввода. */
+function normalizeStatOrder(saved: string[]): string[] {
+  if (saved.length === 0) return STAT_IDS;
+  const kept = saved.filter((id) => STAT_IDS.includes(id));
+  const missing = STAT_IDS.filter((id) => !kept.includes(id));
+  return [...kept, ...missing];
+}
+
+function normalizePanelRows(saved: string[][]): string[][] {
+  if (saved.length === 0) return DEFAULT_PANEL_ROWS;
+  const seen = new Set<string>();
+  const rows: string[][] = [];
+  for (const row of saved) {
+    const filtered = row.filter((id) => PANEL_IDS.includes(id) && !seen.has(id));
+    filtered.forEach((id) => seen.add(id));
+    if (filtered.length > 0) rows.push(filtered);
+  }
+  PANEL_IDS.filter((id) => !seen.has(id)).forEach((id) => rows.push([id]));
+  return rows;
+}
+
+/** Перетаскиваемый в режиме настройки блок (и стат-плашка, и панель) — общая
+ * "рамка" с ручкой-грипом и переключателем видимости; сама drag-механика —
+ * та же схема HTML5 DnD (draggable + onDragStart/Over/Leave/Drop), что уже
+ * используется для перетаскивания категорий в "Календаре" (CalendarTab.tsx),
+ * только id носителя передаётся через dataTransfer, а не замыкание. */
+function DraggableBlock({
   id,
-  defaultLabel,
-  currentLabel,
   hidden,
+  editMode,
   onToggleHidden,
-  onCommitLabel,
+  onDropOnId,
+  children,
 }: {
   id: string;
-  defaultLabel: string;
-  currentLabel: string;
   hidden: boolean;
+  editMode: boolean;
   onToggleHidden: (id: string) => void;
-  onCommitLabel: (id: string, defaultLabel: string, value: string) => void;
+  onDropOnId: (draggedId: string, targetId: string) => void;
+  children: ReactNode;
 }) {
   return (
-    <div className="dash-editbar">
-      <input
-        key={id}
-        type="text"
-        className="dash-editbar-input"
-        defaultValue={currentLabel}
-        placeholder={defaultLabel}
-        title="Своё название блока (для вас лично)"
-        onBlur={(e) => onCommitLabel(id, defaultLabel, e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        }}
-      />
-      <button
-        type="button"
-        className="icon-btn"
-        onClick={() => onToggleHidden(id)}
-        title={hidden ? "Показать блок" : "Скрыть блок"}
-      >
-        {hidden ? <IconEyeOff /> : <IconEye />}
-      </button>
+    <div
+      className={"dash-block-cell" + (hidden ? " dash-block-hidden" : "")}
+      draggable={editMode}
+      onDragStart={(e: DragEvent<HTMLDivElement>) => {
+        e.dataTransfer.setData("text/plain", id);
+        e.dataTransfer.effectAllowed = "move";
+        e.currentTarget.classList.add("dragging");
+      }}
+      onDragEnd={(e: DragEvent<HTMLDivElement>) => e.currentTarget.classList.remove("dragging")}
+      onDragOver={
+        editMode
+          ? (e: DragEvent<HTMLDivElement>) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              e.currentTarget.classList.add("drag-over");
+            }
+          : undefined
+      }
+      onDragLeave={(e: DragEvent<HTMLDivElement>) => e.currentTarget.classList.remove("drag-over")}
+      onDrop={
+        editMode
+          ? (e: DragEvent<HTMLDivElement>) => {
+              e.preventDefault();
+              e.currentTarget.classList.remove("drag-over");
+              const draggedId = e.dataTransfer.getData("text/plain");
+              if (draggedId) onDropOnId(draggedId, id);
+            }
+          : undefined
+      }
+    >
+      {editMode && (
+        <div className="dash-handle" title="Перетащите, чтобы изменить порядок">
+          <span className="dash-grip">
+            <IconGrip />
+          </span>
+          <button type="button" className="icon-btn" onClick={() => onToggleHidden(id)} title={hidden ? "Показать блок" : "Скрыть блок"}>
+            {hidden ? <IconEyeOff /> : <IconEye />}
+          </button>
+        </div>
+      )}
+      {children}
     </div>
+  );
+}
+
+/** Узкая "щель" между строками панелей — цель для вертикального
+ * перетаскивания (в отличие от броска ПРЯМО НА панель, который ставит два
+ * блока рядом, бросок В ЩЕЛЬ перемещает блок между строками, не образуя
+ * пару). anchorId — id панели, которая сейчас идёт следующей строкой сразу
+ * после этой щели (null — самая нижняя щель, "в конец"). */
+function RowGap({
+  editMode,
+  anchorId,
+  onDropGap,
+}: {
+  editMode: boolean;
+  anchorId: string | null;
+  onDropGap: (draggedId: string, anchorId: string | null) => void;
+}) {
+  if (!editMode) return null;
+  return (
+    <div
+      className="dash-row-gap"
+      onDragOver={(e: DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        e.currentTarget.classList.add("drag-over");
+      }}
+      onDragLeave={(e: DragEvent<HTMLDivElement>) => e.currentTarget.classList.remove("drag-over")}
+      onDrop={(e: DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.currentTarget.classList.remove("drag-over");
+        const draggedId = e.dataTransfer.getData("text/plain");
+        if (draggedId) onDropGap(draggedId, anchorId);
+      }}
+    />
   );
 }
 
@@ -124,14 +253,150 @@ interface RiskyEntry {
   priority: number;
 }
 
-export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
+/** Доска "Заметки/новости" — см. NotesMode на Business (backend). Не одно
+ * перезаписываемое поле, а лента отдельных записей: несколько человек могут
+ * писать одновременно без риска затереть чужую (last-write-wins). Владелец
+ * бизнеса переключает режим прямо здесь же (сегмент-контрол в шапке),
+ * остальные сотрудники видят режим только как факт (могут/не могут писать). */
+function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { businessId: string; isOwner: boolean; notesMode: NotesMode; onNotesModeChange: (m: NotesMode) => void }) {
+  const [notes, setNotes] = useState<DashboardNote[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [posting, setPosting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    api
+      .get<DashboardNote[]>(`/businesses/${businessId}/notes`)
+      .then((list) => {
+        if (!cancelled) setNotes(list);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId]);
+
+  const canPost = isOwner || notesMode === "everyone";
+
+  async function postNote() {
+    const text = draft.trim();
+    if (!text) return;
+    setPosting(true);
+    try {
+      const created = await api.post<DashboardNote>(`/businesses/${businessId}/notes`, { text });
+      setNotes((prev) => [created, ...prev]);
+      setDraft("");
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : "Не удалось опубликовать запись");
+    } finally {
+      setPosting(false);
+    }
+  }
+
+  async function deleteNote(id: string) {
+    if (!confirm("Удалить эту запись?")) return;
+    try {
+      await api.delete(`/businesses/${businessId}/notes/${id}`);
+      setNotes((prev) => prev.filter((n) => n.id !== id));
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : "Не удалось удалить");
+    }
+  }
+
+  async function changeMode(mode: NotesMode) {
+    if (mode === notesMode) return;
+    try {
+      await api.put(`/businesses/${businessId}/notes/mode`, { mode });
+      onNotesModeChange(mode);
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : "Не удалось изменить режим");
+    }
+  }
+
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <h2>{PANEL_TITLES["panel-notes"]}</h2>
+        {isOwner && (
+          <div className="segmented segmented-sm" title="Кто может публиковать записи">
+            <button type="button" className={notesMode === "owner_only" ? "active" : ""} onClick={() => void changeMode("owner_only")}>
+              Только я
+            </button>
+            <button type="button" className={notesMode === "everyone" ? "active" : ""} onClick={() => void changeMode("everyone")}>
+              Пишут все
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="panel-body">
+        {canPost && (
+          <div className="notes-composer">
+            <textarea
+              value={draft}
+              maxLength={2000}
+              placeholder={isOwner ? "Новость для сотрудников…" : "Быстрая заметка…"}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+            <button type="button" className="btn btn-primary btn-sm" disabled={!draft.trim() || posting} onClick={() => void postNote()}>
+              Опубликовать
+            </button>
+          </div>
+        )}
+        {!canPost && (
+          <div className="field-hint" style={{ marginBottom: 10 }}>
+            Писать сюда может только владелец бизнеса — он же может это изменить в настройках доски.
+          </div>
+        )}
+        {!loaded ? (
+          <div className="empty-note">Загрузка…</div>
+        ) : notes.length === 0 ? (
+          <div className="empty-note">Пока нет ни одной записи.</div>
+        ) : (
+          <div className="notes-feed">
+            {notes.map((n) => (
+              <div className="note-item" key={n.id}>
+                <div className="note-item-head">
+                  <span className="note-author">{n.author_name}</span>
+                  <span className="note-date">
+                    {fmtDate(n.created_at.slice(0, 10))} · {new Date(n.created_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                  {n.can_delete && (
+                    <button type="button" className="icon-btn note-delete" title="Удалить запись" onClick={() => void deleteNote(n.id)}>
+                      <IconTrash />
+                    </button>
+                  )}
+                </div>
+                <div className="note-text">{n.text}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotesModeChange, onOpenClient, onOpenEquipment }: DashboardTabProps) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
   const today = todayISO();
 
-  // ---------- Личная настройка дашборда (скрыть/переименовать) ----------
-  const [prefs, setPrefs] = useState<DashboardPrefs>(EMPTY_PREFS);
+  // ---------- Личная раскладка дашборда (скрыть/переставить) ----------
+  const [hidden, setHidden] = useState<string[]>([]);
+  const [statOrder, setStatOrder] = useState<string[]>(STAT_IDS);
+  const [panelRows, setPanelRows] = useState<string[][]>(DEFAULT_PANEL_ROWS);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [editMode, setEditMode] = useState(false);
+
+  // Настраиваемый период денежных плашек (выручка/компенсации) — раньше был
+  // жёстко зашит на 30 дней; сессионный выбор, не персистится (в отличие от
+  // раскладки блоков) — это лёгкий просмотровый переключатель, а не личная
+  // настройка уровня "как выглядит мой дашборд".
+  const [statPeriod, setStatPeriod] = useState<StatPeriodKey>("30");
 
   useEffect(() => {
     let cancelled = false;
@@ -139,11 +404,14 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
     api
       .get<DashboardPrefs>(`/businesses/${businessId}/dashboard-prefs`)
       .then((p) => {
-        if (!cancelled) setPrefs({ hidden: p.hidden ?? [], labels: p.labels ?? {} });
+        if (cancelled) return;
+        setHidden(p.hidden ?? []);
+        setStatOrder(normalizeStatOrder(p.stat_order ?? []));
+        setPanelRows(normalizePanelRows(p.panel_rows ?? []));
       })
       .catch(() => {
         // Настройка чисто косметическая — если не загрузилась, просто
-        // показываем всё по умолчанию, без ошибки пользователю.
+        // показываем дефолтную раскладку, без ошибки пользователю.
       })
       .finally(() => {
         if (!cancelled) setPrefsLoaded(true);
@@ -153,33 +421,73 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
     };
   }, [businessId]);
 
+  function persist(next: { hidden?: string[]; statOrder?: string[]; panelRows?: string[][] }) {
+    const nextHidden = next.hidden ?? hidden;
+    const nextStatOrder = next.statOrder ?? statOrder;
+    const nextPanelRows = next.panelRows ?? panelRows;
+    setHidden(nextHidden);
+    setStatOrder(nextStatOrder);
+    setPanelRows(nextPanelRows);
+    void api
+      .put(`/businesses/${businessId}/dashboard-prefs`, { hidden: nextHidden, stat_order: nextStatOrder, panel_rows: nextPanelRows })
+      .catch(() => {});
+  }
+
   function toggleHidden(id: string) {
-    const hiddenList = prefs.hidden.includes(id) ? prefs.hidden.filter((x) => x !== id) : [...prefs.hidden, id];
-    const next = { ...prefs, hidden: hiddenList };
-    setPrefs(next);
-    void api.put(`/businesses/${businessId}/dashboard-prefs`, next).catch(() => {});
-  }
-
-  function commitLabel(id: string, defaultLabel: string, value: string) {
-    const trimmed = value.trim();
-    const labels = { ...prefs.labels };
-    if (!trimmed || trimmed === defaultLabel) delete labels[id];
-    else labels[id] = trimmed;
-    const next = { ...prefs, labels };
-    setPrefs(next);
-    void api.put(`/businesses/${businessId}/dashboard-prefs`, next).catch(() => {});
-  }
-
-  function label(id: string, fallback: string): string {
-    return prefs.labels[id] || fallback;
+    persist({ hidden: hidden.includes(id) ? hidden.filter((x) => x !== id) : [...hidden, id] });
   }
   function isHidden(id: string): boolean {
-    return prefs.hidden.includes(id);
+    return hidden.includes(id);
   }
-  /** Блок рендерится, если он не скрыт ИЛИ мы в режиме настройки (тогда скрытые
-   * тоже видны, но приглушены — иначе их было бы невозможно снова показать). */
+  /** Блок рендерится, если он не скрыт ИЛИ мы в режиме настройки (тогда
+   * скрытые тоже видны, но приглушены — иначе их было бы невозможно снова
+   * показать или вытащить обратно перетаскиванием). */
   function shows(id: string): boolean {
     return editMode || !isHidden(id);
+  }
+
+  function reorderStat(draggedId: string, targetId: string) {
+    if (draggedId === targetId) return;
+    const order = statOrder.filter((id) => id !== draggedId);
+    const idx = order.indexOf(targetId);
+    if (idx === -1) return;
+    order.splice(idx, 0, draggedId);
+    persist({ statOrder: order });
+  }
+
+  /** Бросок ОДНОЙ панели ПРЯМО НА другую — ставит их рядом на одном уровне
+   * (образует/пополняет строку из 1-2 блоков). Если у цели уже есть пара —
+   * тот, кто был рядом, "выселяется" в отдельную строку сразу под ней, а
+   * перетащенный занимает его место — раскладка остаётся из строк по 1-2
+   * блока без исключений, никогда не бывает "осиротевших" пустых строк. */
+  function mergePanels(draggedId: string, targetId: string) {
+    if (draggedId === targetId) return;
+    let next = panelRows.map((row) => row.filter((x) => x !== draggedId));
+    const targetRowIdx = next.findIndex((row) => row.includes(targetId));
+    if (targetRowIdx === -1) return;
+    const targetRow = next[targetRowIdx];
+    if (targetRow.length === 1) {
+      next[targetRowIdx] = [targetId, draggedId];
+    } else {
+      const partner = targetRow.find((x) => x !== targetId)!;
+      next[targetRowIdx] = [targetId, draggedId];
+      next.splice(targetRowIdx + 1, 0, [partner]);
+    }
+    next = next.filter((row) => row.length > 0);
+    persist({ panelRows: next });
+  }
+
+  /** Бросок панели В ЩЕЛЬ между строками — чисто вертикальное перемещение,
+   * панель становится отдельной строкой на всю ширину в этом месте (если она
+   * была в паре — бывший сосед остаётся на месте один, тоже во всю ширину). */
+  function movePanelToGap(draggedId: string, anchorId: string | null) {
+    let next = panelRows.map((row) => row.filter((x) => x !== draggedId)).filter((row) => row.length > 0);
+    const insertIdx = anchorId === null ? next.length : (() => {
+      const i = next.findIndex((row) => row.includes(anchorId));
+      return i === -1 ? next.length : i;
+    })();
+    next = [...next.slice(0, insertIdx), [draggedId], ...next.slice(insertIdx)];
+    persist({ panelRows: next });
   }
 
   const activeAndOverdue = rentals.filter((r) => {
@@ -194,30 +502,35 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
   const usableEquip = equipment.filter((e) => e.status !== "retired");
   const freeCount = usableEquip.filter((e) => equipmentDisplayStatus(e, rentals, today) === "available").length;
 
-  const revenue30 = rentals
-    .filter((r) => r.status === "returned" && dayDiff(r.actual_return || r.end_date) >= -30)
-    .reduce((s, r) => s + r.total, 0);
-  const revenuePrev30 = rentals
-    .filter((r) => {
-      const d = dayDiff(r.actual_return || r.end_date);
-      return r.status === "returned" && d < -30 && d >= -60;
-    })
-    .reduce((s, r) => s + r.total, 0);
+  // Период денежных плашек — настраиваемый (7/30/90), см. statPeriod выше.
+  const periodDays = Number(statPeriod);
+  const periodTo = today;
+  const periodFrom = isoAddDays(periodTo, -(periodDays - 1));
+  const prevPeriodTo = isoAddDays(periodFrom, -1);
+  const prevPeriodFrom = isoAddDays(prevPeriodTo, -(periodDays - 1));
+
+  const inPeriod = (r: Rental) => {
+    const d = r.actual_return || r.end_date;
+    return r.status === "returned" && d >= periodFrom && d <= periodTo;
+  };
+  const inPrevPeriod = (r: Rental) => {
+    const d = r.actual_return || r.end_date;
+    return r.status === "returned" && d >= prevPeriodFrom && d <= prevPeriodTo;
+  };
+  const revenuePeriod = rentals.filter(inPeriod).reduce((s, r) => s + r.total, 0);
+  const revenuePrevPeriod = rentals.filter(inPrevPeriod).reduce((s, r) => s + r.total, 0);
   const depositsHeld = activeAndOverdue.reduce((s, r) => s + r.deposit_total, 0);
-  const damage30 = rentals
-    .filter((r) => r.status === "returned" && dayDiff(r.actual_return || r.end_date) >= -30)
-    .reduce((s, r) => s + r.damage_fee, 0);
+  const damagePeriod = rentals.filter(inPeriod).reduce((s, r) => s + r.damage_fee, 0);
 
   let revenueDelta: { pct: number; tone: DeltaTone } | null = null;
-  if (revenuePrev30 > 0) {
-    const pct = Math.round(((revenue30 - revenuePrev30) / revenuePrev30) * 100);
+  if (revenuePrevPeriod > 0) {
+    const pct = Math.round(((revenuePeriod - revenuePrevPeriod) / revenuePrevPeriod) * 100);
     revenueDelta = { pct, tone: pct > 0 ? "good" : pct < 0 ? "critical" : "flat" };
   }
 
-  const dueList = activeAndOverdue
-    .slice()
-    .sort((a, b) => (a.end_date < b.end_date ? -1 : 1))
-    .slice(0, 7);
+  const DUE_SHOWN = 7;
+  const dueListAll = activeAndOverdue.slice().sort((a, b) => (a.end_date < b.end_date ? -1 : 1));
+  const dueList = dueListAll.slice(0, DUE_SHOWN);
 
   const byCategory: Record<string, CategoryStat> = {};
   usableEquip.forEach((e) => {
@@ -257,15 +570,6 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
     return r.items.map((it) => equipment.find((e) => e.id === it.equipment_id)?.name).join(", ");
   }
 
-  // Открытие карточки клиента: отдельной детальной панели клиента на
-  // дашборде пока нет — её строит другой инженер во вкладке "Клиенты"
-  // (общий механизм "открыть карточку клиента" ещё не готов). Как временное
-  // решение просто переходим на вкладку "Клиенты" с именем клиента в
-  // поиске, чтобы его было легко найти.
-  function openClient(c: Client) {
-    navigate("clients", { search: c.name });
-  }
-
   async function handleIssue(rentalId: string) {
     try {
       await api.post(`/businesses/${businessId}/rentals/${rentalId}/issue`);
@@ -276,178 +580,89 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
     }
   }
 
-  return (
-    <>
-      <div className="dash-toolbar">
-        <button
-          type="button"
-          className={"btn btn-sm" + (editMode ? " btn-primary" : "")}
-          disabled={!prefsLoaded}
-          onClick={() => setEditMode((v) => !v)}
-          title="Скрыть ненужные плашки и панели дашборда или переименовать их для себя"
-        >
-          <IconSliders /> {editMode ? "Готово" : "Настроить дашборд"}
-        </button>
-      </div>
+  const statLabel = (id: string): string => {
+    if (id === "stat-free") return "Свободно из " + usableEquip.length;
+    if (id === "stat-revenue30") return "Выручка за " + periodDays + " дней";
+    if (id === "stat-damage30") return "Компенсации за " + periodDays + " дней";
+    return STAT_TITLES[id] ?? id;
+  };
 
-      <div className="stat-grid">
-        {shows("stat-active") && (
-          <div className={"dash-block-cell" + (isHidden("stat-active") ? " dash-block-hidden" : "")}>
-            {editMode && (
-              <EditBar
-                id="stat-active"
-                defaultLabel="В аренде сейчас"
-                currentLabel={label("stat-active", "В аренде сейчас")}
-                hidden={isHidden("stat-active")}
-                onToggleHidden={toggleHidden}
-                onCommitLabel={commitLabel}
-              />
-            )}
-            <StatTile
-              label={label("stat-active", "В аренде сейчас")}
-              value={rentedEquipIds.size}
-              disabled={editMode}
-              onClick={() => navigate("rentals", { rentalFilter: "active" })}
-            />
-          </div>
-        )}
-        {shows("stat-free") && (
-          <div className={"dash-block-cell" + (isHidden("stat-free") ? " dash-block-hidden" : "")}>
-            {editMode && (
-              <EditBar
-                id="stat-free"
-                defaultLabel={"Свободно из " + usableEquip.length}
-                currentLabel={label("stat-free", "Свободно из " + usableEquip.length)}
-                hidden={isHidden("stat-free")}
-                onToggleHidden={toggleHidden}
-                onCommitLabel={commitLabel}
-              />
-            )}
-            <StatTile
-              label={label("stat-free", "Свободно из " + usableEquip.length)}
-              value={freeCount}
-              disabled={editMode}
-              onClick={() => navigate("equipment", { equipmentFilter: "available" })}
-            />
-          </div>
-        )}
-        {shows("stat-overdue") && (
-          <div className={"dash-block-cell" + (isHidden("stat-overdue") ? " dash-block-hidden" : "")}>
-            {editMode && (
-              <EditBar
-                id="stat-overdue"
-                defaultLabel="Просрочено возвратов"
-                currentLabel={label("stat-overdue", "Просрочено возвратов")}
-                hidden={isHidden("stat-overdue")}
-                onToggleHidden={toggleHidden}
-                onCommitLabel={commitLabel}
-              />
-            )}
-            <StatTile
-              label={label("stat-overdue", "Просрочено возвратов")}
-              value={overdue.length}
-              critical={overdue.length > 0}
-              disabled={editMode}
-              onClick={() => navigate("rentals", { rentalFilter: "overdue" })}
-            />
-          </div>
-        )}
-        {shows("stat-revenue30") && (
-          <div className={"dash-block-cell" + (isHidden("stat-revenue30") ? " dash-block-hidden" : "")}>
-            {editMode && (
-              <EditBar
-                id="stat-revenue30"
-                defaultLabel="Выручка за 30 дней"
-                currentLabel={label("stat-revenue30", "Выручка за 30 дней")}
-                hidden={isHidden("stat-revenue30")}
-                onToggleHidden={toggleHidden}
-                onCommitLabel={commitLabel}
-              />
-            )}
-            <StatTile
-              label={label("stat-revenue30", "Выручка за 30 дней")}
-              value={money(revenue30)}
-              mono
-              delta={revenueDelta}
-              disabled={editMode}
-              onClick={() => navigate("finance", { finance30: true })}
-            />
-          </div>
-        )}
-        {shows("stat-deposits") && (
-          <div className={"dash-block-cell" + (isHidden("stat-deposits") ? " dash-block-hidden" : "")}>
-            {editMode && (
-              <EditBar
-                id="stat-deposits"
-                defaultLabel="Депозиты на удержании"
-                currentLabel={label("stat-deposits", "Депозиты на удержании")}
-                hidden={isHidden("stat-deposits")}
-                onToggleHidden={toggleHidden}
-                onCommitLabel={commitLabel}
-              />
-            )}
-            <StatTile
-              label={label("stat-deposits", "Депозиты на удержании")}
-              value={money(depositsHeld)}
-              mono
-              disabled={editMode}
-              onClick={() => navigate("finance", { finance30: true })}
-            />
-          </div>
-        )}
-        {shows("stat-damage30") && (
-          <div className={"dash-block-cell" + (isHidden("stat-damage30") ? " dash-block-hidden" : "")}>
-            {editMode && (
-              <EditBar
-                id="stat-damage30"
-                defaultLabel="Компенсации за повреждения"
-                currentLabel={label("stat-damage30", "Компенсации за повреждения")}
-                hidden={isHidden("stat-damage30")}
-                onToggleHidden={toggleHidden}
-                onCommitLabel={commitLabel}
-              />
-            )}
-            <StatTile
-              label={label("stat-damage30", "Компенсации за повреждения")}
-              value={money(damage30)}
-              mono
-              disabled={editMode}
-              onClick={() => navigate("finance", { finance30: true })}
-            />
-          </div>
-        )}
-      </div>
+  function renderStat(id: string): ReactNode {
+    switch (id) {
+      case "stat-active":
+        return (
+          <StatTile
+            label={statLabel(id)}
+            value={rentedEquipIds.size}
+            disabled={editMode}
+            onClick={() => navigate("rentals", { rentalFilter: "active" })}
+          />
+        );
+      case "stat-free":
+        return (
+          <StatTile
+            label={statLabel(id)}
+            value={freeCount}
+            disabled={editMode}
+            onClick={() => navigate("equipment", { equipmentFilter: "available" })}
+          />
+        );
+      case "stat-overdue":
+        return (
+          <StatTile
+            label={statLabel(id)}
+            value={overdue.length}
+            critical={overdue.length > 0}
+            disabled={editMode}
+            onClick={() => navigate("rentals", { rentalFilter: "overdue" })}
+          />
+        );
+      case "stat-revenue30":
+        return (
+          <StatTile
+            label={statLabel(id)}
+            value={money(revenuePeriod)}
+            mono
+            delta={revenueDelta}
+            disabled={editMode}
+            onClick={() => navigate("finance", { finance30: true })}
+          />
+        );
+      case "stat-deposits":
+        return (
+          <StatTile label={statLabel(id)} value={money(depositsHeld)} mono disabled={editMode} onClick={() => navigate("finance", { finance30: true })} />
+        );
+      case "stat-damage30":
+        return (
+          <StatTile label={statLabel(id)} value={money(damagePeriod)} mono disabled={editMode} onClick={() => navigate("finance", { finance30: true })} />
+        );
+      default:
+        return null;
+    }
+  }
 
-      <div className="dash-grid">
-        {shows("panel-due") && (
-          <div className={"dash-block-cell" + (isHidden("panel-due") ? " dash-block-hidden" : "")}>
-            {editMode && (
-              <EditBar
-                id="panel-due"
-                defaultLabel="Ближайшие и просроченные возвраты"
-                currentLabel={label("panel-due", "Ближайшие и просроченные возвраты")}
-                hidden={isHidden("panel-due")}
-                onToggleHidden={toggleHidden}
-                onCommitLabel={commitLabel}
-              />
-            )}
-            <div className="panel">
-              <div className="panel-head">
-                <h2>{label("panel-due", "Ближайшие и просроченные возвраты")}</h2>
-                <span className="hint">{activeAndOverdue.length} в работе</span>
-              </div>
-              <div className="panel-body">
-                {activeAndOverdue.length === 0 ? (
-                  <div className="empty-note">Активных аренд нет.</div>
-                ) : (
-                  dueList.map((r) => {
+  function renderPanel(id: string): ReactNode {
+    switch (id) {
+      case "panel-notes":
+        return <NotesPanel businessId={businessId} isOwner={isOwner} notesMode={notesMode} onNotesModeChange={onNotesModeChange} />;
+
+      case "panel-due":
+        return (
+          <div className="panel">
+            <div className="panel-head">
+              <h2>{PANEL_TITLES[id]}</h2>
+              <span className="hint">{activeAndOverdue.length} в работе</span>
+            </div>
+            <div className="panel-body">
+              {activeAndOverdue.length === 0 ? (
+                <div className="empty-note">Активных аренд нет.</div>
+              ) : (
+                <>
+                  {dueList.map((r) => {
                     const c = clients.find((x) => x.id === r.client_id);
                     const names = itemNames(r);
                     const st = rentalDisplayStatus(r);
-                    const metaText =
-                      st === "overdue"
-                        ? "просрочено на " + Math.abs(dayDiff(r.end_date)) + " дн."
-                        : "до " + fmtDate(r.end_date);
+                    const metaText = st === "overdue" ? "просрочено на " + Math.abs(dayDiff(r.end_date)) + " дн." : "до " + fmtDate(r.end_date);
                     const inner = (
                       <>
                         <div className="due-main">
@@ -460,7 +675,7 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
                       </>
                     );
                     return c ? (
-                      <button key={r.id} className="due-item" onClick={() => openClient(c)}>
+                      <button key={r.id} className="due-item" onClick={() => onOpenClient(c.id)}>
                         {inner}
                       </button>
                     ) : (
@@ -468,89 +683,62 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
                         {inner}
                       </div>
                     );
-                  })
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {shows("panel-categories") && (
-          <div className={"dash-block-cell" + (isHidden("panel-categories") ? " dash-block-hidden" : "")}>
-            {editMode && (
-              <EditBar
-                id="panel-categories"
-                defaultLabel="Загрузка по категориям"
-                currentLabel={label("panel-categories", "Загрузка по категориям")}
-                hidden={isHidden("panel-categories")}
-                onToggleHidden={toggleHidden}
-                onCommitLabel={commitLabel}
-              />
-            )}
-            <div className="panel">
-              <div className="panel-head">
-                <h2>{label("panel-categories", "Загрузка по категориям")}</h2>
-                <span className="hint">{overallPct}% в среднем</span>
-              </div>
-              <div className="panel-body">
-                {catKeys.length === 0 && <div className="empty-note">Нет данных</div>}
-                {catKeys.map((cat, i) => {
-                  const d = byCategory[cat];
-                  const pct = Math.round((d.rented / d.total) * 100);
-                  return (
-                    <button
-                      key={cat}
-                      className="util-row"
-                      onClick={() => navigate("equipment", { equipmentFilter: "all", search: cat })}
-                    >
-                      <div className="util-name">
-                        <span className="util-name-text" title={cat}>
-                          {cat}
-                        </span>
-                        {d.maint > 0 && (
-                          <span className="util-maint" title={`${d.maint} на обслуживании`}>
-                            +{d.maint}
-                          </span>
-                        )}
-                      </div>
-                      <div className="util-track">
-                        <div
-                          className="util-fill"
-                          style={{ width: Math.max(4, pct) + "%", background: seqRamp[i % seqRamp.length] }}
-                        />
-                      </div>
-                      <div className="util-pct">{pct}%</div>
+                  })}
+                  {activeAndOverdue.length > DUE_SHOWN && (
+                    <button type="button" className="btn btn-sm" style={{ marginTop: 6 }} onClick={() => navigate("rentals", { rentalFilter: "active" })}>
+                      Показать все {activeAndOverdue.length} →
                     </button>
-                  );
-                })}
-              </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
-        )}
-      </div>
+        );
 
-      {shows("panel-risky") && (
-        <div
-          className={"dash-block-cell" + (isHidden("panel-risky") ? " dash-block-hidden" : "")}
-          style={{ marginTop: 16 }}
-        >
-          {editMode && (
-            <EditBar
-              id="panel-risky"
-              defaultLabel="Клиенты, требующие внимания"
-              currentLabel={label("panel-risky", "Клиенты, требующие внимания")}
-              hidden={isHidden("panel-risky")}
-              onToggleHidden={toggleHidden}
-              onCommitLabel={commitLabel}
-            />
-          )}
+      case "panel-categories":
+        return (
+          <div className="panel">
+            <div className="panel-head">
+              <h2>{PANEL_TITLES[id]}</h2>
+              <span className="hint">{overallPct}% в среднем</span>
+            </div>
+            <div className="panel-body">
+              {catKeys.length === 0 && <div className="empty-note">Нет данных</div>}
+              {catKeys.map((cat, i) => {
+                const d = byCategory[cat];
+                const pct = Math.round((d.rented / d.total) * 100);
+                return (
+                  <button key={cat} className="util-row" onClick={() => navigate("equipment", { equipmentFilter: "all", search: cat })}>
+                    <div className="util-name">
+                      <span className="util-name-text" title={cat}>
+                        {cat}
+                      </span>
+                      {d.maint > 0 && (
+                        <span className="util-maint" title={`${d.maint} на обслуживании`}>
+                          +{d.maint}
+                        </span>
+                      )}
+                    </div>
+                    <div className="util-track">
+                      <div className="util-fill" style={{ width: Math.max(4, pct) + "%", background: seqRamp[i % seqRamp.length] }} />
+                    </div>
+                    <div className="util-pct">{pct}%</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+
+      case "panel-risky":
+        return (
           <div className="panel">
             <div className="panel-head">
               <h2 style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ display: "flex", color: "var(--critical)" }}>
                   <IconAlert />
                 </span>
-                {label("panel-risky", "Клиенты, требующие внимания")}
+                {PANEL_TITLES[id]}
               </h2>
             </div>
             <div className="panel-body">
@@ -568,7 +756,7 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
                         : "до " + fmtDate(r.end_date);
                   const names = itemNames(r);
                   return (
-                    <button key={c.id} className="due-item" onClick={() => openClient(c)}>
+                    <button key={c.id} className="due-item" onClick={() => onOpenClient(c.id)}>
                       <div className="due-main">
                         <div className="due-title">{c.name}</div>
                         <div className="due-meta">
@@ -582,27 +770,13 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
               )}
             </div>
           </div>
-        </div>
-      )}
+        );
 
-      {shows("panel-topequip") && (
-        <div
-          className={"dash-block-cell" + (isHidden("panel-topequip") ? " dash-block-hidden" : "")}
-          style={{ marginTop: 16 }}
-        >
-          {editMode && (
-            <EditBar
-              id="panel-topequip"
-              defaultLabel="Топ оборудования по доходу"
-              currentLabel={label("panel-topequip", "Топ оборудования по доходу")}
-              hidden={isHidden("panel-topequip")}
-              onToggleHidden={toggleHidden}
-              onCommitLabel={commitLabel}
-            />
-          )}
+      case "panel-topequip":
+        return (
           <div className="panel">
             <div className="panel-head">
-              <h2>{label("panel-topequip", "Топ оборудования по доходу")}</h2>
+              <h2>{PANEL_TITLES[id]}</h2>
               <span className="hint">за всё время</span>
             </div>
             <div className="panel-body">
@@ -613,14 +787,7 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
                   const e = equipment.find((eq) => eq.id === x.id);
                   if (!e) return null;
                   return (
-                    <button
-                      key={x.id}
-                      className="due-item"
-                      // Отдельной карточки/детали оборудования тоже пока нет —
-                      // переходим на вкладку "Оборудование" с фильтром по имени,
-                      // как разумный временный вариант.
-                      onClick={() => navigate("equipment", { equipmentFilter: "all", search: e.name })}
-                    >
+                    <button key={x.id} className="due-item" onClick={() => onOpenEquipment(e.id)}>
                       <div className="due-main">
                         <div className="due-title">{e.name}</div>
                         <div className="due-meta">{e.category}</div>
@@ -632,27 +799,13 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
               )}
             </div>
           </div>
-        </div>
-      )}
+        );
 
-      {shows("panel-pickup") && (
-        <div
-          className={"dash-block-cell" + (isHidden("panel-pickup") ? " dash-block-hidden" : "")}
-          style={{ marginTop: 16 }}
-        >
-          {editMode && (
-            <EditBar
-              id="panel-pickup"
-              defaultLabel="Выдача ожидается сегодня"
-              currentLabel={label("panel-pickup", "Выдача ожидается сегодня")}
-              hidden={isHidden("panel-pickup")}
-              onToggleHidden={toggleHidden}
-              onCommitLabel={commitLabel}
-            />
-          )}
-          <div className="panel">
+      case "panel-pickup":
+        return (
+          <div className="panel panel-today">
             <div className="panel-head">
-              <h2>{label("panel-pickup", "Выдача ожидается сегодня")}</h2>
+              <h2>{PANEL_TITLES[id]}</h2>
             </div>
             <div className="panel-body">
               {pickupToday.length === 0 ? (
@@ -662,11 +815,7 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
                   const c = clients.find((x) => x.id === r.client_id);
                   const names = itemNames(r);
                   return (
-                    <div
-                      className={"mini-item" + (c ? " clickable" : "")}
-                      key={r.id}
-                      onClick={c ? () => openClient(c) : undefined}
-                    >
+                    <div className={"mini-item" + (c ? " clickable" : "")} key={r.id} onClick={c ? () => onOpenClient(c.id) : undefined}>
                       <span>
                         <b>{c?.name ?? "—"}</b> — {names}
                       </span>
@@ -687,27 +836,13 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
               )}
             </div>
           </div>
-        </div>
-      )}
+        );
 
-      {shows("panel-duetoday") && (
-        <div
-          className={"dash-block-cell" + (isHidden("panel-duetoday") ? " dash-block-hidden" : "")}
-          style={{ marginTop: 16 }}
-        >
-          {editMode && (
-            <EditBar
-              id="panel-duetoday"
-              defaultLabel="Возврат ожидается сегодня"
-              currentLabel={label("panel-duetoday", "Возврат ожидается сегодня")}
-              hidden={isHidden("panel-duetoday")}
-              onToggleHidden={toggleHidden}
-              onCommitLabel={commitLabel}
-            />
-          )}
-          <div className="panel">
+      case "panel-duetoday":
+        return (
+          <div className="panel panel-today">
             <div className="panel-head">
-              <h2>{label("panel-duetoday", "Возврат ожидается сегодня")}</h2>
+              <h2>{PANEL_TITLES[id]}</h2>
             </div>
             <div className="panel-body">
               {dueToday.length === 0 ? (
@@ -717,11 +852,7 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
                   const c = clients.find((x) => x.id === r.client_id);
                   const names = itemNames(r);
                   return (
-                    <div
-                      className={"mini-item" + (c ? " clickable" : "")}
-                      key={r.id}
-                      onClick={c ? () => openClient(c) : undefined}
-                    >
+                    <div className={"mini-item" + (c ? " clickable" : "")} key={r.id} onClick={c ? () => onOpenClient(c.id) : undefined}>
                       <span>
                         <b>{c?.name ?? "—"}</b> — {names}
                       </span>
@@ -746,8 +877,64 @@ export function DashboardTab({ navigate, businessId }: DashboardTabProps) {
               )}
             </div>
           </div>
+        );
+
+      default:
+        return null;
+    }
+  }
+
+  return (
+    <>
+      <div className="dash-toolbar">
+        <div className="segmented segmented-sm" title="Период выручки и компенсаций на плашках">
+          {(["7", "30", "90"] as StatPeriodKey[]).map((k) => (
+            <button key={k} type="button" className={statPeriod === k ? "active" : ""} onClick={() => setStatPeriod(k)}>
+              {k} дн.
+            </button>
+          ))}
         </div>
-      )}
+        <button
+          type="button"
+          className={"btn btn-sm" + (editMode ? " btn-primary" : "")}
+          disabled={!prefsLoaded}
+          onClick={() => setEditMode((v) => !v)}
+          title="Скрыть ненужные плашки и панели дашборда или перетащить их в другое место"
+        >
+          <IconSliders /> {editMode ? "Готово" : "Настроить дашборд"}
+        </button>
+      </div>
+
+      <div className={editMode ? "dash-editing" : undefined}>
+        <div className="stat-grid">
+          {statOrder.map(
+            (id) =>
+              shows(id) && (
+                <DraggableBlock key={id} id={id} hidden={isHidden(id)} editMode={editMode} onToggleHidden={toggleHidden} onDropOnId={reorderStat}>
+                  {renderStat(id)}
+                </DraggableBlock>
+              )
+          )}
+        </div>
+
+        {panelRows.map((row, rowIdx) => {
+          const visibleRow = row.filter((id) => shows(id));
+          if (visibleRow.length === 0) return null;
+          return (
+            <div key={row.join("+") || rowIdx}>
+              <RowGap editMode={editMode} anchorId={row[0]} onDropGap={movePanelToGap} />
+              <div className={"dash-row" + (visibleRow.length === 2 ? " dash-grid" : "")}>
+                {visibleRow.map((id) => (
+                  <DraggableBlock key={id} id={id} hidden={isHidden(id)} editMode={editMode} onToggleHidden={toggleHidden} onDropOnId={mergePanels}>
+                    {renderPanel(id)}
+                  </DraggableBlock>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        <RowGap editMode={editMode} anchorId={null} onDropGap={movePanelToGap} />
+      </div>
     </>
   );
 }

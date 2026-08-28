@@ -355,7 +355,7 @@ function EquipmentFormModal({
    статус/ставка/депозит, показатели (выручка/загрузка), пикер статуса
    обслуживания (+ дата окончания), мини-история аренд, кнопки изменить/удалить.
    ============================================================ */
-function EquipmentDetailPanel({
+export function EquipmentDetailPanel({
   businessId,
   equipmentId,
   onClose,

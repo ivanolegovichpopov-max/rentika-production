@@ -39,6 +39,18 @@ class PermissionLevel(str, enum.Enum):
 LEVEL_ORDER = {PermissionLevel.none: 0, PermissionLevel.view: 1, PermissionLevel.edit: 2}
 
 
+class NotesMode(str, enum.Enum):
+    """Кто может публиковать записи в доске «Заметки/новости» дашборда
+    (см. DashboardNote ниже). owner_only — пишет только владелец бизнеса,
+    остальные сотрудники только читают (сценарий «новости для сотрудников»);
+    everyone — писать может любой активный сотрудник бизнеса (сценарий
+    «общие быстрые заметки команды»). Удалять свою запись может её автор
+    всегда, любую запись — всегда владелец (модерация), независимо от режима."""
+
+    owner_only = "owner_only"
+    everyone = "everyone"
+
+
 class Business(Base):
     """Тенант. Каждый бизнес-клиент Ивана — это одна строка здесь; все
     операционные данные (оборудование/клиенты/аренды) привязаны к business_id
@@ -51,6 +63,12 @@ class Business(Base):
     owner_user_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
     status: Mapped[BusinessStatus] = mapped_column(
         Enum(BusinessStatus, name="business_status"), default=BusinessStatus.active, nullable=False
+    )
+    # Режим доски "Заметки/новости" на дашборде — см. NotesMode выше. По
+    # умолчанию owner_only (более консервативный вариант: ни один сотрудник
+    # не может писать на общую доску, пока владелец сам не разрешит).
+    notes_mode: Mapped[NotesMode] = mapped_column(
+        Enum(NotesMode, name="notes_mode"), default=NotesMode.owner_only, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -120,3 +138,27 @@ class Employee(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (UniqueConstraint("business_id", "user_id", name="uq_employee_business_user"),)
+
+
+class DashboardNote(Base):
+    """Одна запись в доске «Заметки/новости» на дашборде — см. NotesMode на
+    Business. Сознательно НЕ единое перезаписываемое поле (риск потери данных
+    при одновременном редактировании двумя сотрудниками — last-write-wins), а
+    лента отдельных записей: каждая новая запись не затирает предыдущие, и
+    несколько человек могут писать одновременно без конфликтов. author_name —
+    снимок имени сотрудника на момент публикации (не JOIN на Employee.name),
+    чтобы запись оставалась читаемой, даже если сотрудника позже переименуют
+    или отключат."""
+
+    __tablename__ = "dashboard_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("employees.id", ondelete="CASCADE"), nullable=False
+    )
+    author_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    text: Mapped[str] = mapped_column(Text(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

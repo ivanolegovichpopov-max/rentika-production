@@ -154,7 +154,7 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
   );
 }
 
-function ClientDetailPanel({
+export function ClientDetailPanel({
   businessId,
   clientId,
   onClose,
