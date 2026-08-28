@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app.api.routes import auth, businesses, clients, employees, equipment, positions, rentals, twofa
+from app.api.routes import auth, businesses, clients, dashboard, employees, equipment, positions, rentals, twofa
 from app.config import settings
 from app.core.rate_limit import limiter
 
@@ -37,6 +37,7 @@ app.include_router(employees.router, prefix=API_PREFIX)
 app.include_router(equipment.router, prefix=API_PREFIX)
 app.include_router(clients.router, prefix=API_PREFIX)
 app.include_router(rentals.router, prefix=API_PREFIX)
+app.include_router(dashboard.router, prefix=API_PREFIX)
 
 
 @app.get("/health")

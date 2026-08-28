@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -110,6 +110,13 @@ class Employee(Base):
     status: Mapped[EmployeeStatus] = mapped_column(
         Enum(EmployeeStatus, name="employee_status"), default=EmployeeStatus.active, nullable=False
     )
+    # Личная настройка дашборда (какие плашки/панели скрыты, их переименованные
+    # подписи) — JSON-строка {"hidden": [...], "labels": {...}}, см.
+    # app/schemas/business.py::DashboardPrefs. Хранится per-Employee (то есть
+    # per-человек в КОНКРЕТНОМ бизнесе), а не на User — один и тот же человек
+    # может работать в нескольких бизнесах и настраивать дашборд каждого
+    # по-своему. NULL = настроек ещё нет, используются значения по умолчанию.
+    dashboard_prefs: Mapped[str | None] = mapped_column(Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (UniqueConstraint("business_id", "user_id", name="uq_employee_business_user"),)

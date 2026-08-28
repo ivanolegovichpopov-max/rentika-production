@@ -93,3 +93,11 @@ export interface Rental {
   deposit_total: number; // сумма ТЕКУЩИХ deposit оборудования в позициях (не снимок на момент брони — см. заметки о деплое)
   items: RentalItem[];
 }
+
+// Личная настройка дашборда текущего сотрудника (какие плашки/панели скрыты,
+// какие переименованы) — GET/PUT /businesses/{id}/dashboard-prefs. Набор
+// валидных id блоков объявлен рядом с использованием, в DashboardTab.tsx.
+export interface DashboardPrefs {
+  hidden: string[];
+  labels: Record<string, string>;
+}
