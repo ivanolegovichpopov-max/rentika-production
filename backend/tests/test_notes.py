@@ -160,6 +160,35 @@ def test_notes_isolated_per_business(client):
     assert resp_b.json() == []
 
 
+def test_platform_admin_can_post_note_in_own_business(client, monkeypatch):
+    """Регрессия: get_business_context раньше ВСЕГДА подставлял ctx.employee=None
+    для платформенного админа, даже в его собственном бизнесе, где Employee-запись
+    реально существует (создаётся при /auth/register). Из-за этого POST .../notes
+    падал с 400 «нет профиля сотрудника» для владельца платформы в его же бизнесе —
+    то же самое било и по GET/PUT .../dashboard-prefs (см. app/api/routes/dashboard.py)."""
+    from app.api.routes import auth as auth_module
+
+    monkeypatch.setattr(auth_module.settings, "platform_admin_email", "admin@example.com")
+    admin = register_business(client, email="admin@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, admin["access_token"])
+
+    # Сам платформенный админ — владелец своего бизнеса, у него есть Employee.
+    resp = client.post(
+        f"/api/businesses/{business_id}/notes",
+        json={"text": "Заметка от платформенного админа в своём бизнесе"},
+        headers=auth_headers(admin["access_token"]),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["can_delete"] is True
+
+    prefs_resp = client.put(
+        f"/api/businesses/{business_id}/dashboard-prefs",
+        json={"hidden": ["panel-notes"], "stat_order": [], "panel_rows": []},
+        headers=auth_headers(admin["access_token"]),
+    )
+    assert prefs_resp.status_code == 200, prefs_resp.text
+
+
 def test_note_text_length_is_capped(client):
     owner = register_business(client, email="notes7@example.com", password="correct horse battery staple")
     business_id = _get_business_id(client, owner["access_token"])

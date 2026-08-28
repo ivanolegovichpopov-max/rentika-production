@@ -74,9 +74,21 @@ async def get_business_context(
     set_tenant_context(db, str(business_id))
 
     if user.is_platform_admin:
-        # Платформенный админ технически не обязан быть Employee — доступ
-        # даём, но помечаем действие в audit-логе выше по стеку как admin-override.
-        return BusinessContext(business_id=business_id, user=user, employee=None, full_access=True)
+        # Платформенный админ технически не обязан быть Employee — full_access
+        # даём безусловно. НО если у него в ЭТОМ бизнесе всё же есть своя
+        # запись Employee (типичный случай — его собственный бизнес,
+        # созданный при регистрации), подставляем её в ctx.employee, а не
+        # None: часть маршрутов (например создание записи в «Заметках»)
+        # требует конкретного employee_id как автора действия, и админ не
+        # должен упираться в «нет профиля сотрудника» там, где профиль
+        # физически есть. Для чужого бизнеса, где Employee-записи нет,
+        # ctx.employee корректно останется None — full_access всё равно даёт
+        # доступ на чтение/модерацию, но не даёт «авторства» там, где оно
+        # нужно (см. notes.py: без employee_id пост создать нельзя).
+        admin_employee = db.scalar(
+            select(Employee).where(Employee.business_id == business_id, Employee.user_id == user.id)
+        )
+        return BusinessContext(business_id=business_id, user=user, employee=admin_employee, full_access=True)
 
     employee = db.scalar(
         select(Employee).where(Employee.business_id == business_id, Employee.user_id == user.id)

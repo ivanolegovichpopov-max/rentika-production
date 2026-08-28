@@ -172,7 +172,7 @@ function DashboardShell({
   const todayLabel = new Date().toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" });
 
   const TITLES: Record<View, [string, string]> = {
-    dashboard: ["Дашборд", `Сводка на сегодня · ${todayLabel}`],
+    dashboard: ["Дашборд", `Сводка · ${todayLabel}`],
     equipment: ["Оборудование", equipment.length + " позиций в парке"],
     clients: ["Клиенты", clients.length + " в базе"],
     rentals: ["Аренды", overdueCount ? overdueCount + " просрочено — нужно связаться с клиентом" : "Все аренды под контролем"],

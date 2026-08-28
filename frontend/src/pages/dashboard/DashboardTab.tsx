@@ -49,7 +49,7 @@ interface DashboardTabProps {
 }
 
 type DeltaTone = "good" | "critical" | "flat";
-type StatPeriodKey = "7" | "30" | "90";
+type StatPeriodKey = "1" | "7" | "30" | "90";
 
 const STAT_IDS = ["stat-active", "stat-free", "stat-overdue", "stat-revenue30", "stat-deposits", "stat-damage30"];
 const PANEL_IDS = ["panel-notes", "panel-due", "panel-categories", "panel-risky", "panel-topequip", "panel-pickup", "panel-duetoday"];
@@ -582,8 +582,8 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
 
   const statLabel = (id: string): string => {
     if (id === "stat-free") return "Свободно из " + usableEquip.length;
-    if (id === "stat-revenue30") return "Выручка за " + periodDays + " дней";
-    if (id === "stat-damage30") return "Компенсации за " + periodDays + " дней";
+    if (id === "stat-revenue30") return periodDays === 1 ? "Выручка сегодня" : "Выручка за " + periodDays + " дней";
+    if (id === "stat-damage30") return periodDays === 1 ? "Компенсации сегодня" : "Компенсации за " + periodDays + " дней";
     return STAT_TITLES[id] ?? id;
   };
 
@@ -888,9 +888,9 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
     <>
       <div className="dash-toolbar">
         <div className="segmented segmented-sm" title="Период выручки и компенсаций на плашках">
-          {(["7", "30", "90"] as StatPeriodKey[]).map((k) => (
+          {(["1", "7", "30", "90"] as StatPeriodKey[]).map((k) => (
             <button key={k} type="button" className={statPeriod === k ? "active" : ""} onClick={() => setStatPeriod(k)}>
-              {k} дн.
+              {k === "1" ? "Сегодня" : `${k} дн.`}
             </button>
           ))}
         </div>
