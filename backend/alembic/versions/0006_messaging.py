@@ -29,6 +29,7 @@ Create Date: 2026-08-28
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum
 
 from app.db_types import GUID
 
@@ -44,11 +45,31 @@ CONVERSATION_TYPE_VALUES = ("dm", "group")
 def upgrade() -> None:
     bind = op.get_bind()
 
+    # create_type=False на колонках ниже — намеренно: тип уже создаём сами,
+    # явно, строкой выше, с checkfirst=True (идемпотентно). Без create_type=False
+    # SQLAlchemy при эмиссии ADD COLUMN/CREATE TABLE попытается создать тот же
+    # тип ЕЩЁ РАЗ автоматически — и это происходит БЕЗ какой-либо проверки
+    # существования (checkfirst на такой автосоздание не распространяется,
+    # это отдельный, безусловный CREATE TYPE) — из-за чего билд падал с
+    # psycopg.errors.DuplicateObject: type "conversation_type" already exists.
+    #
+    # Важно: create_type=False нужно передавать именно в диалект-специфичный
+    # sqlalchemy.dialects.postgresql.ENUM, а не в универсальный sa.Enum —
+    # проверено эмпирически (реальный Postgres 16): универсальный sa.Enum при
+    # компиляции CREATE TABLE адаптируется во внутреннюю postgresql-реализацию
+    # заново, и флаг create_type при этой адаптации теряется, так что
+    # автосоздание типа всё равно происходит и ошибка повторяется. PGEnum
+    # (диалектный класс) этой проблеме не подвержен.
     messaging_permission_enum = sa.Enum(*MESSAGING_PERMISSION_VALUES, name="messaging_permission")
     messaging_permission_enum.create(bind, checkfirst=True)
     op.add_column(
         "businesses",
-        sa.Column("messaging_permission", messaging_permission_enum, nullable=False, server_default="owner_only"),
+        sa.Column(
+            "messaging_permission",
+            PGEnum(*MESSAGING_PERMISSION_VALUES, name="messaging_permission", create_type=False),
+            nullable=False,
+            server_default="owner_only",
+        ),
     )
     # server_default только для проставления значения существующим строкам —
     # дальше значение всегда приходит явно из кода (см. 0005 для того же
@@ -67,7 +88,7 @@ def upgrade() -> None:
             sa.ForeignKey("businesses.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("type", conversation_type_enum, nullable=False),
+        sa.Column("type", PGEnum(*CONVERSATION_TYPE_VALUES, name="conversation_type", create_type=False), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=True),
         sa.Column(
             "created_by_employee_id",
