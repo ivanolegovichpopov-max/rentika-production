@@ -403,7 +403,13 @@ function DashboardShell({
                 />
               )}
               {view === "equipment" && (
-                <EquipmentTab businessId={businessId} search={search} filter={equipmentFilter} setFilter={setEquipmentFilter} />
+                <EquipmentTab
+                  businessId={businessId}
+                  search={search}
+                  filter={equipmentFilter}
+                  setFilter={setEquipmentFilter}
+                  isOwner={isOwner}
+                />
               )}
               {view === "clients" && <ClientsTab businessId={businessId} search={search} />}
               {view === "rentals" && (

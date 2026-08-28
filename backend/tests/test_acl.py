@@ -86,6 +86,15 @@ def test_employee_with_edit_permission_can_create(client):
         headers=auth_headers(owner["access_token"]),
     )
 
+    # Категория заранее заведена владельцем в справочнике — сотрудник с edit
+    # на "Оборудование" НЕ может создавать новые категории (см.
+    # test_equipment_categories.py), только пользоваться уже существующими.
+    client.post(
+        f"/api/businesses/{business_id}/equipment-categories",
+        json={"name": "Инструмент"},
+        headers=auth_headers(owner["access_token"]),
+    )
+
     employee_token = _login(client, "manager@example.com", "another long enough password")
     resp = client.post(
         f"/api/businesses/{business_id}/equipment",

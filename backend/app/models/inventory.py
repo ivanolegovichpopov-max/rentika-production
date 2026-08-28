@@ -9,7 +9,7 @@ import enum
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, func
+from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -37,6 +37,38 @@ class ClientRating(str, enum.Enum):
     blacklist = "blacklist"  # «чёрный список»
 
 
+class EquipmentCategory(Base):
+    """Жёсткий справочник категорий оборудования (одиннадцатый... нет,
+    тринадцатый проход — см. claude/notes.md). Создание записи в справочнике
+    — привилегия исключительно владельца бизнеса (см. app/api/routes/
+    equipment.py: create_equipment_category использует ctx.full_access, а не
+    edit_dep) — этим же принципом уже управляются Position/Permission и
+    business.notes_mode/messaging_permission. Обычные роли с доступом
+    view/edit на «Оборудование» могут только ВЫБИРАТЬ из уже существующих
+    категорий при заведении/редактировании позиции (см. Equipment.category
+    ниже) — свободный ввод текста для них закрыт валидацией на уровне API,
+    иначе весь смысл жёсткого справочника (нет дублей вроде «Инструмент» /
+    «инструмент» / «инструменты») теряется.
+
+    equipment.category намеренно остаётся простой строкой без FK на эту
+    таблицу (см. комментарий там) — эта таблица используется только для
+    валидации на уровне API и для автодополнения на фронте, а не как
+    единственный источник истины о том, какие значения физически лежат в
+    equipment.category (после миграции там могут быть и старые «мусорные»
+    значения — см. 0008_equipment_categories.py, backfill из уже
+    существующих данных)."""
+
+    __tablename__ = "equipment_categories"
+    __table_args__ = (UniqueConstraint("business_id", "name", name="uq_equipment_category_business_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Equipment(Base):
     __tablename__ = "equipment"
 
@@ -45,6 +77,11 @@ class Equipment(Base):
         GUID(), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Без FK на equipment_categories намеренно — см. докстринг EquipmentCategory
+    # выше. Валидация «категория должна существовать в справочнике» живёт на
+    # уровне API (app/api/routes/equipment.py:_ensure_category), не в схеме БД —
+    # это даёт миграции безопасно переехать со старыми/мусорными значениями
+    # без риска упасть на constraint-violation при бэкафилле.
     category: Mapped[str] = mapped_column(String(255), nullable=False)
     code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     daily_rate: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
@@ -58,6 +95,10 @@ class Equipment(Base):
         Enum(EquipmentStatus, name="equipment_status"), default=EquipmentStatus.available, nullable=False
     )
     maintenance_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Свободная заметка по позиции (состояние, комплектация, особенности —
+    # что угодно, что не влезает в структурированные поля). Добавлено по
+    # запросу пользователя в тринадцатом проходе.
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import { useData } from "../../context/DataContext";
-import type { Equipment, Rental } from "../../api/types";
+import type { Equipment, EquipmentCategory, EquipmentImportResult, Rental } from "../../api/types";
 import { EQ_META, RENTAL_META, Badge, equipmentDisplayStatus, nextFreeDate, rentalDisplayStatus } from "../../lib/statusMeta";
 import { money, fmtDate, isoAddDays, todayISO } from "../../lib/format";
 import { IconClose } from "../../lib/icons";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { parseCsv, csvRowsToObjects, toCsv } from "../../lib/csv";
 
 const FILTERS: { id: string; label: string }[] = [
   { id: "all", label: "Все" },
@@ -160,6 +161,7 @@ interface EquipmentFormState {
   period_days: string;
   period_price: string;
   period_price_after: string;
+  notes: string;
 }
 
 const EMPTY_FORM: EquipmentFormState = {
@@ -171,6 +173,7 @@ const EMPTY_FORM: EquipmentFormState = {
   period_days: "",
   period_price: "",
   period_price_after: "",
+  notes: "",
 };
 
 function formFromEquipment(e: Equipment): EquipmentFormState {
@@ -183,7 +186,19 @@ function formFromEquipment(e: Equipment): EquipmentFormState {
     period_days: e.period_days != null ? String(e.period_days) : "",
     period_price: e.period_price != null ? String(e.period_price) : "",
     period_price_after: e.period_price_after != null ? String(e.period_price_after) : "",
+    notes: e.notes ?? "",
   };
+}
+
+/** Форма для кнопки "Копировать" на слайдовере (см. EquipmentDetailPanel) —
+ * то же, что formFromEquipment, но с очищенным инвентарным номером: копия
+ * позиции с тем же № была бы источником путаницы (см. согласование с
+ * пользователем в тринадцатом проходе — "Полностью согласен, делаем!" про
+ * саму фичу дублирования). Название получает суффикс "(копия)", чтобы в
+ * списке сразу было видно, что это новая, ещё не отредактированная позиция.
+ */
+function formFromEquipmentAsCopy(e: Equipment): EquipmentFormState {
+  return { ...formFromEquipment(e), name: e.name + " (копия)", code: "" };
 }
 
 function formToPayload(form: EquipmentFormState) {
@@ -196,6 +211,7 @@ function formToPayload(form: EquipmentFormState) {
     period_days: form.period_days ? Number(form.period_days) : null,
     period_price: form.period_price ? Number(form.period_price) : null,
     period_price_after: form.period_price_after ? Number(form.period_price_after) : null,
+    notes: form.notes || null,
   };
 }
 
@@ -208,6 +224,8 @@ function EquipmentFormModal({
   title,
   initial,
   error,
+  isOwner,
+  categories,
   onClose,
   onSubmit,
 }: {
@@ -215,6 +233,8 @@ function EquipmentFormModal({
   title: string;
   initial: EquipmentFormState;
   error: string | null;
+  isOwner: boolean;
+  categories: EquipmentCategory[];
   onClose: () => void;
   onSubmit: (form: EquipmentFormState) => void;
 }) {
@@ -260,12 +280,47 @@ function EquipmentFormModal({
           <div className="field-row">
             <div className="field">
               <label>Категория</label>
-              <input
-                required
-                value={form.category}
-                onChange={(e) => setForm({ ...form, category: e.target.value })}
-                placeholder="Инструмент, электроника…"
-              />
+              {isOwner ? (
+                // Владелец может ввести и совсем новое название — оно
+                // автоматически заведётся в справочнике при сохранении (см.
+                // backend: app/api/routes/equipment.py:_ensure_category).
+                // datalist даёт автодополнение по уже существующим, но не
+                // запрещает свободный ввод — это и есть "владелец создаёт
+                // категории".
+                <>
+                  <input
+                    required
+                    list="equipment-category-options"
+                    value={form.category}
+                    onChange={(e) => setForm({ ...form, category: e.target.value })}
+                    placeholder="Инструмент, электроника… (или новая категория)"
+                  />
+                  <datalist id="equipment-category-options">
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.name} />
+                    ))}
+                  </datalist>
+                </>
+              ) : (
+                // Остальные роли — только выбор из уже существующего
+                // справочника, свободный текст закрыт: он всё равно будет
+                // отклонён backend'ом (400), выпадающий список честнее
+                // показывает границы прав, чем текстовое поле, которое
+                // потом откажется сохраняться.
+                <select required value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                  <option value="" disabled>
+                    Выберите категорию…
+                  </option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {categories.length === 0 && !isOwner && (
+                <div className="field-hint">Справочник категорий пуст — попросите владельца бизнеса добавить категории.</div>
+              )}
             </div>
             <div className="field">
               <label>Инв. номер</label>
@@ -336,6 +391,15 @@ function EquipmentFormModal({
             каждый следующий период из N дней — по второй. Например: 690 ₽ за первые 7 дней, затем 190 ₽ за каждые
             следующие 7 дней.
           </div>
+          <div className="field">
+            <label>Заметка</label>
+            <textarea
+              rows={3}
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              placeholder="Состояние, комплектация, особенности — что угодно, что стоит помнить про эту позицию"
+            />
+          </div>
           {error && <div className="form-error">{error}</div>}
         </div>
         <div className="modal-foot">
@@ -361,12 +425,21 @@ export function EquipmentDetailPanel({
   equipmentId,
   onClose,
   onEdit,
+  onCopy,
   onDeleted,
 }: {
   businessId: string;
   equipmentId: string;
   onClose: () => void;
   onEdit: (id: string) => void;
+  // Необязательный — кнопка "Копировать" показывается, только если её
+  // реализовал вызывающий компонент. С дашборда слайдовер открывается в
+  // сокращённом варианте (см. Dashboard.tsx: "Изменить" там просто уводит
+  // на вкладку "Оборудование", а не открывает форму на месте) — дублировать
+  // ту же логику предзаполнения формы там нет смысла, полноценная кнопка
+  // нужна только во вкладке "Оборудование" (EquipmentTab), где и живёт
+  // сама форма/модалка.
+  onCopy?: (id: string) => void;
   onDeleted: () => void;
 }) {
   const { equipment, clients, rentals, reloadEquipment } = useData();
@@ -455,10 +528,14 @@ export function EquipmentDetailPanel({
           <span className="k">Депозит</span>
           <span className="mono">{money(item.deposit)}</span>
         </div>
-        {/* Поля "Заметка" здесь нет: у demo-прототипа e.notes есть, но у
-            production-модели Equipment (app/models/inventory.py) и её схем
-            (app/schemas/inventory.py) поля notes нет вовсе — это
-            задокументированный пробел относительно демо, а не баг рендера. */}
+        {item.notes && (
+          <div style={{ marginTop: "10px" }}>
+            <div className="k" style={{ marginBottom: "4px" }}>
+              Заметка
+            </div>
+            <div style={{ whiteSpace: "pre-wrap", fontSize: "13px" }}>{item.notes}</div>
+          </div>
+        )}
       </div>
 
       <div className="slideover-section">
@@ -531,6 +608,11 @@ export function EquipmentDetailPanel({
         <button className="btn" onClick={() => onEdit(equipmentId)}>
           Изменить
         </button>
+        {onCopy && (
+          <button className="btn" onClick={() => onCopy(equipmentId)}>
+            Копировать
+          </button>
+        )}
         <button className="btn btn-danger-ghost" onClick={() => void handleDelete()}>
           Удалить
         </button>
@@ -542,6 +624,292 @@ export function EquipmentDetailPanel({
 }
 
 /* ============================================================
+   Массовый импорт оборудования из CSV — по запросу пользователя в
+   тринадцатом проходе ("обязательно нужно реализовать в лучшем виде, как
+   считаешь ты"): скачиваемый шаблон → выбор файла → клиентский
+   предпросмотр/лёгкая валидация (не ждём сети, чтобы показать явные
+   проблемы вроде пустого имени) → отправка файла целиком на backend
+   (там — вторая, настоящая валидация построчно, см.
+   app/api/routes/equipment.py:import_equipment) → отчёт по каждой строке.
+   ============================================================ */
+const IMPORT_TEMPLATE_HEADER = [
+  "name",
+  "category",
+  "code",
+  "daily_rate",
+  "deposit",
+  "period_days",
+  "period_price",
+  "period_price_after",
+  "notes",
+];
+
+const IMPORT_TEMPLATE_EXAMPLE = [
+  "Перфоратор Bosch GBH 5-40",
+  "Инструмент",
+  "INV-101",
+  "500",
+  "2000",
+  "7",
+  "2900",
+  "350",
+  "Комплект полный, состояние хорошее",
+];
+
+function downloadImportTemplate() {
+  const csv = toCsv(IMPORT_TEMPLATE_HEADER, [IMPORT_TEMPLATE_EXAMPLE]);
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }); // BOM — чтобы Excel сразу открыл в UTF-8, не спрашивая кодировку
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "equipment-import-template.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+interface ImportPreviewRow {
+  row: number;
+  name: string;
+  category: string;
+  daily_rate: string;
+  problems: string[];
+}
+
+/** Лёгкая клиентская проверка — только то, что можно сказать без сети
+ * (справочник категорий уже загружен в контексте, но окончательное решение
+ * "существует ли категория" всё равно принимает backend, в том числе
+ * потому что для владельца неизвестная категория — это не ошибка, а повод
+ * завести её). Здесь ловим только совсем явный мусор — пустые обязательные
+ * поля и нечисловую ставку — чтобы пользователь увидел проблему до
+ * отправки файла, а не только из ответа сервера. */
+function validatePreviewRow(obj: Record<string, string>): string[] {
+  const problems: string[] = [];
+  if (!obj.name) problems.push("нет названия");
+  if (!obj.category) problems.push("нет категории");
+  const rate = (obj.daily_rate || "").replace(",", ".");
+  if (!rate) problems.push("нет ставки");
+  else if (Number.isNaN(Number(rate))) problems.push("ставка не число");
+  return problems;
+}
+
+function EquipmentImportModal({
+  open,
+  businessId,
+  onClose,
+  onImported,
+}: {
+  open: boolean;
+  businessId: string;
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<ImportPreviewRow[]>([]);
+  const [headerError, setHeaderError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [result, setResult] = useState<EquipmentImportResult | null>(null);
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  function reset() {
+    setFile(null);
+    setPreview([]);
+    setHeaderError(null);
+    setSubmitError(null);
+    setResult(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function handleClose() {
+    reset();
+    onClose();
+  }
+
+  async function handleFileChange(f: File | null) {
+    setFile(f);
+    setResult(null);
+    setSubmitError(null);
+    setPreview([]);
+    setHeaderError(null);
+    if (!f) return;
+    const text = await f.text();
+    const parsed = parseCsv(text);
+    const header = parsed.header.map((h) => h.trim().toLowerCase());
+    if (!header.includes("name") || !header.includes("category") || !header.includes("daily_rate")) {
+      setHeaderError("В заголовке файла должны быть как минимум колонки: name, category, daily_rate");
+      return;
+    }
+    const objects = csvRowsToObjects(parsed);
+    setPreview(
+      objects.map((obj, idx) => ({
+        row: idx + 2, // строка 1 — заголовок
+        name: obj.name || "",
+        category: obj.category || "",
+        daily_rate: obj.daily_rate || "",
+        problems: validatePreviewRow(obj),
+      }))
+    );
+  }
+
+  async function handleImport() {
+    if (!file) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await api.postForm<EquipmentImportResult>(`/businesses/${businessId}/equipment/import`, form);
+      setResult(res);
+      if (res.created > 0) onImported();
+    } catch (err) {
+      setSubmitError(err instanceof ApiError ? err.message : "Не удалось загрузить файл");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const problemCount = preview.filter((r) => r.problems.length > 0).length;
+
+  return (
+    <dialog className="wide" ref={ref} onClose={handleClose}>
+      <div className="modal-head">
+        <h3>Массовый импорт оборудования из CSV</h3>
+        <button type="button" className="icon-btn" onClick={handleClose}>
+          <IconClose />
+        </button>
+      </div>
+      <div className="modal-body">
+        {!result && (
+          <>
+            <div className="field-hint" style={{ marginBottom: "10px" }}>
+              Файл CSV с заголовком в первой строке. Обязательные колонки: <code>name</code>, <code>category</code>,{" "}
+              <code>daily_rate</code>. Необязательные: <code>code</code>, <code>deposit</code>,{" "}
+              <code>period_days</code>, <code>period_price</code>, <code>period_price_after</code>,{" "}
+              <code>notes</code>. Категория должна либо уже быть в справочнике, либо — если импорт делает владелец
+              бизнеса — заведётся автоматически.
+            </div>
+            <button type="button" className="btn btn-sm" onClick={downloadImportTemplate}>
+              Скачать шаблон CSV
+            </button>
+            <div className="field" style={{ marginTop: "14px" }}>
+              <label>Файл</label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(e) => void handleFileChange(e.target.files?.[0] ?? null)}
+              />
+            </div>
+            {headerError && <div className="form-error">{headerError}</div>}
+            {preview.length > 0 && (
+              <>
+                <div className="field-hint" style={{ marginTop: "10px" }}>
+                  Найдено строк: {preview.length}
+                  {problemCount > 0 ? `, из них с явными проблемами: ${problemCount} (не пройдут импорт)` : ""}. Это
+                  предварительная проверка на устройстве — окончательную проверку (включая справочник категорий)
+                  выполнит сервер.
+                </div>
+                <div className="table-wrap" style={{ maxHeight: "260px", overflowY: "auto", marginTop: "8px" }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Строка</th>
+                        <th>Название</th>
+                        <th>Категория</th>
+                        <th>Ставка</th>
+                        <th>Проблемы</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.map((r) => (
+                        <tr key={r.row}>
+                          <td className="mono">{r.row}</td>
+                          <td>{r.name || "—"}</td>
+                          <td>{r.category || "—"}</td>
+                          <td className="mono">{r.daily_rate || "—"}</td>
+                          <td>{r.problems.length > 0 ? r.problems.join(", ") : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+            {submitError && <div className="form-error">{submitError}</div>}
+          </>
+        )}
+
+        {result && (
+          <>
+            <div className="field-hint" style={{ marginBottom: "10px" }}>
+              Готово: создано {result.created} из {result.total}
+              {result.failed > 0 ? `, ошибок: ${result.failed}` : ""}.
+            </div>
+            <div className="table-wrap" style={{ maxHeight: "320px", overflowY: "auto" }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Строка</th>
+                    <th>Название</th>
+                    <th>Результат</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.results.map((r) => (
+                    <tr key={r.row}>
+                      <td className="mono">{r.row}</td>
+                      <td>{r.name}</td>
+                      <td>
+                        {r.ok ? (
+                          <span style={{ color: "var(--good-ink)", fontWeight: 600 }}>Создано</span>
+                        ) : (
+                          <span style={{ color: "var(--critical-ink)" }}>{r.error}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+      <div className="modal-foot">
+        {result ? (
+          <button type="button" className="btn btn-primary" onClick={handleClose}>
+            Готово
+          </button>
+        ) : (
+          <>
+            <button type="button" className="btn" onClick={handleClose}>
+              Отмена
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!file || !!headerError || submitting}
+              onClick={() => void handleImport()}
+            >
+              {submitting ? "Импортируем…" : "Импортировать"}
+            </button>
+          </>
+        )}
+      </div>
+    </dialog>
+  );
+}
+
+/* ============================================================
    Вкладка «Оборудование»
    ============================================================ */
 export function EquipmentTab({
@@ -549,26 +917,44 @@ export function EquipmentTab({
   search,
   filter,
   setFilter,
+  isOwner,
 }: {
   businessId: string;
   search: string;
   filter: string;
   setFilter: (f: string) => void;
+  isOwner: boolean;
 }) {
-  const { equipment, rentals, reloadEquipment } = useData();
+  const { equipment, equipmentCategories, rentals, reloadEquipment, reloadEquipmentCategories } = useData();
   const [sort, setSort] = useState<EquipmentSort>({ key: null, dir: "asc" });
+  const [categoryFilter, setCategoryFilter] = useState("all");
   const [modalMode, setModalMode] = useState<"add" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [copySource, setCopySource] = useState<Equipment | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const today = todayISO();
   const q = search.trim().toLowerCase();
-  const filtered = equipment.filter((e) => {
-    const matchesFilter = filter === "all" || equipmentDisplayStatus(e, rentals, today) === filter;
+  // Категорийный фильтр — независимый от поиска и статусного фильтра,
+  // комбинируется с обоими (см. согласование с пользователем в тринадцатом
+  // проходе: "Фильтр категорий обязательно нужен").
+  const bySearchAndCategory = equipment.filter((e) => {
+    const matchesCategory = categoryFilter === "all" || e.category === categoryFilter;
     const matchesSearch = !q || (e.name + " " + e.category + " " + (e.code ?? "")).toLowerCase().includes(q);
-    return matchesFilter && matchesSearch;
+    return matchesCategory && matchesSearch;
   });
+  // Счётчики на кнопках статуса считаются от уже применённых поиска и
+  // категории, но НЕ от самого статусного фильтра — иначе, переключаясь
+  // между статусами, пользователь видел бы на остальных кнопках всегда "0"
+  // (см. согласование: "Счётчики - делаем").
+  const statusCounts: Record<string, number> = { all: bySearchAndCategory.length };
+  for (const f of FILTERS) {
+    if (f.id === "all") continue;
+    statusCounts[f.id] = bySearchAndCategory.filter((e) => equipmentDisplayStatus(e, rentals, today) === f.id).length;
+  }
+  const filtered = bySearchAndCategory.filter((e) => filter === "all" || equipmentDisplayStatus(e, rentals, today) === filter);
   const list = sortEquipmentList(filtered, sort, rentals, today);
 
   function toggleSort(key: string) {
@@ -580,19 +966,29 @@ export function EquipmentTab({
 
   function openAddModal() {
     setEditingId(null);
+    setCopySource(null);
     setFormError(null);
     setModalMode("add");
   }
 
   function openEditModal(id: string) {
     setEditingId(id);
+    setCopySource(null);
     setFormError(null);
     setModalMode("edit");
+  }
+
+  function openCopyModal(item: Equipment) {
+    setEditingId(null);
+    setCopySource(item);
+    setFormError(null);
+    setModalMode("add");
   }
 
   function closeFormModal() {
     setModalMode(null);
     setEditingId(null);
+    setCopySource(null);
     setFormError(null);
   }
 
@@ -605,34 +1001,63 @@ export function EquipmentTab({
         await api.post(`/businesses/${businessId}/equipment`, formToPayload(form));
       }
       closeFormModal();
-      await reloadEquipment();
+      await Promise.all([reloadEquipment(), reloadEquipmentCategories()]);
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : "Не удалось сохранить оборудование");
     }
   }
 
   const editingItem = editingId ? equipment.find((e) => e.id === editingId) ?? null : null;
-  const formTitle = modalMode === "edit" ? "Изменить оборудование" : "Новое оборудование";
-  const formInitial = modalMode === "edit" && editingItem ? formFromEquipment(editingItem) : EMPTY_FORM;
+  const formTitle = modalMode === "edit" ? "Изменить оборудование" : copySource ? "Копия оборудования" : "Новое оборудование";
+  const formInitial =
+    modalMode === "edit" && editingItem
+      ? formFromEquipment(editingItem)
+      : copySource
+      ? formFromEquipmentAsCopy(copySource)
+      : EMPTY_FORM;
+
+  const categoryNames = equipmentCategories.map((c) => c.name);
 
   return (
     <div>
       <div className="tab-toolbar">
-        <div className="segmented">
-          {FILTERS.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              className={filter === f.id ? "active" : ""}
-              onClick={() => setFilter(f.id)}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          <div className="segmented">
+            {FILTERS.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                className={filter === f.id ? "active" : ""}
+                onClick={() => setFilter(f.id)}
+              >
+                {f.label} ({statusCounts[f.id] ?? 0})
+              </button>
+            ))}
+          </div>
+          {categoryNames.length > 0 && (
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              style={{ maxWidth: "220px" }}
+              title="Фильтр по категории"
             >
-              {f.label}
-            </button>
-          ))}
+              <option value="all">Все категории</option>
+              {categoryNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
-        <button className="btn btn-primary" onClick={openAddModal}>
-          + Добавить
-        </button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button className="btn" onClick={() => setImportOpen(true)}>
+            Импорт CSV
+          </button>
+          <button className="btn btn-primary" onClick={openAddModal}>
+            + Добавить
+          </button>
+        </div>
       </div>
 
       {list.length === 0 ? (
@@ -699,8 +1124,17 @@ export function EquipmentTab({
         title={formTitle}
         initial={formInitial}
         error={formError}
+        isOwner={isOwner}
+        categories={equipmentCategories}
         onClose={closeFormModal}
         onSubmit={(form) => void handleSubmitForm(form)}
+      />
+
+      <EquipmentImportModal
+        open={importOpen}
+        businessId={businessId}
+        onClose={() => setImportOpen(false)}
+        onImported={() => void Promise.all([reloadEquipment(), reloadEquipmentCategories()])}
       />
 
       {openId && <div className="slideover-backdrop" onClick={() => setOpenId(null)} />}
@@ -712,6 +1146,11 @@ export function EquipmentTab({
           onEdit={(id) => {
             setOpenId(null);
             openEditModal(id);
+          }}
+          onCopy={(id) => {
+            const item = equipment.find((e) => e.id === id);
+            setOpenId(null);
+            if (item) openCopyModal(item);
           }}
           onDeleted={() => setOpenId(null)}
         />

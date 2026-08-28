@@ -6,6 +6,22 @@ from pydantic import BaseModel, Field
 from app.models.inventory import ClientRating, EquipmentStatus, RentalStatus
 
 
+class EquipmentCategoryCreate(BaseModel):
+    """Создание записи в справочнике категорий — эндпоинт доступен только
+    владельцу бизнеса (см. app/api/routes/equipment.py:create_equipment_category,
+    ctx.full_access), сама схема этого не проверяет."""
+
+    name: str = Field(min_length=1, max_length=255)
+
+
+class EquipmentCategoryOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class EquipmentCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     category: str = Field(min_length=1, max_length=255)
@@ -15,6 +31,7 @@ class EquipmentCreate(BaseModel):
     period_days: int | None = Field(default=None, ge=1)
     period_price: float | None = Field(default=None, ge=0)
     period_price_after: float | None = Field(default=None, ge=0)
+    notes: str | None = Field(default=None, max_length=4000)
 
 
 class EquipmentUpdate(BaseModel):
@@ -35,6 +52,7 @@ class EquipmentUpdate(BaseModel):
     period_price_after: float | None = Field(default=None, ge=0)
     status: EquipmentStatus | None = None
     maintenance_until: date | None = None
+    notes: str | None = Field(default=None, max_length=4000)
 
 
 class EquipmentOut(BaseModel):
@@ -49,9 +67,44 @@ class EquipmentOut(BaseModel):
     period_price_after: float | None
     status: EquipmentStatus
     maintenance_until: date | None
+    notes: str | None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class EquipmentImportRow(BaseModel):
+    """Одна строка CSV-импорта — те же поля, что и EquipmentCreate, но без
+    строгой валидации на уровне схемы (пустая строка/мусор из файла не
+    должны падать с 422 на весь запрос разом — каждая строка проверяется
+    руками в эндпоинте и получает свой собственный статус в отчёте, см.
+    EquipmentImportRowResult)."""
+
+    row: int
+    name: str = ""
+    category: str = ""
+    code: str | None = None
+    daily_rate: str = ""
+    deposit: str = ""
+    period_days: str = ""
+    period_price: str = ""
+    period_price_after: str = ""
+    notes: str | None = None
+
+
+class EquipmentImportRowResult(BaseModel):
+    row: int
+    ok: bool
+    name: str
+    error: str | None = None
+    equipment: EquipmentOut | None = None
+
+
+class EquipmentImportResult(BaseModel):
+    total: int
+    created: int
+    failed: int
+    results: list[EquipmentImportRowResult]
 
 
 class ClientCreate(BaseModel):

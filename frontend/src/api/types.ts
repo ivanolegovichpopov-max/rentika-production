@@ -57,7 +57,29 @@ export interface Equipment {
   period_price_after: number | null;
   status: "available" | "rented" | "maintenance" | "retired";
   maintenance_until: string | null;
+  notes: string | null;
   created_at: string;
+}
+
+export interface EquipmentCategory {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface EquipmentImportRowResult {
+  row: number;
+  ok: boolean;
+  name: string;
+  error: string | null;
+  equipment: Equipment | null;
+}
+
+export interface EquipmentImportResult {
+  total: number;
+  created: number;
+  failed: number;
+  results: EquipmentImportRowResult[];
 }
 
 export interface Client {

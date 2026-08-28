@@ -40,7 +40,14 @@ export class ApiError extends Error {
 async function rawFetch(path: string, options: RequestInit): Promise<Response> {
   const headers = new Headers(options.headers);
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
-  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  // FormData (используется для загрузки файла — см. api.postForm/CSV-импорт
+  // оборудования) намеренно исключена: браузер сам проставляет
+  // multipart/form-data с корректным boundary, если Content-Type не задан
+  // руками — если бы мы поставили application/json, backend не смог бы
+  // распарсить тело как multipart вообще.
+  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
 
   return fetch(`${API_BASE}${path}`, {
     ...options,
@@ -96,5 +103,8 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => apiFetch<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body?: unknown) => apiFetch<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => apiFetch<T>(path, { method: "DELETE" }),
+  // Для CSV-импорта оборудования (multipart/form-data) — см. комментарий в
+  // rawFetch про то, почему JSON.stringify/Content-Type здесь не годятся.
+  postForm: <T>(path: string, form: FormData) => apiFetch<T>(path, { method: "POST", body: form }),
   tryRefresh,
 };
