@@ -1055,8 +1055,11 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
               дат; теперь показан явно рядом с переключателем (см. UX-обзор,
               п.1). Заголовок страницы (Dashboard.tsx) сознательно не
               трогаем — там "Сегодня, {дата}", общий для всего дашборда, а не
-              про период именно этих плашек. */}
-          <span className="dash-period-range">{fmtDate(periodFrom)} — {fmtDate(periodTo)}</span>
+              про период именно этих плашек. При periodDays === 1 (кнопка
+              "Сегодня") сам диапазон не показываем — periodFrom === periodTo,
+              получилось бы просто повторение одной и той же даты дважды,
+              которая и так уже видна в шапке страницы над "Дашборд". */}
+          {periodDays > 1 && <span className="dash-period-range">{fmtDate(periodFrom)} — {fmtDate(periodTo)}</span>}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {editMode && (
