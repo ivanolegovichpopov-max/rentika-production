@@ -4,7 +4,7 @@ import { useData } from "../../context/DataContext";
 import type { Equipment, EquipmentCategory, EquipmentImportResult, Rental } from "../../api/types";
 import { EQ_META, RENTAL_META, Badge, equipmentDisplayStatus, nextFreeDate, rentalDisplayStatus } from "../../lib/statusMeta";
 import { money, fmtDate, isoAddDays, todayISO } from "../../lib/format";
-import { IconClose } from "../../lib/icons";
+import { IconClose, IconCopy, IconEdit, IconTrash } from "../../lib/icons";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { parseCsv, csvRowsToObjects, toCsv } from "../../lib/csv";
 
@@ -558,12 +558,9 @@ export function EquipmentDetailPanel({
   const utilPct = equipmentUtilizationPct(item, rentals, 90);
 
   // Статус-пикер и дата окончания обслуживания PATCH'ят `/businesses/{id}/equipment/{id}`
-  // частичным телом ({status: ...} / {maintenance_until: ...}), как в демо. На момент
-  // написания этого файла бэкендовый PATCH (app/api/routes/equipment.py) валидирует
-  // тело как EquipmentCreate (обязательные name/category/daily_rate, без полей
-  // status/maintenance_until вовсе) — партиальные запросы будут отклонены/проигнорированы,
-  // пока бэкенд не получит отдельную схему частичного обновления. Вне зоны ответственности
-  // этого файла (владею только EquipmentTab.tsx) — оставлено как есть для параллельного фикса.
+  // частичным телом ({status: ...} / {maintenance_until: ...}), как в демо. Бэкенд
+  // валидирует тело как EquipmentUpdate (все поля необязательны, exclude_unset) —
+  // партиальные запросы применяются как есть, без необходимости слать остальные поля.
   async function setStatus(next: Equipment["status"]) {
     try {
       await api.patch(`/businesses/${businessId}/equipment/${equipmentId}`, { status: next });
@@ -762,6 +759,244 @@ function downloadImportTemplate() {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/* ============================================================
+   Экспорт CSV — пункт 2 обзора вкладки «Оборудование» (пятнадцатый проход,
+   "Согласен со всем. давай внесем изменения"): выгрузка ТЕКУЩЕГО видимого
+   списка (с учётом поиска/фильтра статуса/категории и сортировки — то, что
+   пользователь видит на экране, то и выгружается) в тот же CSV-формат, что
+   и шаблон импорта, плюс колонка "status" для наглядности (при обратном
+   импорте лишняя колонка просто игнорируется парсером — см. csvRowsToObjects).
+   Полностью на клиенте, нового backend-эндпоинта не требуется.
+   ============================================================ */
+const EQUIPMENT_EXPORT_HEADER = [
+  "name",
+  "category",
+  "code",
+  "daily_rate",
+  "deposit",
+  "period_days",
+  "period_price",
+  "period_price_after",
+  "status",
+  "notes",
+];
+
+function exportEquipmentCsv(list: Equipment[], rentals: Rental[], today: string) {
+  const rows = list.map((e) => [
+    e.name,
+    e.category,
+    e.code ?? "",
+    e.daily_rate,
+    e.deposit,
+    e.period_days ?? "",
+    e.period_price ?? "",
+    e.period_price_after ?? "",
+    EQ_META[equipmentDisplayStatus(e, rentals, today)].label,
+    e.notes ?? "",
+  ]);
+  const csv = toCsv(EQUIPMENT_EXPORT_HEADER, rows);
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }); // BOM — см. downloadImportTemplate выше
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Оборудование ${today}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* ============================================================
+   Модалка управления справочником категорий — пункт 1 обзора (владелец
+   может переименовать категорию, что каскадом переименует её у всего
+   оборудования на backend, или удалить неиспользуемую; занятую нельзя —
+   см. app/api/routes/equipment.py: rename/delete_equipment_category). Тот же
+   идиом <dialog>, что и остальные модалки файла. Список категорий и счётчики
+   (equipment_count) приходят из контекста (equipmentCategories) — модалка
+   их только показывает и дёргает reload после успешного изменения.
+   ============================================================ */
+function EquipmentCategoriesModal({
+  open,
+  businessId,
+  categories,
+  onClose,
+  onChanged,
+}: {
+  open: boolean;
+  businessId: string;
+  categories: EquipmentCategory[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [rowError, setRowError] = useState<Record<string, string>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  useEffect(() => {
+    if (open) {
+      setRenamingId(null);
+      setRenameValue("");
+      setRowError({});
+    }
+  }, [open]);
+
+  function startRename(c: EquipmentCategory) {
+    setRenamingId(c.id);
+    setRenameValue(c.name);
+    setRowError((prev) => ({ ...prev, [c.id]: "" }));
+  }
+
+  async function submitRename(c: EquipmentCategory) {
+    const value = renameValue.trim();
+    if (!value) {
+      setRowError((prev) => ({ ...prev, [c.id]: "Название не может быть пустым" }));
+      return;
+    }
+    if (value === c.name) {
+      setRenamingId(null);
+      return;
+    }
+    setBusyId(c.id);
+    try {
+      await api.patch(`/businesses/${businessId}/equipment-categories/${c.id}`, { name: value });
+      setRenamingId(null);
+      onChanged();
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [c.id]: err instanceof ApiError ? err.message : "Не удалось переименовать" }));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDelete(c: EquipmentCategory) {
+    if (c.equipment_count > 0) {
+      alert(
+        `Нельзя удалить: категорию «${c.name}» использует ${c.equipment_count} ` +
+          `${c.equipment_count === 1 ? "позиция" : "позиций"} оборудования. Сначала перенесите их в другую категорию.`
+      );
+      return;
+    }
+    if (!(await confirm(`Категория «${c.name}» будет удалена безвозвратно.`, { danger: true }))) return;
+    setBusyId(c.id);
+    try {
+      await api.delete(`/businesses/${businessId}/equipment-categories/${c.id}`);
+      onChanged();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : "Не удалось удалить категорию");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <dialog ref={ref} onClose={onClose}>
+      <div className="modal-head">
+        <h3>Категории оборудования</h3>
+        <button type="button" className="icon-btn" onClick={onClose}>
+          <IconClose />
+        </button>
+      </div>
+      <div className="modal-body">
+        {categories.length === 0 ? (
+          <div className="empty-note">Справочник пуст — категории появляются автоматически при создании оборудования.</div>
+        ) : (
+          <div className="table-wrap" style={{ maxHeight: "360px", overflowY: "auto" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Название</th>
+                  <th>Позиций</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {categories.map((c) => (
+                  <tr key={c.id}>
+                    <td>
+                      {renamingId === c.id ? (
+                        <>
+                          <input
+                            autoFocus
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void submitRename(c);
+                              if (e.key === "Escape") setRenamingId(null);
+                            }}
+                            style={{ maxWidth: "220px" }}
+                          />
+                          {rowError[c.id] && <div className="form-error">{rowError[c.id]}</div>}
+                        </>
+                      ) : (
+                        c.name
+                      )}
+                    </td>
+                    <td className="mono">{c.equipment_count}</td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      {renamingId === c.id ? (
+                        <>
+                          <button type="button" className="btn btn-sm" onClick={() => setRenamingId(null)} disabled={busyId === c.id}>
+                            Отмена
+                          </button>{" "}
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            onClick={() => void submitRename(c)}
+                            disabled={busyId === c.id}
+                          >
+                            Сохранить
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            title="Переименовать"
+                            onClick={() => startRename(c)}
+                            disabled={busyId !== null}
+                          >
+                            <IconEdit />
+                          </button>{" "}
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            title={c.equipment_count > 0 ? "Нельзя удалить: категория используется" : "Удалить"}
+                            onClick={() => void handleDelete(c)}
+                            disabled={busyId !== null}
+                          >
+                            <IconTrash />
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <div className="modal-foot">
+        <button type="button" className="btn btn-primary" onClick={onClose}>
+          Готово
+        </button>
+      </div>
+      {confirmDialog}
+    </dialog>
+  );
 }
 
 interface ImportPreviewRow {
@@ -1033,6 +1268,14 @@ export function EquipmentTab({
   // EquipmentFormModal сбросить внутреннее состояние формы, не закрывая
   // <dialog> (тот же паттерн, что и createRentalSignal в RentalsTab).
   const [formResetSignal, setFormResetSignal] = useState(0);
+  // Пятнадцатый проход (обзор вкладки, пункты 1/3/4): справочник категорий,
+  // массовые действия над выбранными строками.
+  const [categoriesModalOpen, setCategoriesModalOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkCategory, setBulkCategory] = useState("");
+  const [bulkStatus, setBulkStatus] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const { confirm: confirmBulk, dialog: bulkConfirmDialog } = useConfirm();
 
   const today = todayISO();
   const q = search.trim().toLowerCase();
@@ -1055,6 +1298,14 @@ export function EquipmentTab({
   }
   const filtered = bySearchAndCategory.filter((e) => filter === "all" || equipmentDisplayStatus(e, rentals, today) === filter);
   const list = sortEquipmentList(filtered, sort, rentals, today);
+
+  // Сброс выделения при смене фильтров/поиска — иначе можно было бы
+  // применить массовое действие к строкам, которые сейчас не видны на
+  // экране (список отфильтрован), что было бы неожиданно для пользователя.
+  useEffect(() => {
+    setSelectedIds(new Set());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, categoryFilter, search]);
 
   function toggleSort(key: string) {
     setSort((prev) => {
@@ -1114,6 +1365,95 @@ export function EquipmentTab({
     }
   }
 
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds((prev) => (prev.size === list.length ? new Set() : new Set(list.map((e) => e.id))));
+  }
+
+  /** Массовая смена категории выбранных позиций — по одному PATCH-запросу на
+   * позицию (Promise.allSettled, чтобы одна ошибка не остановила остальные),
+   * с итоговым отчётом об ошибках, если они были (см. согласование с
+   * пользователем: "Согласен со всем" по пункту 3 обзора — массовые действия). */
+  async function handleBulkCategory() {
+    if (!bulkCategory || selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const ids = [...selectedIds];
+      const results = await Promise.allSettled(
+        ids.map((id) => api.patch(`/businesses/${businessId}/equipment/${id}`, { category: bulkCategory }))
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      await Promise.all([reloadEquipment(), reloadEquipmentCategories()]);
+      setBulkCategory("");
+      setSelectedIds(new Set());
+      if (failed > 0) alert(`Категория изменена у ${ids.length - failed} из ${ids.length}. Ошибок: ${failed}.`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function handleBulkStatus() {
+    if (!bulkStatus || selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const ids = [...selectedIds];
+      const results = await Promise.allSettled(
+        ids.map((id) => api.patch(`/businesses/${businessId}/equipment/${id}`, { status: bulkStatus }))
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      await reloadEquipment();
+      setBulkStatus("");
+      setSelectedIds(new Set());
+      if (failed > 0) alert(`Статус изменён у ${ids.length - failed} из ${ids.length}. Ошибок: ${failed}.`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  /** Массовое удаление — позиции с открытой арендой/бронью пропускаются без
+   * попытки удаления (тот же принцип, что и у одиночного удаления в
+   * EquipmentDetailPanel.handleDelete, только здесь заранее отфильтровано,
+   * а не отклонено сервером по одной). */
+  async function handleBulkDelete() {
+    if (selectedIds.size === 0) return;
+    const ids = [...selectedIds];
+    const blocked = ids.filter((id) => equipmentHasOpenRentals(id, rentals));
+    const deletable = ids.filter((id) => !equipmentHasOpenRentals(id, rentals));
+    if (deletable.length === 0) {
+      alert("Ни одну из выбранных позиций нельзя удалить: по каждой есть аренда в работе или бронь.");
+      return;
+    }
+    const message =
+      blocked.length > 0
+        ? `Будет безвозвратно удалено позиций: ${deletable.length} из ${ids.length}. Остальные ${blocked.length} пропущены — по ним есть аренда в работе или бронь.`
+        : `Будет безвозвратно удалено позиций: ${deletable.length}.`;
+    if (!(await confirmBulk(message, { danger: true }))) return;
+    setBulkBusy(true);
+    try {
+      const results = await Promise.allSettled(deletable.map((id) => api.delete(`/businesses/${businessId}/equipment/${id}`)));
+      const failed = results.filter((r) => r.status === "rejected").length;
+      await Promise.all([reloadEquipment(), reloadEquipmentCategories()]);
+      setSelectedIds(new Set());
+      if (failed > 0 || blocked.length > 0) {
+        alert(
+          `Удалено: ${deletable.length - failed}.` +
+            (failed > 0 ? ` Ошибок: ${failed}.` : "") +
+            (blocked.length > 0 ? ` Пропущено (аренда в работе): ${blocked.length}.` : "")
+        );
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   const editingItem = editingId ? equipment.find((e) => e.id === editingId) ?? null : null;
   const formTitle = modalMode === "edit" ? "Изменить оборудование" : copySource ? "Копия оборудования" : "Новое оборудование";
   const formInitial =
@@ -1162,6 +1502,14 @@ export function EquipmentTab({
           )}
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
+          {isOwner && (
+            <button className="btn" onClick={() => setCategoriesModalOpen(true)}>
+              Категории
+            </button>
+          )}
+          <button className="btn" onClick={() => exportEquipmentCsv(list, rentals, today)} disabled={list.length === 0}>
+            Экспорт CSV
+          </button>
           <button className="btn" onClick={() => setImportOpen(true)}>
             Импорт CSV
           </button>
@@ -1170,6 +1518,40 @@ export function EquipmentTab({
           </button>
         </div>
       </div>
+
+      {selectedIds.size > 0 && (
+        <div className="panel" style={{ marginBottom: "10px" }}>
+          <div className="panel-body" style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            <strong>Выбрано: {selectedIds.size}</strong>
+            <select value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)} style={{ maxWidth: "200px" }} disabled={bulkBusy}>
+              <option value="">Изменить категорию…</option>
+              {categoryNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+            <button className="btn btn-sm" disabled={!bulkCategory || bulkBusy} onClick={() => void handleBulkCategory()}>
+              Применить
+            </button>
+            <select value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)} style={{ maxWidth: "180px" }} disabled={bulkBusy}>
+              <option value="">Изменить статус…</option>
+              <option value="available">Свободно</option>
+              <option value="maintenance">На обслуживании</option>
+              <option value="retired">Списано</option>
+            </select>
+            <button className="btn btn-sm" disabled={!bulkStatus || bulkBusy} onClick={() => void handleBulkStatus()}>
+              Применить
+            </button>
+            <button className="btn btn-sm btn-danger-ghost" disabled={bulkBusy} onClick={() => void handleBulkDelete()}>
+              Удалить выбранные
+            </button>
+            <button className="btn btn-sm" disabled={bulkBusy} onClick={() => setSelectedIds(new Set())}>
+              Снять выделение
+            </button>
+          </div>
+        </div>
+      )}
 
       {list.length === 0 ? (
         <div className="panel">
@@ -1182,6 +1564,14 @@ export function EquipmentTab({
           <table>
             <thead>
               <tr>
+                <th style={{ width: "1%" }}>
+                  <input
+                    type="checkbox"
+                    checked={list.length > 0 && selectedIds.size === list.length}
+                    onChange={toggleSelectAll}
+                    title="Выбрать все"
+                  />
+                </th>
                 {EQUIPMENT_SORT_COLUMNS.map((col) => {
                   const active = sort.key === col.key;
                   return (
@@ -1197,6 +1587,7 @@ export function EquipmentTab({
                     </th>
                   );
                 })}
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -1211,8 +1602,27 @@ export function EquipmentTab({
                 }
                 return (
                   <tr key={it.id} data-clickable="true" onClick={() => setOpenId(it.id)}>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={selectedIds.has(it.id)} onChange={() => toggleSelected(it.id)} />
+                    </td>
                     <td>
-                      <div className="cell-name">{it.name}</div>
+                      <div className="cell-name">
+                        {it.name}
+                        {it.notes && (
+                          <span
+                            title="Есть заметка"
+                            style={{
+                              display: "inline-block",
+                              width: "6px",
+                              height: "6px",
+                              borderRadius: "50%",
+                              background: "var(--accent)",
+                              marginLeft: "6px",
+                              verticalAlign: "middle",
+                            }}
+                          />
+                        )}
+                      </div>
                       <div className="cell-sub">№ {it.code ?? "—"}</div>
                     </td>
                     <td>{it.category}</td>
@@ -1222,6 +1632,11 @@ export function EquipmentTab({
                     </td>
                     <td className="mono">{rateLabel(it)}</td>
                     <td className="mono">{money(it.deposit)}</td>
+                    <td onClick={(e) => e.stopPropagation()} style={{ textAlign: "right" }}>
+                      <button type="button" className="icon-btn" title="Копировать" onClick={() => openCopyModal(it)}>
+                        <IconCopy />
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -1250,6 +1665,15 @@ export function EquipmentTab({
         onClose={() => setImportOpen(false)}
         onImported={() => void Promise.all([reloadEquipment(), reloadEquipmentCategories()])}
       />
+
+      <EquipmentCategoriesModal
+        open={categoriesModalOpen}
+        businessId={businessId}
+        categories={equipmentCategories}
+        onClose={() => setCategoriesModalOpen(false)}
+        onChanged={() => void Promise.all([reloadEquipment(), reloadEquipmentCategories()])}
+      />
+      {bulkConfirmDialog}
 
       {openId && <div className="slideover-backdrop" onClick={() => setOpenId(null)} />}
       {openId && (

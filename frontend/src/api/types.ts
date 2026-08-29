@@ -65,6 +65,10 @@ export interface EquipmentCategory {
   id: string;
   name: string;
   created_at: string;
+  // Сколько позиций оборудования сейчас используют эту категорию — нужно
+  // для управления справочником (пятнадцатый проход): решить, можно ли
+  // удалить категорию, и просто как полезная информация в списке.
+  equipment_count: number;
 }
 
 export interface EquipmentImportRowResult {

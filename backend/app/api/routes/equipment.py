@@ -3,7 +3,7 @@ import io
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.audit import log_action
@@ -14,6 +14,7 @@ from app.models.inventory import Equipment, EquipmentCategory, EquipmentStatus, 
 from app.schemas.inventory import (
     EquipmentCategoryCreate,
     EquipmentCategoryOut,
+    EquipmentCategoryRename,
     EquipmentCreate,
     EquipmentImportResult,
     EquipmentImportRowResult,
@@ -38,19 +39,41 @@ def _require_owner(ctx: BusinessContext) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Управление справочником категорий доступно только владельцу бизнеса")
 
 
-def _ensure_category(db: Session, ctx: BusinessContext, name: str) -> None:
+def _ensure_category(db: Session, ctx: BusinessContext, name: str) -> str:
     """Валидация категории при создании/редактировании позиции оборудования.
     Владелец бизнеса (ctx.full_access) может использовать любое новое
     название — оно автоматически заводится в справочнике тут же (это и есть
     "владелец создаёт категории", просто без отдельного похода на другой
     экран каждый раз). Любая другая роль обязана выбрать уже существующее
     значение — иначе 400 с понятным сообщением, что и заставляет UI
-    показывать таким пользователям выпадающий список без свободного ввода."""
-    existing = db.scalar(
-        select(EquipmentCategory).where(EquipmentCategory.business_id == ctx.business_id, EquipmentCategory.name == name)
-    )
-    if existing is not None:
-        return
+    показывать таким пользователям выпадающий список без свободного ввода.
+
+    Сравнение регистронезависимое (пятнадцатый проход, пункт 3 обзора вкладки
+    «Оборудование») — иначе «Инструмент»/«инструмент» превращались бы в две
+    разные записи справочника. Возвращает КАНОНИЧЕСКОЕ имя, которое нужно
+    реально сохранить в equipment.category: если категория уже существует —
+    её точное сохранённое написание (а не то, что ввёл пользователь), иначе —
+    имя как есть (новая запись создаётся именно с ним). Вызывающий код обязан
+    использовать возвращённое значение при записи, а не свой исходный
+    аргумент — иначе одна и та же категория расползлась бы по позициям в
+    разных регистрах, и точное сравнение (в фильтре на фронтенде, в подсчёте
+    equipment_count) переставало бы находить часть позиций.
+
+    Регистронезависимость сравнивается В PYTHON (`str.lower()`), а не через
+    `func.lower()` на уровне SQL — намеренно: встроенная `LOWER()` в SQLite
+    (на которой крутятся тесты) складывает регистр ТОЛЬКО для ASCII и
+    оставляет кириллицу как есть, тогда как Python `str.lower()` и `LOWER()`
+    в реальном Postgres (прод) корректно работают с юникодом. При сравнении
+    через SQL это означало бы, что тесты на SQLite не находят дубли/
+    совпадения, которые на проде находятся — рассинхрон между тем, что
+    проверено, и тем, что реально исполняется. Справочник категорий у
+    бизнеса — заведомо небольшой список (десятки-сотни записей максимум),
+    так что цена сравнения в Python вместо SQL пренебрежимо мала."""
+    categories = db.scalars(select(EquipmentCategory).where(EquipmentCategory.business_id == ctx.business_id)).all()
+    lname = name.lower()
+    for c in categories:
+        if c.name.lower() == lname:
+            return c.name
     if not ctx.full_access:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -58,6 +81,30 @@ def _ensure_category(db: Session, ctx: BusinessContext, name: str) -> None:
         )
     db.add(EquipmentCategory(business_id=ctx.business_id, name=name))
     db.flush()
+    return name
+
+
+def _category_equipment_counts(db: Session, business_id) -> dict[str, int]:
+    """Число позиций оборудования на категорию (ключ — lower(name) на
+    стороне Python, см. докстринг _ensure_category про SQLite/Postgres
+    расхождение в регистре юникода — та же причина здесь)."""
+    values = db.scalars(
+        select(Equipment.category).where(Equipment.business_id == business_id, Equipment.category.is_not(None))
+    ).all()
+    counts: dict[str, int] = {}
+    for v in values:
+        key = v.lower()
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _category_out(category: EquipmentCategory, counts: dict[str, int]) -> EquipmentCategoryOut:
+    return EquipmentCategoryOut(
+        id=category.id,
+        name=category.name,
+        created_at=category.created_at,
+        equipment_count=counts.get(category.name.lower(), 0),
+    )
 
 
 # --- Справочник категорий ----------------------------------------------------
@@ -68,7 +115,8 @@ async def list_equipment_categories(ctx: BusinessContext = Depends(view_dep), db
     categories = db.scalars(
         select(EquipmentCategory).where(EquipmentCategory.business_id == ctx.business_id).order_by(EquipmentCategory.name)
     ).all()
-    return categories
+    counts = _category_equipment_counts(db, ctx.business_id)
+    return [_category_out(c, counts) for c in categories]
 
 
 @router.post("-categories", response_model=EquipmentCategoryOut, status_code=status.HTTP_201_CREATED)
@@ -77,17 +125,96 @@ async def create_equipment_category(
 ):
     _require_owner(ctx)
     name = body.name  # уже обрезано валидатором схемы (EquipmentCategoryCreate._strip_name)
-    existing = db.scalar(
-        select(EquipmentCategory).where(EquipmentCategory.business_id == ctx.business_id, EquipmentCategory.name == name)
-    )
-    if existing is not None:
+    categories = db.scalars(select(EquipmentCategory).where(EquipmentCategory.business_id == ctx.business_id)).all()
+    if any(c.name.lower() == name.lower() for c in categories):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Такая категория уже есть в справочнике")
     category = EquipmentCategory(business_id=ctx.business_id, name=name)
     db.add(category)
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="equipment_category")
     db.commit()
     db.refresh(category)
-    return category
+    return _category_out(category, {})  # только что создана — заведомо 0 позиций
+
+
+@router.patch("-categories/{category_id}", response_model=EquipmentCategoryOut)
+async def rename_equipment_category(
+    category_id: uuid.UUID,
+    body: EquipmentCategoryRename,
+    ctx: BusinessContext = Depends(get_business_context),
+    db: Session = Depends(get_db),
+):
+    """Переименование записи справочника — пятнадцатый проход (обзор
+    вкладки «Оборудование», пункт 2: у владельца не было способа навести
+    порядок в уже накопившихся мусорных/дублирующих названиях категорий).
+    Владелец-only, как и создание. Переименование каскадно переносит ВСЕ
+    позиции оборудования, чья текущая category совпадает со старым именем
+    (без учёта регистра — часть позиций могла быть создана до внедрения
+    канонизации в _ensure_category и хранить категорию в другом регистре),
+    иначе после переименования эти позиции указывали бы на исчезнувшее из
+    справочника название."""
+    _require_owner(ctx)
+    category = db.get(EquipmentCategory, category_id)
+    if category is None or category.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Категория не найдена")
+
+    new_name = body.name
+    others = db.scalars(
+        select(EquipmentCategory).where(EquipmentCategory.business_id == ctx.business_id, EquipmentCategory.id != category_id)
+    ).all()
+    if any(c.name.lower() == new_name.lower() for c in others):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Такая категория уже есть в справочнике")
+
+    old_name = category.name
+    category.name = new_name
+    # Регистронезависимый матчинг делаем в Python (см. докстринг
+    # _ensure_category) — набираем id позиций, у которых текущая категория
+    # совпадает со старым именем без учёта регистра, и одним UPDATE
+    # переносим их на новое имя.
+    old_lower = old_name.lower()
+    equipment_items = db.scalars(select(Equipment).where(Equipment.business_id == ctx.business_id)).all()
+    matched_ids = [e.id for e in equipment_items if e.category and e.category.lower() == old_lower]
+    if matched_ids:
+        db.execute(update(Equipment).where(Equipment.id.in_(matched_ids)).values(category=new_name))
+    log_action(
+        db, business_id=ctx.business_id, user_id=ctx.user.id, action="rename", resource="equipment_category", resource_id=str(category_id)
+    )
+    db.commit()
+    db.refresh(category)
+    counts = _category_equipment_counts(db, ctx.business_id)
+    return _category_out(category, counts)
+
+
+@router.delete("-categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_equipment_category(
+    category_id: uuid.UUID, ctx: BusinessContext = Depends(get_business_context), db: Session = Depends(get_db)
+):
+    """Удаление записи справочника — только если её СЕЙЧАС не использует ни
+    одна позиция оборудования (без учёта регистра — та же причина, что и
+    выше). Умышленно НЕТ каскадного «удалить категорию вместе со всеми
+    позициями» — категория как раз для того и осталась простой строкой без
+    FK на equipment, чтобы удаление записи справочника не могло случайно
+    задеть сами позиции; владелец сначала должен переназначить/удалить их
+    сам, если действительно хочет избавиться от категории целиком."""
+    _require_owner(ctx)
+    category = db.get(EquipmentCategory, category_id)
+    if category is None or category.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Категория не найдена")
+
+    category_names = db.scalars(
+        select(Equipment.category).where(Equipment.business_id == ctx.business_id, Equipment.category.is_not(None))
+    ).all()
+    in_use = any(c.lower() == category.name.lower() for c in category_names)
+    if in_use:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Нельзя удалить: эту категорию использует хотя бы одна позиция оборудования. Сначала перенесите позиции в другую категорию.",
+        )
+
+    db.delete(category)
+    log_action(
+        db, business_id=ctx.business_id, user_id=ctx.user.id, action="delete", resource="equipment_category", resource_id=str(category_id)
+    )
+    db.commit()
 
 
 # --- Оборудование -------------------------------------------------------------
@@ -103,8 +230,10 @@ async def list_equipment(ctx: BusinessContext = Depends(view_dep), db: Session =
 
 @router.post("", response_model=EquipmentOut, status_code=status.HTTP_201_CREATED)
 async def create_equipment(body: EquipmentCreate, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)):
-    _ensure_category(db, ctx, body.category)
-    item = Equipment(business_id=ctx.business_id, **body.model_dump())
+    canonical_category = _ensure_category(db, ctx, body.category)
+    data = body.model_dump()
+    data["category"] = canonical_category  # каноническое написание справочника, не то, что ввёл пользователь
+    item = Equipment(business_id=ctx.business_id, **data)
     db.add(item)
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="equipment")
     db.commit()
@@ -127,7 +256,7 @@ async def update_equipment(
     changes = body.model_dump(exclude_unset=True)
 
     if "category" in changes:
-        _ensure_category(db, ctx, changes["category"])
+        changes["category"] = _ensure_category(db, ctx, changes["category"])
 
     if changes.get("status") == EquipmentStatus.retired:
         # Тот же принцип, что и при удалении: нельзя списать позицию, по
@@ -261,12 +390,12 @@ async def import_equipment(
             period_price = _parse_number(row.get("period_price", ""), "period_price")
             period_price_after = _parse_number(row.get("period_price_after", ""), "period_price_after")
 
-            _ensure_category(db, ctx, category)
+            canonical_category = _ensure_category(db, ctx, category)
 
             item = Equipment(
                 business_id=ctx.business_id,
                 name=name,
-                category=category,
+                category=canonical_category,
                 code=row.get("code") or None,
                 daily_rate=daily_rate,
                 deposit=deposit,

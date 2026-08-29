@@ -378,3 +378,201 @@ def test_create_category_trims_surrounding_whitespace(client):
     )
     assert resp.status_code == 201
     assert resp.json()["name"] == "Спецтехника"
+
+
+# --- Пятнадцатый проход: регистронезависимость, equipment_count, управление
+# справочником (переименование/удаление) ------------------------------------
+
+
+def test_creating_category_case_insensitive_duplicate_fails(client):
+    owner = register_business(client, email="ci-cat-dup@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+
+    client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": "Инструмент"}, headers=headers)
+    resp = client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": "инструмент"}, headers=headers)
+    assert resp.status_code == 400
+
+
+def test_owner_creating_equipment_with_different_case_reuses_canonical_name(client):
+    """Владелец создаёт «Инструмент», затем создаёт позицию с категорией
+    «инструмент» (другой регистр) — должна переиспользоваться уже
+    существующая запись справочника, а сама позиция должна сохранить
+    КАНОНИЧЕСКОЕ написание («Инструмент»), не то, что ввёл пользователь —
+    иначе точное сравнение в фильтре на фронтенде не находило бы такую
+    позицию при выборе категории «Инструмент»."""
+    owner = register_business(client, email="ci-canon@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+
+    client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": "Инструмент"}, headers=headers)
+    resp = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Дрель", "category": "инструмент", "daily_rate": 100},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["category"] == "Инструмент"
+
+    categories = client.get(f"/api/businesses/{business_id}/equipment-categories", headers=headers).json()
+    assert [c["name"] for c in categories] == ["Инструмент"]  # не расплодилось на два варианта регистра
+
+
+def test_employee_can_use_existing_category_regardless_of_typed_case(client):
+    owner = register_business(client, email="ci-emp@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+    client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": "Инструмент"}, headers=headers)
+    employee_token = _make_edit_employee(client, owner["access_token"], business_id, email="ci-emp-emp@example.com")
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Дрель", "category": "ИНСТРУМЕНТ", "daily_rate": 100},
+        headers=auth_headers(employee_token),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["category"] == "Инструмент"
+
+
+def test_equipment_count_reflects_usage(client):
+    owner = register_business(client, email="count-cat@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+
+    client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Дрель", "category": "Инструмент", "daily_rate": 100},
+        headers=headers,
+    )
+    client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Перфоратор", "category": "Инструмент", "daily_rate": 200},
+        headers=headers,
+    )
+    client.post(
+        f"/api/businesses/{business_id}/equipment-categories", json={"name": "Пустая категория"}, headers=headers
+    )
+
+    categories = {c["name"]: c["equipment_count"] for c in client.get(f"/api/businesses/{business_id}/equipment-categories", headers=headers).json()}
+    assert categories["Инструмент"] == 2
+    assert categories["Пустая категория"] == 0
+
+
+def test_owner_can_rename_category_and_equipment_follows(client):
+    owner = register_business(client, email="rename-cat@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+
+    cat = client.post(
+        f"/api/businesses/{business_id}/equipment-categories", json={"name": "Стройтехника"}, headers=headers
+    ).json()
+    eq = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Экскаватор", "category": "Стройтехника", "daily_rate": 5000},
+        headers=headers,
+    ).json()
+
+    resp = client.patch(
+        f"/api/businesses/{business_id}/equipment-categories/{cat['id']}",
+        json={"name": "Спецтехника"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "Спецтехника"
+    assert body["equipment_count"] == 1
+
+    updated_eq = client.get(f"/api/businesses/{business_id}/equipment", headers=headers).json()[0]
+    assert updated_eq["id"] == eq["id"]
+    assert updated_eq["category"] == "Спецтехника"
+
+
+def test_rename_category_rejects_collision_with_another_category(client):
+    owner = register_business(client, email="rename-collide@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+
+    cat_a = client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": "А"}, headers=headers).json()
+    client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": "Б"}, headers=headers)
+
+    resp = client.patch(
+        f"/api/businesses/{business_id}/equipment-categories/{cat_a['id']}", json={"name": "б"}, headers=headers
+    )
+    assert resp.status_code == 400
+
+
+def test_rename_category_requires_owner(client):
+    owner = register_business(client, email="rename-403@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+    cat = client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": "Инструмент"}, headers=headers).json()
+    employee_token = _make_edit_employee(client, owner["access_token"], business_id, email="rename-403-emp@example.com")
+
+    resp = client.patch(
+        f"/api/businesses/{business_id}/equipment-categories/{cat['id']}",
+        json={"name": "Другое"},
+        headers=auth_headers(employee_token),
+    )
+    assert resp.status_code == 403
+
+
+def test_rename_category_404_for_other_business(client):
+    owner_a = register_business(client, email="rename-a@example.com", password="correct horse battery staple")
+    business_a = _get_business_id(client, owner_a["access_token"])
+    cat_a = client.post(
+        f"/api/businesses/{business_a}/equipment-categories", json={"name": "Инструмент"}, headers=auth_headers(owner_a["access_token"])
+    ).json()
+
+    owner_b = register_business(client, email="rename-b@example.com", password="correct horse battery staple")
+    business_b = _get_business_id(client, owner_b["access_token"])
+
+    resp = client.patch(
+        f"/api/businesses/{business_b}/equipment-categories/{cat_a['id']}",
+        json={"name": "Другое"},
+        headers=auth_headers(owner_b["access_token"]),
+    )
+    assert resp.status_code == 404
+
+
+def test_owner_can_delete_unused_category(client):
+    owner = register_business(client, email="delete-cat@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+    cat = client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": "Ненужная"}, headers=headers).json()
+
+    resp = client.delete(f"/api/businesses/{business_id}/equipment-categories/{cat['id']}", headers=headers)
+    assert resp.status_code == 204
+
+    categories = client.get(f"/api/businesses/{business_id}/equipment-categories", headers=headers).json()
+    assert categories == []
+
+
+def test_deleting_category_in_use_is_rejected(client):
+    owner = register_business(client, email="delete-used@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+    cat = client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": "Инструмент"}, headers=headers).json()
+    client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Дрель", "category": "Инструмент", "daily_rate": 100},
+        headers=headers,
+    )
+
+    resp = client.delete(f"/api/businesses/{business_id}/equipment-categories/{cat['id']}", headers=headers)
+    assert resp.status_code == 400
+
+    categories = client.get(f"/api/businesses/{business_id}/equipment-categories", headers=headers).json()
+    assert len(categories) == 1
+
+
+def test_delete_category_requires_owner(client):
+    owner = register_business(client, email="delete-403@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+    cat = client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": "Инструмент"}, headers=headers).json()
+    employee_token = _make_edit_employee(client, owner["access_token"], business_id, email="delete-403-emp@example.com")
+
+    resp = client.delete(
+        f"/api/businesses/{business_id}/equipment-categories/{cat['id']}", headers=auth_headers(employee_token)
+    )
+    assert resp.status_code == 403

@@ -34,10 +34,29 @@ class EquipmentCategoryCreate(BaseModel):
     _strip_name = field_validator("name")(_strip_or_raise)
 
 
+class EquipmentCategoryRename(BaseModel):
+    """PATCH-переименование записи справочника — пятнадцатый проход
+    (управление категориями). Отдельная от EquipmentCategoryCreate схема
+    только для ясности эндпоинта в OpenAPI; по содержанию идентична."""
+
+    name: str = Field(min_length=1, max_length=255)
+
+    _strip_name = field_validator("name")(_strip_or_raise)
+
+
 class EquipmentCategoryOut(BaseModel):
     id: uuid.UUID
     name: str
     created_at: datetime
+    # Сколько позиций оборудования сейчас используют эту категорию —
+    # добавлено в пятнадцатом проходе вместе с управлением справочником
+    # (переименование/удаление): фронтенду это нужно, чтобы решить, можно ли
+    # удалить категорию, и просто как полезная информация в списке.
+    # ВСЕГДА проставляется явно в роутах (не read напрямую из ORM-объекта
+    # через from_attributes — это вычисляемое поле, не колонка), поэтому
+    # default не задан намеренно: пропущенное значение — сигнал забытого
+    # места в коде, а не 0 по умолчанию.
+    equipment_count: int
 
     model_config = {"from_attributes": True}
 
