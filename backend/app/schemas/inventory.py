@@ -1,9 +1,27 @@
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.inventory import ClientRating, EquipmentStatus, RentalStatus
+
+
+def _strip_or_raise(value: str) -> str:
+    """Обрезает пробелы и не даёт строке из одних пробелов пройти как
+    непустой name/category — Field(min_length=1) сам по себе это не ловит,
+    т.к. считает длину ДО обрезки (" " проходит как длина 1). Добавлено в
+    четырнадцатом проходе (пункт 2 обзора формы "Добавить")."""
+
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("не может быть пустым или состоять только из пробелов")
+    return stripped
+
+
+def _strip_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _strip_or_raise(value)
 
 
 class EquipmentCategoryCreate(BaseModel):
@@ -12,6 +30,8 @@ class EquipmentCategoryCreate(BaseModel):
     ctx.full_access), сама схема этого не проверяет."""
 
     name: str = Field(min_length=1, max_length=255)
+
+    _strip_name = field_validator("name")(_strip_or_raise)
 
 
 class EquipmentCategoryOut(BaseModel):
@@ -33,6 +53,9 @@ class EquipmentCreate(BaseModel):
     period_price_after: float | None = Field(default=None, ge=0)
     notes: str | None = Field(default=None, max_length=4000)
 
+    _strip_name = field_validator("name")(_strip_or_raise)
+    _strip_category = field_validator("category")(_strip_or_raise)
+
 
 class EquipmentUpdate(BaseModel):
     """Частичное обновление оборудования — все поля необязательны (в отличие
@@ -53,6 +76,9 @@ class EquipmentUpdate(BaseModel):
     status: EquipmentStatus | None = None
     maintenance_until: date | None = None
     notes: str | None = Field(default=None, max_length=4000)
+
+    _strip_name = field_validator("name")(_strip_optional)
+    _strip_category = field_validator("category")(_strip_optional)
 
 
 class EquipmentOut(BaseModel):

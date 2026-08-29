@@ -76,7 +76,7 @@ async def create_equipment_category(
     body: EquipmentCategoryCreate, ctx: BusinessContext = Depends(get_business_context), db: Session = Depends(get_db)
 ):
     _require_owner(ctx)
-    name = body.name.strip()
+    name = body.name  # уже обрезано валидатором схемы (EquipmentCategoryCreate._strip_name)
     existing = db.scalar(
         select(EquipmentCategory).where(EquipmentCategory.business_id == ctx.business_id, EquipmentCategory.name == name)
     )

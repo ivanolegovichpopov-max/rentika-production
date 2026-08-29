@@ -296,3 +296,85 @@ def test_import_requires_edit_permission(client):
 
     resp = _csv_upload(client, business_id, employee_token, "name,category,daily_rate\nШуруповёрт,Инструмент,150\n")
     assert resp.status_code == 403
+
+
+# --- Пробельная валидация name/category (14-й проход, пункт 2 обзора формы) --
+
+
+def test_create_equipment_rejects_whitespace_only_name(client):
+    owner = register_business(client, email="ws-name@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "   ", "category": "Инструмент", "daily_rate": 100},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_create_equipment_rejects_whitespace_only_category(client):
+    owner = register_business(client, email="ws-category@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Дрель", "category": "   ", "daily_rate": 100},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_create_equipment_trims_surrounding_whitespace(client):
+    owner = register_business(client, email="ws-trim@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "  Дрель  ", "category": "  Инструмент  ", "daily_rate": 100},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["name"] == "Дрель"
+    assert body["category"] == "Инструмент"
+
+
+def test_update_equipment_rejects_whitespace_only_name(client):
+    owner = register_business(client, email="ws-update@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+    eq = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Дрель", "category": "Инструмент", "daily_rate": 100},
+        headers=headers,
+    ).json()
+
+    resp = client.patch(
+        f"/api/businesses/{business_id}/equipment/{eq['id']}", json={"name": "   "}, headers=headers
+    )
+    assert resp.status_code == 422
+
+
+def test_create_category_rejects_whitespace_only_name(client):
+    owner = register_business(client, email="ws-cat-create@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+
+    resp = client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": "   "}, headers=headers)
+    assert resp.status_code == 422
+
+
+def test_create_category_trims_surrounding_whitespace(client):
+    owner = register_business(client, email="ws-cat-trim@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/equipment-categories", json={"name": "  Спецтехника  "}, headers=headers
+    )
+    assert resp.status_code == 201
+    assert resp.json()["name"] == "Спецтехника"

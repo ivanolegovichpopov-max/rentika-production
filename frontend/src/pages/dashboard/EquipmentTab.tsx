@@ -215,10 +215,18 @@ function formToPayload(form: EquipmentFormState) {
   };
 }
 
+/** Есть ли в форме заполненное значение хотя бы одного из трёх полей
+ * ступенчатого тарифа — используется, чтобы при открытии формы на
+ * редактирование секция сразу была раскрыта, если тариф уже настроен. */
+function hasTieredValues(form: EquipmentFormState): boolean {
+  return !!(form.period_days || form.period_price || form.period_price_after);
+}
+
 /** Модалка добавления/изменения оборудования — тот же идиом `<dialog>`
  * (ref + showModal()/close() в useEffect по `open`), что и DocModal в
  * ./documents.tsx, только с формой вместо предпросмотра документа. Поля и
- * подсказка ступенчатого тарифа — 1:1 из демо (tieredRateFieldsHtml). */
+ * подсказка ступенчатого тарифа — 1:1 из демо (tieredRateFieldsHtml), но
+ * секция теперь сворачиваемая (14-й проход, пункт 3 обзора формы "Добавить"). */
 function EquipmentFormModal({
   open,
   title,
@@ -226,6 +234,9 @@ function EquipmentFormModal({
   error,
   isOwner,
   categories,
+  existingCodes,
+  allowAddAnother,
+  resetSignal,
   onClose,
   onSubmit,
 }: {
@@ -235,11 +246,26 @@ function EquipmentFormModal({
   error: string | null;
   isOwner: boolean;
   categories: EquipmentCategory[];
+  // Инвентарные номера уже существующих позиций (кроме редактируемой) — для
+  // мягкого предупреждения о дубле, см. duplicateCode ниже.
+  existingCodes: string[];
+  // Кнопка "Сохранить и добавить ещё" имеет смысл только в режиме
+  // добавления/копирования — при редактировании существующей позиции
+  // "добавить ещё" нечего.
+  allowAddAnother: boolean;
+  // Счётчик от родителя: инкремент означает "форма только что успешно
+  // отправлена с addAnother=true, сбрось поля, не закрывая модалку" — тот же
+  // паттерн, что и createRentalSignal/highlightEmployee.signal в других
+  // вкладках.
+  resetSignal: number;
   onClose: () => void;
-  onSubmit: (form: EquipmentFormState) => void;
+  onSubmit: (form: EquipmentFormState, addAnother: boolean) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<EquipmentFormState>(initial);
+  const [showTiered, setShowTiered] = useState(hasTieredValues(initial));
+  const [localError, setLocalError] = useState<string | null>(null);
 
   useEffect(() => {
     const dialog = ref.current;
@@ -248,19 +274,56 @@ function EquipmentFormModal({
     if (!open && dialog.open) dialog.close();
   }, [open]);
 
+  // Сброс формы при открытии и при каждом "Сохранить и добавить ещё"
+  // (resetSignal меняется) — родитель к этому моменту уже пересчитал
+  // `initial` под новое пустое состояние (см. EquipmentTab.handleSubmitForm).
+  // Native <dialog> остаётся смонтированным всё время (только showModal()/
+  // close()), поэтому React не переинициализирует состояние сам по себе —
+  // приходится это делать вручную.
   useEffect(() => {
-    if (open) setForm(initial);
+    if (open) {
+      setForm(initial);
+      setShowTiered(hasTieredValues(initial));
+      setLocalError(null);
+      // Фокус на "Название" — autoFocus не подходит: он срабатывает только
+      // при первом монтировании DOM-узла, а <dialog> здесь монтируется один
+      // раз и просто переоткрывается. requestAnimationFrame — чтобы фокус
+      // ставился уже после showModal() (иначе браузер может увести фокус на
+      // сам <dialog>).
+      const raf = requestAnimationFrame(() => nameInputRef.current?.focus());
+      return () => cancelAnimationFrame(raf);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, resetSignal]);
+
+  const trimmedCode = form.code.trim();
+  const duplicateCode = trimmedCode !== "" && existingCodes.includes(trimmedCode);
+
+  function validateLocally(): string | null {
+    if (!form.name.trim()) return "Название не может состоять из одних пробелов";
+    if (!form.category.trim()) return "Категория не может состоять из одних пробелов";
+    return null;
+  }
+
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const problem = validateLocally();
+    if (problem) {
+      setLocalError(problem);
+      return;
+    }
+    setLocalError(null);
+    // submitter отличает, какая из двух submit-кнопок нажата — оба варианта
+    // ("Сохранить" и "Сохранить и добавить ещё") живут в одной <form>, чтобы
+    // не дублировать всю разметку полей.
+    const submitter = (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    const addAnother = submitter?.dataset.addAnother === "true";
+    onSubmit(form, addAnother);
+  }
 
   return (
     <dialog id="modal" className="wide" ref={ref} onClose={onClose}>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          onSubmit(form);
-        }}
-      >
+      <form onSubmit={handleSubmit}>
         <div className="modal-head">
           <h3>{title}</h3>
           <button type="button" className="icon-btn" onClick={onClose}>
@@ -272,6 +335,7 @@ function EquipmentFormModal({
             <label>Название</label>
             <input
               required
+              ref={nameInputRef}
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               placeholder="Например, перфоратор Bosch GBH 5-40"
@@ -325,11 +389,16 @@ function EquipmentFormModal({
             <div className="field">
               <label>Инв. номер</label>
               <input
-                required
                 value={form.code}
                 onChange={(e) => setForm({ ...form, code: e.target.value })}
-                placeholder="INV-000"
+                placeholder="INV-000 (необязательно)"
               />
+              {duplicateCode && (
+                <div className="field-hint" style={{ color: "var(--warning-ink)" }}>
+                  Такой инвентарный номер уже используется другой позицией — сохранить всё равно можно, но лучше
+                  проверить, не опечатка ли это.
+                </div>
+              )}
             </div>
           </div>
           <div className="field-row">
@@ -354,43 +423,64 @@ function EquipmentFormModal({
               />
             </div>
           </div>
-          <div className="field-row field-row-3">
-            <div className="field">
-              <label>Период, дней</label>
-              <input
-                type="number"
-                min="0"
-                value={form.period_days}
-                onChange={(e) => setForm({ ...form, period_days: e.target.value })}
-                placeholder="напр. 7"
-              />
+          {showTiered ? (
+            <>
+              <div className="field-row field-row-3">
+                <div className="field">
+                  <label>Период, дней</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.period_days}
+                    onChange={(e) => setForm({ ...form, period_days: e.target.value })}
+                    placeholder="напр. 7"
+                  />
+                </div>
+                <div className="field">
+                  <label>Цена за период, ₽</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.period_price}
+                    onChange={(e) => setForm({ ...form, period_price: e.target.value })}
+                    placeholder="напр. 690"
+                  />
+                </div>
+                <div className="field">
+                  <label>Цена за период далее, ₽</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.period_price_after}
+                    onChange={(e) => setForm({ ...form, period_price_after: e.target.value })}
+                    placeholder="напр. 190"
+                  />
+                </div>
+              </div>
+              <div className="field-hint">
+                Заполните, если ставка снижается при длительной аренде: первые N дней — по первой цене, каждый
+                следующий период из N дней — по второй. Например: 690 ₽ за первые 7 дней, затем 190 ₽ за каждые
+                следующие 7 дней.{" "}
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => {
+                    setShowTiered(false);
+                    setForm({ ...form, period_days: "", period_price: "", period_price_after: "" });
+                  }}
+                >
+                  Убрать ступенчатый тариф
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="field-hint">
+              <button type="button" className="link-btn" onClick={() => setShowTiered(true)}>
+                + Добавить ступенчатый тариф
+              </button>{" "}
+              (необязательно — для скидки при длительной аренде)
             </div>
-            <div className="field">
-              <label>Цена за период, ₽</label>
-              <input
-                type="number"
-                min="0"
-                value={form.period_price}
-                onChange={(e) => setForm({ ...form, period_price: e.target.value })}
-                placeholder="напр. 690"
-              />
-            </div>
-            <div className="field">
-              <label>Цена за период далее, ₽</label>
-              <input
-                type="number"
-                min="0"
-                value={form.period_price_after}
-                onChange={(e) => setForm({ ...form, period_price_after: e.target.value })}
-                placeholder="напр. 190"
-              />
-            </div>
-          </div>
-          <div className="field-hint">
-            Необязательно. Заполните, если ставка снижается при длительной аренде: первые N дней — по первой цене,
-            каждый следующий период из N дней — по второй. Например: 690 ₽ за первые 7 дней, затем 190 ₽ за каждые
-            следующие 7 дней.
-          </div>
+          )}
           <div className="field">
             <label>Заметка</label>
             <textarea
@@ -400,12 +490,17 @@ function EquipmentFormModal({
               placeholder="Состояние, комплектация, особенности — что угодно, что стоит помнить про эту позицию"
             />
           </div>
-          {error && <div className="form-error">{error}</div>}
+          {(localError || error) && <div className="form-error">{localError || error}</div>}
         </div>
         <div className="modal-foot">
           <button type="button" className="btn" onClick={onClose}>
             Отмена
           </button>
+          {allowAddAnother && (
+            <button type="submit" className="btn" data-add-another="true">
+              Сохранить и добавить ещё
+            </button>
+          )}
           <button type="submit" className="btn btn-primary">
             Сохранить
           </button>
@@ -934,6 +1029,10 @@ export function EquipmentTab({
   const [formError, setFormError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  // Инкрементируется при успешном "Сохранить и добавить ещё" — сигнал для
+  // EquipmentFormModal сбросить внутреннее состояние формы, не закрывая
+  // <dialog> (тот же паттерн, что и createRentalSignal в RentalsTab).
+  const [formResetSignal, setFormResetSignal] = useState(0);
 
   const today = todayISO();
   const q = search.trim().toLowerCase();
@@ -992,7 +1091,7 @@ export function EquipmentTab({
     setFormError(null);
   }
 
-  async function handleSubmitForm(form: EquipmentFormState) {
+  async function handleSubmitForm(form: EquipmentFormState, addAnother: boolean) {
     setFormError(null);
     try {
       if (modalMode === "edit" && editingId) {
@@ -1000,8 +1099,16 @@ export function EquipmentTab({
       } else {
         await api.post(`/businesses/${businessId}/equipment`, formToPayload(form));
       }
-      closeFormModal();
       await Promise.all([reloadEquipment(), reloadEquipmentCategories()]);
+      if (addAnother) {
+        // Модалка остаётся открытой в режиме "add" с пустой формой — copySource
+        // тоже сбрасывается, иначе следующее "добавить ещё" опять подставило бы
+        // исходную позицию для копирования вместо чистого бланка.
+        setCopySource(null);
+        setFormResetSignal((n) => n + 1);
+      } else {
+        closeFormModal();
+      }
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : "Не удалось сохранить оборудование");
     }
@@ -1017,6 +1124,10 @@ export function EquipmentTab({
       : EMPTY_FORM;
 
   const categoryNames = equipmentCategories.map((c) => c.name);
+  // Для мягкого предупреждения о дубле инв. номера — код самой редактируемой
+  // позиции исключается, иначе форма предупреждала бы о "дубле" при
+  // сохранении без изменения номера.
+  const existingCodes = equipment.filter((e) => e.id !== editingId && e.code).map((e) => e.code as string);
 
   return (
     <div>
@@ -1126,8 +1237,11 @@ export function EquipmentTab({
         error={formError}
         isOwner={isOwner}
         categories={equipmentCategories}
+        existingCodes={existingCodes}
+        allowAddAnother={modalMode === "add"}
+        resetSignal={formResetSignal}
         onClose={closeFormModal}
-        onSubmit={(form) => void handleSubmitForm(form)}
+        onSubmit={(form, addAnother) => void handleSubmitForm(form, addAnother)}
       />
 
       <EquipmentImportModal
