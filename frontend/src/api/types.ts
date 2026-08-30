@@ -55,6 +55,9 @@ export interface Equipment {
   period_days: number | null;
   period_price: number | null;
   period_price_after: number | null;
+  // Склад/точка хранения (восемнадцатый проход) — необязательное поле, в
+  // отличие от category.
+  warehouse: string | null;
   status: "available" | "rented" | "maintenance" | "retired";
   maintenance_until: string | null;
   notes: string | null;
@@ -68,6 +71,15 @@ export interface EquipmentCategory {
   // Сколько позиций оборудования сейчас используют эту категорию — нужно
   // для управления справочником (пятнадцатый проход): решить, можно ли
   // удалить категорию, и просто как полезная информация в списке.
+  equipment_count: number;
+}
+
+// Точная копия EquipmentCategory — справочник складов (восемнадцатый
+// проход), та же механика управления и тот же смысл equipment_count.
+export interface EquipmentWarehouse {
+  id: string;
+  name: string;
+  created_at: string;
   equipment_count: number;
 }
 

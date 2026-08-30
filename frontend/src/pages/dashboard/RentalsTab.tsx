@@ -106,6 +106,10 @@ function isUnderMaintenanceOn(eq: Equipment, dateIso: string): boolean {
   return dateIso <= eq.maintenance_until;
 }
 
+/** periodPriceAfter хранится как цена ЗА ПЕРИОД (periodDays дней), поэтому
+ * для показа "после периода" делим на periodDays и печатаем ₽/сутки —
+ * восемнадцатый проход, обзор по скриншотам, п.4 (тот же фикс, что и в
+ * EquipmentTab.tsx:rateLabel — см. комментарий там). */
 function rateLabel(
   dailyRate: number,
   periodDays: number | null,
@@ -113,7 +117,8 @@ function rateLabel(
   periodPriceAfter: number | null
 ): string {
   if (periodDays && periodPrice) {
-    return `${money(periodPrice)}/${periodDays}дн` + (periodPriceAfter ? ` → ${money(periodPriceAfter)}/${periodDays}дн` : "");
+    const afterPerDay = periodPriceAfter != null ? Math.round((periodPriceAfter / periodDays) * 100) / 100 : null;
+    return `${money(periodPrice)}/${periodDays}дн` + (afterPerDay != null ? ` → ${money(afterPerDay)}/сутки` : "");
   }
   return `${money(dailyRate)}/сутки`;
 }

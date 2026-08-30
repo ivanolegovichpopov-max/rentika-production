@@ -10,7 +10,7 @@ from app.core.audit import log_action
 from app.core.deps import BusinessContext, get_business_context, require_permission
 from app.database import get_db
 from app.models.business import PermissionLevel, ResourceType
-from app.models.inventory import Equipment, EquipmentCategory, EquipmentStatus, Rental, RentalItem, RentalStatus
+from app.models.inventory import Equipment, EquipmentCategory, EquipmentStatus, EquipmentWarehouse, Rental, RentalItem, RentalStatus
 from app.schemas.inventory import (
     EquipmentCategoryCreate,
     EquipmentCategoryOut,
@@ -20,6 +20,9 @@ from app.schemas.inventory import (
     EquipmentImportRowResult,
     EquipmentOut,
     EquipmentUpdate,
+    EquipmentWarehouseCreate,
+    EquipmentWarehouseOut,
+    EquipmentWarehouseRename,
 )
 
 router = APIRouter(prefix="/businesses/{business_id}/equipment", tags=["equipment"])
@@ -217,6 +220,146 @@ async def delete_equipment_category(
     db.commit()
 
 
+# --- Справочник складов (восемнадцатый проход) -------------------------------
+#
+# Точная копия механики справочника категорий выше (_ensure_category/
+# _category_equipment_counts/_category_out и роуты) — с единственным
+# содержательным отличием: склад НЕОБЯЗАТЕЛЕН. None/пустая строка — легитимное
+# «склад не указан», не ошибка валидации и не повод создавать запись в
+# справочнике.
+
+
+def _ensure_warehouse(db: Session, ctx: BusinessContext, name: str | None) -> str | None:
+    """Аналог _ensure_category (см. докстринг там — та же логика
+    канонизации регистра, того же владельца-only автосоздания для новых
+    значений), но None/пустая строка после обрезки пробелов — это не
+    ошибка, а «склад не указан»: возвращает None, ничего не проверяя и не
+    создавая в справочнике."""
+    if name is None or not name.strip():
+        return None
+    name = name.strip()
+    warehouses = db.scalars(select(EquipmentWarehouse).where(EquipmentWarehouse.business_id == ctx.business_id)).all()
+    lname = name.lower()
+    for w in warehouses:
+        if w.name.lower() == lname:
+            return w.name
+    if not ctx.full_access:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f'Склад «{name}» не найден в справочнике. Обратитесь к владельцу бизнеса, чтобы добавить его.',
+        )
+    db.add(EquipmentWarehouse(business_id=ctx.business_id, name=name))
+    db.flush()
+    return name
+
+
+def _warehouse_equipment_counts(db: Session, business_id) -> dict[str, int]:
+    values = db.scalars(
+        select(Equipment.warehouse).where(Equipment.business_id == business_id, Equipment.warehouse.is_not(None))
+    ).all()
+    counts: dict[str, int] = {}
+    for v in values:
+        key = v.lower()
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _warehouse_out(warehouse: EquipmentWarehouse, counts: dict[str, int]) -> EquipmentWarehouseOut:
+    return EquipmentWarehouseOut(
+        id=warehouse.id,
+        name=warehouse.name,
+        created_at=warehouse.created_at,
+        equipment_count=counts.get(warehouse.name.lower(), 0),
+    )
+
+
+@router.get("-warehouses", response_model=list[EquipmentWarehouseOut])
+async def list_equipment_warehouses(ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)):
+    warehouses = db.scalars(
+        select(EquipmentWarehouse).where(EquipmentWarehouse.business_id == ctx.business_id).order_by(EquipmentWarehouse.name)
+    ).all()
+    counts = _warehouse_equipment_counts(db, ctx.business_id)
+    return [_warehouse_out(w, counts) for w in warehouses]
+
+
+@router.post("-warehouses", response_model=EquipmentWarehouseOut, status_code=status.HTTP_201_CREATED)
+async def create_equipment_warehouse(
+    body: EquipmentWarehouseCreate, ctx: BusinessContext = Depends(get_business_context), db: Session = Depends(get_db)
+):
+    _require_owner(ctx)
+    name = body.name
+    warehouses = db.scalars(select(EquipmentWarehouse).where(EquipmentWarehouse.business_id == ctx.business_id)).all()
+    if any(w.name.lower() == name.lower() for w in warehouses):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Такой склад уже есть в справочнике")
+    warehouse = EquipmentWarehouse(business_id=ctx.business_id, name=name)
+    db.add(warehouse)
+    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="equipment_warehouse")
+    db.commit()
+    db.refresh(warehouse)
+    return _warehouse_out(warehouse, {})
+
+
+@router.patch("-warehouses/{warehouse_id}", response_model=EquipmentWarehouseOut)
+async def rename_equipment_warehouse(
+    warehouse_id: uuid.UUID,
+    body: EquipmentWarehouseRename,
+    ctx: BusinessContext = Depends(get_business_context),
+    db: Session = Depends(get_db),
+):
+    _require_owner(ctx)
+    warehouse = db.get(EquipmentWarehouse, warehouse_id)
+    if warehouse is None or warehouse.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Склад не найден")
+
+    new_name = body.name
+    others = db.scalars(
+        select(EquipmentWarehouse).where(EquipmentWarehouse.business_id == ctx.business_id, EquipmentWarehouse.id != warehouse_id)
+    ).all()
+    if any(w.name.lower() == new_name.lower() for w in others):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Такой склад уже есть в справочнике")
+
+    old_name = warehouse.name
+    warehouse.name = new_name
+    old_lower = old_name.lower()
+    equipment_items = db.scalars(select(Equipment).where(Equipment.business_id == ctx.business_id)).all()
+    matched_ids = [e.id for e in equipment_items if e.warehouse and e.warehouse.lower() == old_lower]
+    if matched_ids:
+        db.execute(update(Equipment).where(Equipment.id.in_(matched_ids)).values(warehouse=new_name))
+    log_action(
+        db, business_id=ctx.business_id, user_id=ctx.user.id, action="rename", resource="equipment_warehouse", resource_id=str(warehouse_id)
+    )
+    db.commit()
+    db.refresh(warehouse)
+    counts = _warehouse_equipment_counts(db, ctx.business_id)
+    return _warehouse_out(warehouse, counts)
+
+
+@router.delete("-warehouses/{warehouse_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_equipment_warehouse(
+    warehouse_id: uuid.UUID, ctx: BusinessContext = Depends(get_business_context), db: Session = Depends(get_db)
+):
+    _require_owner(ctx)
+    warehouse = db.get(EquipmentWarehouse, warehouse_id)
+    if warehouse is None or warehouse.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Склад не найден")
+
+    warehouse_names = db.scalars(
+        select(Equipment.warehouse).where(Equipment.business_id == ctx.business_id, Equipment.warehouse.is_not(None))
+    ).all()
+    in_use = any(w.lower() == warehouse.name.lower() for w in warehouse_names)
+    if in_use:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Нельзя удалить: этот склад использует хотя бы одна позиция оборудования. Сначала перенесите позиции на другой склад.",
+        )
+
+    db.delete(warehouse)
+    log_action(
+        db, business_id=ctx.business_id, user_id=ctx.user.id, action="delete", resource="equipment_warehouse", resource_id=str(warehouse_id)
+    )
+    db.commit()
+
+
 # --- Оборудование -------------------------------------------------------------
 
 
@@ -233,6 +376,7 @@ async def create_equipment(body: EquipmentCreate, ctx: BusinessContext = Depends
     canonical_category = _ensure_category(db, ctx, body.category)
     data = body.model_dump()
     data["category"] = canonical_category  # каноническое написание справочника, не то, что ввёл пользователь
+    data["warehouse"] = _ensure_warehouse(db, ctx, body.warehouse)
     item = Equipment(business_id=ctx.business_id, **data)
     db.add(item)
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="equipment")
@@ -257,6 +401,9 @@ async def update_equipment(
 
     if "category" in changes:
         changes["category"] = _ensure_category(db, ctx, changes["category"])
+
+    if "warehouse" in changes:
+        changes["warehouse"] = _ensure_warehouse(db, ctx, changes["warehouse"])
 
     if changes.get("status") == EquipmentStatus.retired:
         # Тот же принцип, что и при удалении: нельзя списать позицию, по
@@ -391,6 +538,7 @@ async def import_equipment(
             period_price_after = _parse_number(row.get("period_price_after", ""), "period_price_after")
 
             canonical_category = _ensure_category(db, ctx, category)
+            canonical_warehouse = _ensure_warehouse(db, ctx, row.get("warehouse") or None)
 
             item = Equipment(
                 business_id=ctx.business_id,
@@ -402,6 +550,7 @@ async def import_equipment(
                 period_days=period_days,
                 period_price=period_price,
                 period_price_after=period_price_after,
+                warehouse=canonical_warehouse,
                 notes=row.get("notes") or None,
             )
             db.add(item)

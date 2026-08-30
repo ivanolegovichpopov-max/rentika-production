@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api } from "../api/client";
-import type { Client, Equipment, EquipmentCategory, Rental } from "../api/types";
+import type { Client, Equipment, EquipmentCategory, EquipmentWarehouse, Rental } from "../api/types";
 
 /**
  * Общее хранилище оборудования/клиентов/аренд текущего бизнеса — аналог
@@ -19,12 +19,16 @@ import type { Client, Equipment, EquipmentCategory, Rental } from "../api/types"
 interface DataContextValue {
   equipment: Equipment[];
   equipmentCategories: EquipmentCategory[];
+  // Справочник складов (восемнадцатый проход) — та же механика, что и у
+  // категорий (см. reloadEquipmentCategories выше).
+  equipmentWarehouses: EquipmentWarehouse[];
   clients: Client[];
   rentals: Rental[];
   loading: boolean;
   reload: () => Promise<void>;
   reloadEquipment: () => Promise<void>;
   reloadEquipmentCategories: () => Promise<void>;
+  reloadEquipmentWarehouses: () => Promise<void>;
   reloadClients: () => Promise<void>;
   reloadRentals: () => Promise<void>;
 }
@@ -34,6 +38,7 @@ const DataContext = createContext<DataContextValue | null>(null);
 export function DataProvider({ businessId, children }: { businessId: string; children: ReactNode }) {
   const [equipment, setEquipment] = useState<Equipment[]>([]);
   const [equipmentCategories, setEquipmentCategories] = useState<EquipmentCategory[]>([]);
+  const [equipmentWarehouses, setEquipmentWarehouses] = useState<EquipmentWarehouse[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [rentals, setRentals] = useState<Rental[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,6 +48,9 @@ export function DataProvider({ businessId, children }: { businessId: string; chi
   }
   async function reloadEquipmentCategories() {
     setEquipmentCategories(await api.get<EquipmentCategory[]>(`/businesses/${businessId}/equipment-categories`));
+  }
+  async function reloadEquipmentWarehouses() {
+    setEquipmentWarehouses(await api.get<EquipmentWarehouse[]>(`/businesses/${businessId}/equipment-warehouses`));
   }
   async function reloadClients() {
     setClients(await api.get<Client[]>(`/businesses/${businessId}/clients`));
@@ -54,14 +62,16 @@ export function DataProvider({ businessId, children }: { businessId: string; chi
   async function reload() {
     setLoading(true);
     try {
-      const [eq, cats, cl, re] = await Promise.all([
+      const [eq, cats, whs, cl, re] = await Promise.all([
         api.get<Equipment[]>(`/businesses/${businessId}/equipment`),
         api.get<EquipmentCategory[]>(`/businesses/${businessId}/equipment-categories`),
+        api.get<EquipmentWarehouse[]>(`/businesses/${businessId}/equipment-warehouses`),
         api.get<Client[]>(`/businesses/${businessId}/clients`),
         api.get<Rental[]>(`/businesses/${businessId}/rentals`),
       ]);
       setEquipment(eq);
       setEquipmentCategories(cats);
+      setEquipmentWarehouses(whs);
       setClients(cl);
       setRentals(re);
     } finally {
@@ -79,12 +89,14 @@ export function DataProvider({ businessId, children }: { businessId: string; chi
       value={{
         equipment,
         equipmentCategories,
+        equipmentWarehouses,
         clients,
         rentals,
         loading,
         reload,
         reloadEquipment,
         reloadEquipmentCategories,
+        reloadEquipmentWarehouses,
         reloadClients,
         reloadRentals,
       }}

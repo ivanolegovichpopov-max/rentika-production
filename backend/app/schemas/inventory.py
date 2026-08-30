@@ -61,6 +61,31 @@ class EquipmentCategoryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EquipmentWarehouseCreate(BaseModel):
+    """Создание записи в справочнике складов — восемнадцатый проход, точная
+    аналогия EquipmentCategoryCreate (эндпоинт доступен только владельцу
+    бизнеса, см. create_equipment_warehouse, ctx.full_access)."""
+
+    name: str = Field(min_length=1, max_length=255)
+
+    _strip_name = field_validator("name")(_strip_or_raise)
+
+
+class EquipmentWarehouseRename(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+    _strip_name = field_validator("name")(_strip_or_raise)
+
+
+class EquipmentWarehouseOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    created_at: datetime
+    equipment_count: int
+
+    model_config = {"from_attributes": True}
+
+
 class EquipmentCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     category: str = Field(min_length=1, max_length=255)
@@ -70,10 +95,14 @@ class EquipmentCreate(BaseModel):
     period_days: int | None = Field(default=None, ge=1)
     period_price: float | None = Field(default=None, ge=0)
     period_price_after: float | None = Field(default=None, ge=0)
+    # Склад — необязательное поле (восемнадцатый проход), в отличие от
+    # category: не у каждого бизнеса несколько точек хранения.
+    warehouse: str | None = Field(default=None, max_length=255)
     notes: str | None = Field(default=None, max_length=4000)
 
     _strip_name = field_validator("name")(_strip_or_raise)
     _strip_category = field_validator("category")(_strip_or_raise)
+    _strip_warehouse = field_validator("warehouse")(_strip_optional)
 
 
 class EquipmentUpdate(BaseModel):
@@ -92,12 +121,14 @@ class EquipmentUpdate(BaseModel):
     period_days: int | None = Field(default=None, ge=1)
     period_price: float | None = Field(default=None, ge=0)
     period_price_after: float | None = Field(default=None, ge=0)
+    warehouse: str | None = Field(default=None, max_length=255)
     status: EquipmentStatus | None = None
     maintenance_until: date | None = None
     notes: str | None = Field(default=None, max_length=4000)
 
     _strip_name = field_validator("name")(_strip_optional)
     _strip_category = field_validator("category")(_strip_optional)
+    _strip_warehouse = field_validator("warehouse")(_strip_optional)
 
 
 class EquipmentOut(BaseModel):
@@ -110,6 +141,7 @@ class EquipmentOut(BaseModel):
     period_days: int | None
     period_price: float | None
     period_price_after: float | None
+    warehouse: str | None
     status: EquipmentStatus
     maintenance_until: date | None
     notes: str | None
@@ -134,6 +166,7 @@ class EquipmentImportRow(BaseModel):
     period_days: str = ""
     period_price: str = ""
     period_price_after: str = ""
+    warehouse: str | None = None
     notes: str | None = None
 
 

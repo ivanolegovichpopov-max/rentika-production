@@ -69,6 +69,25 @@ class EquipmentCategory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class EquipmentWarehouse(Base):
+    """Жёсткий справочник складов/точек хранения — восемнадцатый проход, по
+    прямой аналогии с EquipmentCategory выше (тот же принцип: создание
+    записи — привилегия владельца бизнеса, equipment.warehouse — простая
+    строка без FK, эта таблица только для валидации на уровне API и
+    автодополнения на фронте). В отличие от category поле необязательное —
+    у бизнеса с одной точкой хранения справочник может оставаться пустым."""
+
+    __tablename__ = "equipment_warehouses"
+    __table_args__ = (UniqueConstraint("business_id", "name", name="uq_equipment_warehouse_business_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Equipment(Base):
     __tablename__ = "equipment"
 
@@ -83,6 +102,10 @@ class Equipment(Base):
     # это даёт миграции безопасно переехать со старыми/мусорными значениями
     # без риска упасть на constraint-violation при бэкафилле.
     category: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Склад/точка хранения (восемнадцатый проход) — тот же принцип, что и у
+    # category (без FK, валидация на уровне API), но НЕОБЯЗАТЕЛЬНОЕ поле: не
+    # у каждого бизнеса несколько точек хранения.
+    warehouse: Mapped[str | None] = mapped_column(String(255), nullable=True)
     code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     daily_rate: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     deposit: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)

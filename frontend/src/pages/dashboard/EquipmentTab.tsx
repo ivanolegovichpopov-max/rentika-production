@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, ApiError } from "../../api/client";
 import { useData } from "../../context/DataContext";
-import type { Equipment, EquipmentCategory, EquipmentImportResult, Rental } from "../../api/types";
+import type { Equipment, EquipmentCategory, EquipmentImportResult, EquipmentWarehouse, Rental } from "../../api/types";
 import { EQ_META, RENTAL_META, Badge, equipmentDisplayStatus, nextFreeDate, rentalDisplayStatus } from "../../lib/statusMeta";
 import { money, fmtDate, isoAddDays, todayISO } from "../../lib/format";
 import { IconClose, IconCopy, IconEdit, IconTrash, IconChevronDown, IconCheck } from "../../lib/icons";
@@ -27,6 +27,8 @@ const FILTERS: { id: string; label: string }[] = [
 const EQUIPMENT_SORT_COLUMNS: { key: string; label: string }[] = [
   { key: "name", label: "Оборудование" },
   { key: "category", label: "Категория" },
+  // Склад (восемнадцатый проход) — по той же механике, что и категория.
+  { key: "warehouse", label: "Склад" },
   { key: "status", label: "Статус" },
   { key: "rate", label: "Ставка" },
   { key: "deposit", label: "Депозит" },
@@ -48,6 +50,7 @@ interface EquipmentSort {
 function equipmentSortValue(e: Equipment, key: string, rentals: Rental[], today: string): string | number {
   if (key === "name") return e.name.toLowerCase();
   if (key === "category") return e.category.toLowerCase();
+  if (key === "warehouse") return (e.warehouse ?? "").toLowerCase();
   if (key === "status") return EQUIPMENT_STATUS_PRIORITY[equipmentDisplayStatus(e, rentals, today)] ?? 99;
   if (key === "rate") return e.daily_rate;
   if (key === "deposit") return e.deposit;
@@ -67,15 +70,23 @@ function sortEquipmentList(list: Equipment[], sort: EquipmentSort, rentals: Rent
   });
 }
 
-/** Подпись ставки с учётом ступенчатого тарифа — 1:1 из демо (rateLabel). */
+/** Подпись ставки с учётом ступенчатого тарифа — 1:1 из демо (rateLabel).
+ *
+ * period_price_after хранится в БД как цена ЗА ПЕРИОД (period_days дней —
+ * см. periodPriceAfterPerDay ниже и комментарий в app/services/pricing.py),
+ * поэтому для показа "после периода — Х ₽/сутки" её нужно делить на
+ * period_days, а не печатать как есть "Х/Nдн" (восемнадцатый проход, обзор
+ * по скриншотам, п.4 — форма ввода это уже делала, а этот лейбл в таблице
+ * и на плашках — ещё нет). */
 function rateLabel(e: Equipment): string {
   if (e.period_days && e.period_price) {
+    const afterPerDay = e.period_price_after != null ? Math.round((e.period_price_after / e.period_days) * 100) / 100 : null;
     return (
       money(e.period_price) +
       "/" +
       e.period_days +
       "дн" +
-      (e.period_price_after ? " → " + money(e.period_price_after) + "/" + e.period_days + "дн" : "")
+      (afterPerDay != null ? " → " + money(afterPerDay) + "/сутки" : "")
     );
   }
   return money(e.daily_rate) + "/сутки";
@@ -158,6 +169,10 @@ function equipmentHasOpenRentals(equipmentId: string, rentals: Rental[]): boolea
 interface EquipmentFormState {
   name: string;
   category: string;
+  // Склад/точка хранения (восемнадцатый проход) — в отличие от category
+  // необязательное поле, поэтому пустая строка здесь означает "не указан",
+  // а не ошибку валидации (см. formToPayload — конвертируется в null).
+  warehouse: string;
   code: string;
   daily_rate: string;
   deposit: string;
@@ -170,6 +185,7 @@ interface EquipmentFormState {
 const EMPTY_FORM: EquipmentFormState = {
   name: "",
   category: "",
+  warehouse: "",
   code: "",
   daily_rate: "",
   deposit: "0",
@@ -197,6 +213,7 @@ function formFromEquipment(e: Equipment): EquipmentFormState {
   return {
     name: e.name,
     category: e.category,
+    warehouse: e.warehouse ?? "",
     code: e.code ?? "",
     daily_rate: String(e.daily_rate),
     deposit: String(e.deposit),
@@ -239,6 +256,7 @@ function formToPayload(form: EquipmentFormState) {
   return {
     name: form.name,
     category: form.category,
+    warehouse: form.warehouse.trim() || null,
     code: form.code || null,
     daily_rate: parseDecimalField(form.daily_rate).value ?? 0,
     deposit: parseDecimalField(form.deposit).value ?? 0,
@@ -293,6 +311,19 @@ function CategoryAutocomplete({
 }) {
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  // Куда портировать панель — обычно document.body, НО если поле находится
+  // внутри открытого <dialog> (showModal()), портал в body рисуется ПОД
+  // модалкой: открытый <dialog> уходит в отдельный слой браузера ("top
+  // layer"), который красится поверх ВСЕГО обычного содержимого страницы
+  // независимо от z-index — портированная в body панель в этот слой не
+  // попадает и оказывается визуально скрыта под диалогом, даже будучи живой
+  // в DOM (баг найден и подтверждён через getComputedStyle() на реальном
+  // сайте — семнадцатый проход, уточнение). Портал в САМ `<dialog>` решает
+  // это: панель остаётся потомком top layer'а и красится поверх содержимого
+  // формы как надо, и заодно (ради чего портал вообще делался) не обрезается
+  // overflow:auto таблицы предпросмотра импорта CSV — та проверка не теряется,
+  // просто целевой контейнер портала теперь не всегда document.body.
+  const [portalTarget, setPortalTarget] = useState<Element | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -301,6 +332,7 @@ function CategoryAutocomplete({
     if (!el) return;
     const r = el.getBoundingClientRect();
     setRect({ top: r.bottom + 4, left: r.left, width: r.width });
+    setPortalTarget(el.closest("dialog") || document.body);
     setOpen(true);
   }
 
@@ -367,7 +399,7 @@ function CategoryAutocomplete({
               </button>
             ))}
           </div>,
-          document.body
+          portalTarget || document.body
         )}
     </>
   );
@@ -385,12 +417,14 @@ function EquipmentFormModal({
   error,
   isOwner,
   categories,
+  warehouses,
   existingCodes,
   allowAddAnother,
   resetSignal,
   onClose,
   onSubmit,
   onManageCategories,
+  onManageWarehouses,
 }: {
   open: boolean;
   title: string;
@@ -398,6 +432,9 @@ function EquipmentFormModal({
   error: string | null;
   isOwner: boolean;
   categories: EquipmentCategory[];
+  // Справочник складов (восемнадцатый проход) — та же механика, что и у
+  // categories выше, но необязательное поле (см. EquipmentFormState.warehouse).
+  warehouses: EquipmentWarehouse[];
   // Инвентарные номера уже существующих позиций (кроме редактируемой) — для
   // мягкого предупреждения о дубле, см. duplicateCode ниже.
   existingCodes: string[];
@@ -423,6 +460,9 @@ function EquipmentFormModal({
   // отменять уже введённые данные. Необязательная — форма работает и без
   // неё, если родитель её не передал.
   onManageCategories?: () => void;
+  // Ссылка "Управление складами" — тот же смысл, что и onManageCategories
+  // выше (восемнадцатый проход).
+  onManageWarehouses?: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -474,6 +514,13 @@ function EquipmentFormModal({
   // для остальных ролей — у них поле и так закрытый <select> из справочника.
   const isNewCategory =
     isOwner && trimmedCategory !== "" && !categories.some((c) => c.name.toLowerCase() === trimmedCategory.toLowerCase());
+
+  // Тот же смысл, что и isNewCategory выше, но для склада — восемнадцатый
+  // проход. Поле необязательное, так что пустое значение никогда не
+  // считается "новым складом".
+  const trimmedWarehouse = form.warehouse.trim();
+  const isNewWarehouse =
+    isOwner && trimmedWarehouse !== "" && !warehouses.some((w) => w.name.toLowerCase() === trimmedWarehouse.toLowerCase());
 
   // 16-й проход, п.3 предыдущего обзора: "битая" настройка ступенчатого
   // тарифа — заполнено 1-2 поля из трёх, третье забыто — раньше молча
@@ -646,6 +693,43 @@ function EquipmentFormModal({
               <div className="field-hint">
                 <button type="button" className="link-btn" onClick={onManageCategories}>
                   Управление категориями
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="field">
+            <label>Склад</label>
+            {/* Склад — необязательное поле (в отличие от категории), по той
+                же механике: владелец может ввести новое название (заведётся
+                в справочнике автоматически при сохранении), остальные роли
+                выбирают из уже существующего списка или оставляют поле
+                пустым — восемнадцатый проход, обзор по скриншотам, п.2:
+                "по принципу категорий... можно пойти механике категорий и
+                всё разместить тут". */}
+            {isOwner ? (
+              <CategoryAutocomplete
+                value={form.warehouse}
+                onChange={(v) => setForm({ ...form, warehouse: v })}
+                categories={warehouses.map((w) => w.name)}
+                placeholder="Необязательно — если несколько точек хранения"
+              />
+            ) : (
+              <select value={form.warehouse} onChange={(e) => setForm({ ...form, warehouse: e.target.value })}>
+                <option value="">Не указан</option>
+                {warehouses.map((w) => (
+                  <option key={w.id} value={w.name}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {isNewWarehouse && (
+              <div className="field-hint">Такого склада пока нет — он будет создан автоматически при сохранении.</div>
+            )}
+            {isOwner && onManageWarehouses && (
+              <div className="field-hint">
+                <button type="button" className="link-btn" onClick={onManageWarehouses}>
+                  Управление складами
                 </button>
               </div>
             )}
@@ -875,6 +959,7 @@ export function EquipmentDetailPanel({
           <h3>{item.name}</h3>
           <div style={{ color: "var(--muted)", fontSize: "12.5px", marginTop: "2px" }}>
             № {item.code ?? "—"} · {item.category}
+            {item.warehouse ? ` · ${item.warehouse}` : ""}
           </div>
         </div>
         <button className="icon-btn" onClick={onClose}>
@@ -1000,6 +1085,9 @@ export function EquipmentDetailPanel({
 const IMPORT_TEMPLATE_HEADER = [
   "name",
   "category",
+  // Склад — необязательная колонка (восемнадцатый проход), может быть
+  // пустой в файле, тогда позиция создаётся без привязки к складу.
+  "warehouse",
   "code",
   "daily_rate",
   "deposit",
@@ -1012,6 +1100,7 @@ const IMPORT_TEMPLATE_HEADER = [
 const IMPORT_TEMPLATE_EXAMPLE = [
   "Перфоратор Bosch GBH 5-40",
   "Инструмент",
+  "Центральный склад",
   "INV-101",
   "500",
   "2000",
@@ -1046,6 +1135,7 @@ function downloadImportTemplate() {
 const EQUIPMENT_EXPORT_HEADER = [
   "name",
   "category",
+  "warehouse",
   "code",
   "daily_rate",
   "deposit",
@@ -1060,6 +1150,7 @@ function exportEquipmentCsv(list: Equipment[], rentals: Rental[], today: string)
   const rows = list.map((e) => [
     e.name,
     e.category,
+    e.warehouse ?? "",
     e.code ?? "",
     e.daily_rate,
     e.deposit,
@@ -1361,6 +1452,276 @@ function EquipmentCategoriesModal({
   );
 }
 
+/* ============================================================
+   Модалка управления справочником складов — восемнадцатый проход, точная
+   копия EquipmentCategoriesModal выше (тот же идиом, тот же принцип
+   переименования каскадом/запрета удаления занятого склада — см. backend
+   app/api/routes/equipment.py: rename/delete_equipment_warehouse). Отдельный
+   компонент, а не параметризация EquipmentCategoriesModal — тексты и
+   эндпоинты в двух местах отличаются ("категория"/"склад",
+   equipment-categories/equipment-warehouses), а самой логики немного, так
+   что дублирование дешевле, чем обобщение через пропы-строки.
+   ============================================================ */
+function EquipmentWarehousesModal({
+  open,
+  businessId,
+  warehouses,
+  onClose,
+  onChanged,
+}: {
+  open: boolean;
+  businessId: string;
+  warehouses: EquipmentWarehouse[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [rowError, setRowError] = useState<Record<string, string>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [newWhName, setNewWhName] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
+  const [addBusy, setAddBusy] = useState(false);
+  const [whSort, setWhSort] = useState<{ key: "name" | "count"; dir: "asc" | "desc" }>({ key: "name", dir: "asc" });
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  const { notify } = useToast();
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  useEffect(() => {
+    if (open) {
+      setRenamingId(null);
+      setRenameValue("");
+      setRowError({});
+      setNewWhName("");
+      setAddError(null);
+    }
+  }, [open]);
+
+  async function submitNewWarehouse() {
+    const value = newWhName.trim();
+    if (!value) {
+      setAddError("Название не может быть пустым");
+      return;
+    }
+    if (warehouses.some((w) => w.name.toLowerCase() === value.toLowerCase())) {
+      setAddError("Такой склад уже есть в справочнике");
+      return;
+    }
+    setAddBusy(true);
+    setAddError(null);
+    try {
+      await api.post(`/businesses/${businessId}/equipment-warehouses`, { name: value });
+      setNewWhName("");
+      onChanged();
+    } catch (err) {
+      setAddError(err instanceof ApiError ? err.message : "Не удалось добавить склад");
+    } finally {
+      setAddBusy(false);
+    }
+  }
+
+  function toggleWhSort(key: "name" | "count") {
+    setWhSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
+  }
+  const sortedWarehouses = [...warehouses].sort((a, b) => {
+    const dir = whSort.dir === "desc" ? -1 : 1;
+    if (whSort.key === "count") return (a.equipment_count - b.equipment_count) * dir;
+    return a.name.localeCompare(b.name, "ru") * dir;
+  });
+
+  function startRename(w: EquipmentWarehouse) {
+    setRenamingId(w.id);
+    setRenameValue(w.name);
+    setRowError((prev) => ({ ...prev, [w.id]: "" }));
+  }
+
+  async function submitRename(w: EquipmentWarehouse) {
+    const value = renameValue.trim();
+    if (!value) {
+      setRowError((prev) => ({ ...prev, [w.id]: "Название не может быть пустым" }));
+      return;
+    }
+    if (value === w.name) {
+      setRenamingId(null);
+      return;
+    }
+    setBusyId(w.id);
+    try {
+      await api.patch(`/businesses/${businessId}/equipment-warehouses/${w.id}`, { name: value });
+      setRenamingId(null);
+      onChanged();
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [w.id]: err instanceof ApiError ? err.message : "Не удалось переименовать" }));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDelete(w: EquipmentWarehouse) {
+    if (w.equipment_count > 0) {
+      notify(
+        `Нельзя удалить: склад «${w.name}» использует ${w.equipment_count} ` +
+          `${w.equipment_count === 1 ? "позиция" : "позиций"} оборудования. Сначала перенесите их на другой склад.`
+      );
+      return;
+    }
+    if (!(await confirm(`Склад «${w.name}» будет удалён безвозвратно.`, { danger: true }))) return;
+    setBusyId(w.id);
+    try {
+      await api.delete(`/businesses/${businessId}/equipment-warehouses/${w.id}`);
+      onChanged();
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : "Не удалось удалить склад");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <dialog
+      id="modal"
+      ref={ref}
+      onClose={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="modal-head">
+        <h3>Склады</h3>
+        <button type="button" className="icon-btn" onClick={onClose}>
+          <IconClose />
+        </button>
+      </div>
+      <div className="modal-body">
+        <div className="inline-form" style={{ marginBottom: "14px" }}>
+          <input
+            value={newWhName}
+            onChange={(e) => {
+              setNewWhName(e.target.value);
+              setAddError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void submitNewWarehouse();
+              }
+            }}
+            placeholder="Новый склад…"
+            disabled={addBusy}
+            style={{ flex: 1 }}
+          />
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => void submitNewWarehouse()} disabled={addBusy}>
+            {addBusy ? "Добавляем…" : "Добавить"}
+          </button>
+        </div>
+        {addError && <div className="form-error" style={{ marginBottom: "10px" }}>{addError}</div>}
+        {warehouses.length === 0 ? (
+          <div className="empty-note">Справочник пуст — добавьте первый склад выше (нужно только если у бизнеса несколько точек хранения).</div>
+        ) : (
+          <div className="table-wrap" style={{ maxHeight: "360px", overflowY: "auto" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th className={"sortable" + (whSort.key === "name" ? " active" : "")} onClick={() => toggleWhSort("name")}>
+                    Название
+                    <span className={"sort-arrow" + (whSort.key === "name" ? "" : " sort-arrow-idle")}>
+                      {whSort.key === "name" ? (whSort.dir === "desc" ? "▼" : "▲") : "↕"}
+                    </span>
+                  </th>
+                  <th className={"sortable" + (whSort.key === "count" ? " active" : "")} onClick={() => toggleWhSort("count")}>
+                    Позиций
+                    <span className={"sort-arrow" + (whSort.key === "count" ? "" : " sort-arrow-idle")}>
+                      {whSort.key === "count" ? (whSort.dir === "desc" ? "▼" : "▲") : "↕"}
+                    </span>
+                  </th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedWarehouses.map((w) => (
+                  <tr key={w.id}>
+                    <td>
+                      {renamingId === w.id ? (
+                        <>
+                          <input
+                            autoFocus
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void submitRename(w);
+                              if (e.key === "Escape") setRenamingId(null);
+                            }}
+                            style={{ maxWidth: "220px" }}
+                          />
+                          {rowError[w.id] && <div className="form-error">{rowError[w.id]}</div>}
+                        </>
+                      ) : (
+                        w.name
+                      )}
+                    </td>
+                    <td className="mono">{w.equipment_count}</td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      {renamingId === w.id ? (
+                        <>
+                          <button type="button" className="btn btn-sm" onClick={() => setRenamingId(null)} disabled={busyId === w.id}>
+                            Отмена
+                          </button>{" "}
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            onClick={() => void submitRename(w)}
+                            disabled={busyId === w.id}
+                          >
+                            Сохранить
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            title="Переименовать"
+                            onClick={() => startRename(w)}
+                            disabled={busyId !== null}
+                          >
+                            <IconEdit />
+                          </button>{" "}
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            title={w.equipment_count > 0 ? "Нельзя удалить: склад используется" : "Удалить"}
+                            onClick={() => void handleDelete(w)}
+                            disabled={busyId !== null}
+                          >
+                            <IconTrash />
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      <div className="modal-foot">
+        <button type="button" className="btn btn-primary" onClick={onClose}>
+          Готово
+        </button>
+      </div>
+      {confirmDialog}
+    </dialog>
+  );
+}
+
 interface ImportPreviewRow {
   row: number;
   // Все колонки шаблона (не только проблемные) — чтобы при сборке
@@ -1517,10 +1878,10 @@ function EquipmentImportModal({
           <>
             <div className="field-hint" style={{ marginBottom: "10px" }}>
               Файл CSV с заголовком в первой строке. Обязательные колонки: <code>name</code>, <code>category</code>,{" "}
-              <code>daily_rate</code>. Необязательные: <code>code</code>, <code>deposit</code>,{" "}
+              <code>daily_rate</code>. Необязательные: <code>warehouse</code>, <code>code</code>, <code>deposit</code>,{" "}
               <code>period_days</code>, <code>period_price</code>, <code>period_price_after</code>,{" "}
-              <code>notes</code>. Категория должна либо уже быть в справочнике, либо — если импорт делает владелец
-              бизнеса — заведётся автоматически.
+              <code>notes</code>. Категория и склад должны либо уже быть в соответствующем справочнике, либо — если
+              импорт делает владелец бизнеса — заведутся автоматически.
             </div>
             <button type="button" className="btn btn-sm" onClick={downloadImportTemplate}>
               Скачать шаблон CSV
@@ -1668,7 +2029,8 @@ export function EquipmentTab({
   setFilter: (f: string) => void;
   isOwner: boolean;
 }) {
-  const { equipment, equipmentCategories, rentals, reloadEquipment, reloadEquipmentCategories } = useData();
+  const { equipment, equipmentCategories, equipmentWarehouses, rentals, reloadEquipment, reloadEquipmentCategories, reloadEquipmentWarehouses } =
+    useData();
   const [sort, setSort] = useState<EquipmentSort>({ key: null, dir: "asc" });
   // Массив вместо одиночного значения — 16-й проход, п.11 обзора:
   // мультивыбор категорий в фильтре. Пустой массив = "Все категории" (тот же
@@ -1677,6 +2039,11 @@ export function EquipmentTab({
   const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
   const [catFilterOpen, setCatFilterOpen] = useState(false);
   const catFilterRef = useRef<HTMLDivElement>(null);
+  // Фильтр по складу (восемнадцатый проход) — точная копия механики
+  // categoryFilter выше, тот же смысл пустого массива ("все склады").
+  const [warehouseFilter, setWarehouseFilter] = useState<string[]>([]);
+  const [whFilterOpen, setWhFilterOpen] = useState(false);
+  const whFilterRef = useRef<HTMLDivElement>(null);
   const [modalMode, setModalMode] = useState<"add" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [copySource, setCopySource] = useState<Equipment | null>(null);
@@ -1690,6 +2057,7 @@ export function EquipmentTab({
   // Пятнадцатый проход (обзор вкладки, пункты 1/3/4): справочник категорий,
   // массовые действия над выбранными строками.
   const [categoriesModalOpen, setCategoriesModalOpen] = useState(false);
+  const [warehousesModalOpen, setWarehousesModalOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkCategory, setBulkCategory] = useState("");
   const [bulkStatus, setBulkStatus] = useState("");
@@ -1702,21 +2070,28 @@ export function EquipmentTab({
   // Категорийный фильтр — независимый от поиска и статусного фильтра,
   // комбинируется с обоими (см. согласование с пользователем в тринадцатом
   // проходе: "Фильтр категорий обязательно нужен").
-  const bySearchAndCategory = equipment.filter((e) => {
+  const bySearchCategoryAndWarehouse = equipment.filter((e) => {
     const matchesCategory = categoryFilter.length === 0 || categoryFilter.includes(e.category);
+    // Пустой warehouseFilter — "все склады", включая позиции вообще без
+    // склада; выбор конкретных складов исключает позиции без склада (у них
+    // e.warehouse === null, что никогда не совпадёт с выбранным именем) —
+    // восемнадцатый проход, та же механика, что и у categoryFilter.
+    const matchesWarehouse = warehouseFilter.length === 0 || (e.warehouse != null && warehouseFilter.includes(e.warehouse));
     const matchesSearch = !q || (e.name + " " + e.category + " " + (e.code ?? "")).toLowerCase().includes(q);
-    return matchesCategory && matchesSearch;
+    return matchesCategory && matchesWarehouse && matchesSearch;
   });
-  // Счётчики на кнопках статуса считаются от уже применённых поиска и
-  // категории, но НЕ от самого статусного фильтра — иначе, переключаясь
-  // между статусами, пользователь видел бы на остальных кнопках всегда "0"
-  // (см. согласование: "Счётчики - делаем").
-  const statusCounts: Record<string, number> = { all: bySearchAndCategory.length };
+  // Счётчики на кнопках статуса считаются от уже применённых поиска,
+  // категории и склада, но НЕ от самого статусного фильтра — иначе,
+  // переключаясь между статусами, пользователь видел бы на остальных
+  // кнопках всегда "0" (см. согласование: "Счётчики - делаем").
+  const statusCounts: Record<string, number> = { all: bySearchCategoryAndWarehouse.length };
   for (const f of FILTERS) {
     if (f.id === "all") continue;
-    statusCounts[f.id] = bySearchAndCategory.filter((e) => equipmentDisplayStatus(e, rentals, today) === f.id).length;
+    statusCounts[f.id] = bySearchCategoryAndWarehouse.filter((e) => equipmentDisplayStatus(e, rentals, today) === f.id).length;
   }
-  const filtered = bySearchAndCategory.filter((e) => filter === "all" || equipmentDisplayStatus(e, rentals, today) === filter);
+  const filtered = bySearchCategoryAndWarehouse.filter(
+    (e) => filter === "all" || equipmentDisplayStatus(e, rentals, today) === filter
+  );
   const list = sortEquipmentList(filtered, sort, rentals, today);
 
   // Сброс выделения при смене фильтров/поиска — иначе можно было бы
@@ -1725,7 +2100,7 @@ export function EquipmentTab({
   useEffect(() => {
     setSelectedIds(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, categoryFilter, search]);
+  }, [filter, categoryFilter, warehouseFilter, search]);
 
   // Закрытие выпадающей панели мультивыбора категорий по клику вне неё
   // (16-й проход, п.11 обзора) — это не <dialog>, а обычный абсолютно
@@ -1740,8 +2115,44 @@ export function EquipmentTab({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [catFilterOpen]);
 
+  // Тот же click-outside idiom, что и у catFilterOpen выше, для панели
+  // фильтра по складу (восемнадцатый проход).
+  useEffect(() => {
+    if (!whFilterOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (whFilterRef.current && !whFilterRef.current.contains(e.target as Node)) setWhFilterOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [whFilterOpen]);
+
   function toggleCategoryFilterValue(name: string) {
-    setCategoryFilter((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
+    setCategoryFilter((prev) => {
+      const next = prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name];
+      // Если пользователь вручную отметил буквально все категории по одной —
+      // это то же самое, что вообще не фильтровать ("Все категории"), так
+      // что схлопываем обратно в пустой массив-сентинел, чтобы галочка
+      // "Все категории" сама подсветилась (восемнадцатый проход, обзор по
+      // скриншотам, п.3). matchesCategory ниже трактует пустой массив как
+      // "показать всё" — то же самое поведение, что и явный клик по "Все
+      // категории".
+      if (next.length > 0 && equipmentCategories.length > 0 && next.length === equipmentCategories.length) {
+        return [];
+      }
+      return next;
+    });
+  }
+
+  // Точная копия toggleCategoryFilterValue выше — та же авто-отметка "Все
+  // склады" при ручном выборе всех складов по одному (восемнадцатый проход).
+  function toggleWarehouseFilterValue(name: string) {
+    setWarehouseFilter((prev) => {
+      const next = prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name];
+      if (next.length > 0 && equipmentWarehouses.length > 0 && next.length === equipmentWarehouses.length) {
+        return [];
+      }
+      return next;
+    });
   }
 
   function toggleSort(key: string) {
@@ -1787,7 +2198,7 @@ export function EquipmentTab({
       } else {
         await api.post(`/businesses/${businessId}/equipment`, formToPayload(form));
       }
-      await Promise.all([reloadEquipment(), reloadEquipmentCategories()]);
+      await Promise.all([reloadEquipment(), reloadEquipmentCategories(), reloadEquipmentWarehouses()]);
       if (addAnother) {
         // Модалка остаётся открытой в режиме "add" с пустой формой — copySource
         // тоже сбрасывается, иначе следующее "добавить ещё" опять подставило бы
@@ -1877,7 +2288,7 @@ export function EquipmentTab({
     try {
       const results = await Promise.allSettled(deletable.map((id) => api.delete(`/businesses/${businessId}/equipment/${id}`)));
       const failed = results.filter((r) => r.status === "rejected").length;
-      await Promise.all([reloadEquipment(), reloadEquipmentCategories()]);
+      await Promise.all([reloadEquipment(), reloadEquipmentCategories(), reloadEquipmentWarehouses()]);
       setSelectedIds(new Set());
       if (failed > 0 || blocked.length > 0) {
         notify(
@@ -1902,6 +2313,7 @@ export function EquipmentTab({
       : EMPTY_FORM;
 
   const categoryNames = equipmentCategories.map((c) => c.name);
+  const warehouseNames = equipmentWarehouses.map((w) => w.name);
   // Для мягкого предупреждения о дубле инв. номера — код самой редактируемой
   // позиции исключается, иначе форма предупреждала бы о "дубле" при
   // сохранении без изменения номера.
@@ -1972,11 +2384,58 @@ export function EquipmentTab({
               )}
             </div>
           )}
+          {warehouseNames.length > 0 && (
+            // Точная копия фильтра по категории выше — восемнадцатый проход,
+            // та же механика ("механике категорий и все разместить тут").
+            <div className="cat-filter" ref={whFilterRef}>
+              <button type="button" className="btn cat-filter-btn" onClick={() => setWhFilterOpen((v) => !v)}>
+                {warehouseFilter.length === 0
+                  ? "Все склады"
+                  : warehouseFilter.length === 1
+                  ? warehouseFilter[0]
+                  : `Складов: ${warehouseFilter.length}`}
+                <IconChevronDown />
+              </button>
+              {whFilterOpen && (
+                <div className="cat-filter-panel">
+                  <label className={"cat-filter-option" + (warehouseFilter.length === 0 ? " checked" : "")}>
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={warehouseFilter.length === 0}
+                      onChange={() => setWarehouseFilter([])}
+                    />
+                    <span className="cat-filter-check">{warehouseFilter.length === 0 && <IconCheck />}</span>
+                    <span className="cat-filter-name">Все склады</span>
+                  </label>
+                  <div className="cat-filter-sep" />
+                  {equipmentWarehouses.map((w) => (
+                    <label className={"cat-filter-option" + (warehouseFilter.includes(w.name) ? " checked" : "")} key={w.id}>
+                      <input
+                        type="checkbox"
+                        className="sr-only"
+                        checked={warehouseFilter.includes(w.name)}
+                        onChange={() => toggleWarehouseFilterValue(w.name)}
+                      />
+                      <span className="cat-filter-check">{warehouseFilter.includes(w.name) && <IconCheck />}</span>
+                      <span className="cat-filter-name">{w.name}</span>
+                      <span className="cat-filter-count">{w.equipment_count}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
           {isOwner && (
             <button className="btn" onClick={() => setCategoriesModalOpen(true)}>
               Категории
+            </button>
+          )}
+          {isOwner && (
+            <button className="btn" onClick={() => setWarehousesModalOpen(true)}>
+              Склады
             </button>
           )}
           <button className="btn" onClick={() => exportEquipmentCsv(list, rentals, today)} disabled={list.length === 0}>
@@ -2098,6 +2557,7 @@ export function EquipmentTab({
                       <div className="cell-sub">№ {it.code ?? "—"}</div>
                     </td>
                     <td>{it.category}</td>
+                    <td>{it.warehouse ?? "—"}</td>
                     <td>
                       <Badge meta={EQ_META[status]} />
                       {freeFrom && <div className="cell-sub">своб. с {freeFrom}</div>}
@@ -2124,12 +2584,14 @@ export function EquipmentTab({
         error={formError}
         isOwner={isOwner}
         categories={equipmentCategories}
+        warehouses={equipmentWarehouses}
         existingCodes={existingCodes}
         allowAddAnother={modalMode === "add"}
         resetSignal={formResetSignal}
         onClose={closeFormModal}
         onSubmit={(form, addAnother) => handleSubmitForm(form, addAnother)}
         onManageCategories={isOwner ? () => setCategoriesModalOpen(true) : undefined}
+        onManageWarehouses={isOwner ? () => setWarehousesModalOpen(true) : undefined}
       />
 
       <EquipmentImportModal
@@ -2137,7 +2599,7 @@ export function EquipmentTab({
         businessId={businessId}
         categories={equipmentCategories}
         onClose={() => setImportOpen(false)}
-        onImported={() => void Promise.all([reloadEquipment(), reloadEquipmentCategories()])}
+        onImported={() => void Promise.all([reloadEquipment(), reloadEquipmentCategories(), reloadEquipmentWarehouses()])}
       />
 
       <EquipmentCategoriesModal
@@ -2146,6 +2608,14 @@ export function EquipmentTab({
         categories={equipmentCategories}
         onClose={() => setCategoriesModalOpen(false)}
         onChanged={() => void Promise.all([reloadEquipment(), reloadEquipmentCategories()])}
+      />
+
+      <EquipmentWarehousesModal
+        open={warehousesModalOpen}
+        businessId={businessId}
+        warehouses={equipmentWarehouses}
+        onClose={() => setWarehousesModalOpen(false)}
+        onChanged={() => void Promise.all([reloadEquipment(), reloadEquipmentWarehouses()])}
       />
       {bulkConfirmDialog}
 
