@@ -176,27 +176,28 @@ export function overlapDays(aStart: string, aEnd: string, bStart: string, bEnd: 
 }
 
 /** Стоимость ОДНОЙ позиции аренды за N дней с учётом ступенчатого тарифа
- * (если задан period_days_snapshot/period_price_snapshot) — порт
- * itemCostForDays() из демо: первые period_days_snapshot дней — по
- * period_price_snapshot, каждый следующий полный период той же длины — по
- * period_price_after_snapshot (или по той же цене, если "после" не задана),
- * неполный хвостовой период — пропорционально дням. */
+ * (если задан period_days_snapshot/period_price_snapshot) — первые
+ * period_days_snapshot дней стоят period_price_snapshot, каждый день СВЕРХ
+ * этого — per_day_after = period_price_after_snapshot / period_days_snapshot
+ * (без округления до целых периодов). Формула приведена в соответствие с
+ * app/services/pricing.py:item_cost_for_days (backend, источник истины для
+ * реального биллинга) и с локальной копией в RentalsTab.tsx — 16-й проход,
+ * обзор по скриншотам, п.2: раньше здесь (и в идентичной копии в
+ * CalendarTab.tsx) была ДРУГАЯ формула — "каждый следующий ПОЛНЫЙ период по
+ * period_price_after, остаток пропорционально" — что давало иное число, чем
+ * реально спишет backend при возврате, стоило по-крупному разойтись на
+ * сроках длиннее двух периодов. Расхождение обнаружено при переносе поля
+ * "Цена за период далее" на посуточный ввод (см. EquipmentFormModal) —
+ * предпросмотр стоимости в форме добавления оборудования использует именно
+ * эту функцию. */
 export function itemCostForDays(it: RentalItem, days: number): number {
   if (days <= 0) return 0;
   if (!it.period_days_snapshot || !it.period_price_snapshot) return it.daily_rate_snapshot * days;
   const P = it.period_days_snapshot;
-  const fullPeriods = Math.floor(days / P);
-  const remDays = days - fullPeriods * P;
-  let total = 0;
-  if (fullPeriods >= 1) {
-    total += it.period_price_snapshot;
-    if (fullPeriods > 1) total += (fullPeriods - 1) * (it.period_price_after_snapshot || it.period_price_snapshot);
-  }
-  if (remDays > 0) {
-    const perDay = (fullPeriods >= 1 ? (it.period_price_after_snapshot || it.period_price_snapshot) : it.period_price_snapshot) / P;
-    total += perDay * remDays;
-  }
-  return total;
+  if (days <= P) return it.daily_rate_snapshot * days;
+  const extraDays = days - P;
+  const perDayAfter = (it.period_price_after_snapshot || 0) / P;
+  return it.period_price_snapshot + extraDays * perDayAfter;
 }
 
 /** Стоимость ВСЕХ позиций аренды за N дней — порт rentalItemsCost() из демо. */

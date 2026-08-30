@@ -18,10 +18,10 @@
  *     состояние компонента — сбрасывается при уходе с вкладки/перезагрузке
  *     страницы. Сознательное упрощение: сам факт наличия календаря в проде
  *     важнее персистентности мелких предпочтений одного пользователя.
- *  2. Всплывающие уведомления (toast) в демо — здесь просто browser alert()
- *     для сообщения "диапазон занят". Toast-система в проде пока не
- *     перенесена ни в одну вкладку (RentalsTab/EquipmentTab тоже используют
- *     alert()/confirm()), так что это соответствует остальному приложению.
+ *  2. Всплывающее уведомление "диапазон занят" раньше шло через browser
+ *     alert() (соответствовало остальному приложению — см. 16-й проход,
+ *     обзор по скриншотам). Теперь — через общий useToast() (Toast.tsx),
+ *     системную замену alert() на всё приложение.
  */
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useData } from "../../context/DataContext";
@@ -29,6 +29,7 @@ import { api, ApiError } from "../../api/client";
 import type { Client, Equipment, Rental } from "../../api/types";
 import { todayISO, isoAddDays, dayDiff, ymd, fmtDate, money, spanDays } from "../../lib/format";
 import { IconChevronDown, IconGrip, IconClose } from "../../lib/icons";
+import { useToast } from "../../components/Toast";
 
 const CAL_RANGE_OPTIONS: (number | "month")[] = [7, 14, 30, "month"];
 
@@ -58,22 +59,18 @@ function clientInitials(name: string): string {
  * приближённая оценка, а не точная финансовая сумма (её после создания
  * аренды посчитает backend, как и везде в проде).
  */
+// Формула приведена в соответствие с app/services/pricing.py:item_cost_for_days
+// и financeCalc.ts:itemCostForDays (16-й проход — здесь раньше была другая,
+// расходящаяся с реальным биллингом формула "полных периодов", см. подробный
+// комментарий в financeCalc.ts).
 function itemCostForDays(eq: Equipment, days: number): number {
   if (days <= 0) return 0;
   if (!eq.period_days || !eq.period_price) return eq.daily_rate * days;
   const P = eq.period_days;
-  const fullPeriods = Math.floor(days / P);
-  const remDays = days - fullPeriods * P;
-  let total = 0;
-  if (fullPeriods >= 1) {
-    total += eq.period_price;
-    if (fullPeriods > 1) total += (fullPeriods - 1) * (eq.period_price_after || eq.period_price);
-  }
-  if (remDays > 0) {
-    const perDay = (fullPeriods >= 1 ? eq.period_price_after || eq.period_price : eq.period_price) / P;
-    total += perDay * remDays;
-  }
-  return total;
+  if (days <= P) return eq.daily_rate * days;
+  const extraDays = days - P;
+  const perDayAfter = (eq.period_price_after || 0) / P;
+  return eq.period_price + extraDays * perDayAfter;
 }
 
 function isUnderMaintenanceOn(eq: Equipment, d: string): boolean {
@@ -140,6 +137,7 @@ interface QuickBookTarget {
 
 export function CalendarTab({ businessId, search }: { businessId: string; search: string }) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
+  const { notify } = useToast();
 
   const [calOffset, setCalOffset] = useState(0);
   const [calCategoryFilter, setCalCategoryFilter] = useState("all");
@@ -382,8 +380,7 @@ export function CalendarTab({ businessId, search }: { businessId: string; search
           if (eq && eq.status !== "retired" && !isUnderMaintenanceOn(eq, lo) && isEquipmentFree(eqId, lo, hi, rentals)) {
             setQuickBook({ equipmentId: eqId, startDate: lo, endDate: hi });
           } else {
-            // Упрощение относительно демо (там — неблокирующий toast с тем же текстом).
-            alert("В выбранном диапазоне есть занятые дни — выберите другой период");
+            notify("В выбранном диапазоне есть занятые дни — выберите другой период");
           }
         }
       }
@@ -795,7 +792,7 @@ function QuickBookModal({
   }
 
   return (
-    <dialog id="modal" ref={ref} onClose={onClose}>
+    <dialog id="modal" ref={ref} onClose={onClose} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <form onSubmit={handleSubmit}>
         <div className="modal-head">
           <h3>Новая аренда — {eq?.name ?? "оборудование"}</h3>

@@ -7,6 +7,7 @@ import { RENTAL_META, Badge, rentalDisplayStatus, type StatusMeta } from "../../
 import { IconPrinter, IconEdit, IconClose, IconAlert } from "../../lib/icons";
 import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc } from "./documents";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { useToast } from "../../components/Toast";
 
 /**
  * Порт renderRentals()/addRentalForm()/editRentalForm()/issueRentalForm()/
@@ -246,7 +247,18 @@ function FormModal({
   }, [open]);
 
   return (
-    <dialog id="modal" className={wide ? "wide" : undefined} ref={ref} onClose={onClose}>
+    <dialog
+      id="modal"
+      className={wide ? "wide" : undefined}
+      ref={ref}
+      onClose={onClose}
+      onClick={(e) => {
+        // Клик по затемнённому фону закрывает модалку — тот же идиом, что и
+        // в EquipmentTab.tsx (16-й проход, п.2 обзора). Раньше здесь этого
+        // не было, хотя визуально модалка выглядит идентично.
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <form onSubmit={onSubmit}>
         <div className="modal-head">
           <h3>{title}</h3>
@@ -710,6 +722,7 @@ export function RentalsTab({
   const [returnRental, setReturnRental] = useState<Rental | null>(null);
   const [docModal, setDocModal] = useState<{ title: string; node: ReactNode } | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const { notify } = useToast();
 
   const list = rentals.filter((r) => {
     const st = rentalDisplayStatus(r);
@@ -741,7 +754,7 @@ export function RentalsTab({
       await api.post(`/businesses/${businessId}/rentals/${r.id}/cancel`);
       await Promise.all([reloadRentals(), reloadEquipment()]);
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось отменить аренду");
+      notify(err instanceof ApiError ? err.message : "Не удалось отменить аренду");
     }
   }
 

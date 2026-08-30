@@ -18,6 +18,7 @@ import { rentalDisplayStatus } from "../lib/statusMeta";
 import { colorFromId, initials } from "../lib/format";
 import { periodFor, type FinancePeriod } from "../lib/financeCalc";
 import { useConfirm } from "../components/ConfirmDialog";
+import { useToast } from "../components/Toast";
 import {
   IconSearch,
   IconPlus,
@@ -104,6 +105,7 @@ function DashboardShell({
   const [dashEquipmentId, setDashEquipmentId] = useState<string | null>(null);
 
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const { notify } = useToast();
 
   useEffect(() => {
     api.get<Employee[]>(`/businesses/${businessId}/employees`).then(setEmployees).catch(() => {});
@@ -176,7 +178,7 @@ function DashboardShell({
       if (dashClientId === id) setDashClientId(null);
       await reloadClients();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось удалить");
+      notify(err instanceof ApiError ? err.message : "Не удалось удалить");
     }
   }
 

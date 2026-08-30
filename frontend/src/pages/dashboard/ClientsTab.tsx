@@ -6,6 +6,7 @@ import { RATING_META, RENTAL_META, Badge, rentalDisplayStatus } from "../../lib/
 import { money, fmtDate } from "../../lib/format";
 import { IconClose } from "../../lib/icons";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { useToast } from "../../components/Toast";
 
 interface ClientForm {
   name: string;
@@ -23,6 +24,7 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
   const [form, setForm] = useState<ClientForm>(EMPTY_FORM);
   const [openClientId, setOpenClientId] = useState<string | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const { notify } = useToast();
 
   const q = search.trim().toLowerCase();
   const list = clients.filter(
@@ -54,7 +56,7 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
       if (openClientId === id) setOpenClientId(null);
       await reloadClients();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось удалить");
+      notify(err instanceof ApiError ? err.message : "Не удалось удалить");
     }
   }
 

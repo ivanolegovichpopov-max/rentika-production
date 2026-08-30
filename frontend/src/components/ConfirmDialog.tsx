@@ -71,6 +71,11 @@ export function useConfirm() {
         e.preventDefault();
         finish(false);
       }}
+      onClick={(e) => {
+        // Клик по затемнённому фону — тоже явная отмена (16-й проход,
+        // системная проверка click-outside-to-close по всем модалкам проекта).
+        if (e.target === e.currentTarget) finish(false);
+      }}
     >
       {state && (
         <>

@@ -16,6 +16,7 @@ import { api, ApiError } from "../../api/client";
 import type { ChatMessage, Conversation, ConversationType, DirectoryEmployee, MessagingPermission } from "../../api/types";
 import { colorFromId, initials } from "../../lib/format";
 import { IconClose, IconMessages, IconPlus, IconSend } from "../../lib/icons";
+import { useToast } from "../../components/Toast";
 
 const LIST_POLL_MS = 6000;
 const THREAD_POLL_MS = 4000;
@@ -92,7 +93,7 @@ function NewConversationModal({ open, directory, canCreateGroup, onClose, onCrea
   }
 
   return (
-    <dialog id="modal" ref={ref} onClose={onClose}>
+    <dialog id="modal" ref={ref} onClose={onClose} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal-head">
         <h3>Новый диалог</h3>
         <button type="button" className="icon-btn" onClick={onClose}>
@@ -184,6 +185,7 @@ export function MessagesTab({
   const [directory, setDirectory] = useState<DirectoryEmployee[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const threadEndRef = useRef<HTMLDivElement>(null);
+  const { notify } = useToast();
 
   const canCreateGroup = isOwner || messagingPermission === "everyone";
 
@@ -269,7 +271,7 @@ export function MessagesTab({
       setDraft("");
       void reloadConversations();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось отправить сообщение");
+      notify(err instanceof ApiError ? err.message : "Не удалось отправить сообщение");
     } finally {
       setSending(false);
     }
@@ -281,7 +283,7 @@ export function MessagesTab({
       await api.put(`/businesses/${businessId}/messaging-mode`, { mode });
       onMessagingPermissionChange(mode);
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось изменить режим");
+      notify(err instanceof ApiError ? err.message : "Не удалось изменить режим");
     }
   }
 

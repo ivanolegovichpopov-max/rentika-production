@@ -196,7 +196,7 @@ export function DocModal({
   }, [open]);
 
   return (
-    <dialog id="modal" ref={ref} onClose={onClose}>
+    <dialog id="modal" ref={ref} onClose={onClose} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal-head">
         <h3>{title}</h3>
         <button className="icon-btn" onClick={onClose} type="button">

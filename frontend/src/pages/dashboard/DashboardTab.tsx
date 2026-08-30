@@ -32,6 +32,7 @@ import { RENTAL_META, RATING_META, Badge, rentalDisplayStatus, equipmentDisplayS
 import { topEquipmentByRevenue, topCategoriesByRevenue } from "../../lib/financeCalc";
 import { IconAlert, IconEye, IconEyeOff, IconGrip, IconSliders, IconTrash, IconTrendUp, IconTrendDown, IconReset } from "../../lib/icons";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { useToast } from "../../components/Toast";
 import type { View } from "../Dashboard";
 
 export type NavigateFn = (
@@ -277,6 +278,7 @@ function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { bus
   const [draft, setDraft] = useState("");
   const [posting, setPosting] = useState(false);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const { notify } = useToast();
 
   useEffect(() => {
     let cancelled = false;
@@ -306,7 +308,7 @@ function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { bus
       setNotes((prev) => [created, ...prev]);
       setDraft("");
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось опубликовать запись");
+      notify(err instanceof ApiError ? err.message : "Не удалось опубликовать запись");
     } finally {
       setPosting(false);
     }
@@ -318,7 +320,7 @@ function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { bus
       await api.delete(`/businesses/${businessId}/notes/${id}`);
       setNotes((prev) => prev.filter((n) => n.id !== id));
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось удалить");
+      notify(err instanceof ApiError ? err.message : "Не удалось удалить");
     }
   }
 
@@ -328,7 +330,7 @@ function NotesPanel({ businessId, isOwner, notesMode, onNotesModeChange }: { bus
       await api.put(`/businesses/${businessId}/notes/mode`, { mode });
       onNotesModeChange(mode);
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось изменить режим");
+      notify(err instanceof ApiError ? err.message : "Не удалось изменить режим");
     }
   }
 
@@ -424,6 +426,7 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
   const [topEquipGroupBy, setTopEquipGroupBy] = useState<"items" | "categories">("items");
 
   const { confirm: confirmAction, dialog: confirmActionDialog } = useConfirm();
+  const { notify } = useToast();
 
   useEffect(() => {
     let cancelled = false;
@@ -641,7 +644,7 @@ export function DashboardTab({ navigate, businessId, isOwner, notesMode, onNotes
       await reloadRentals();
       await reloadEquipment();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось выполнить действие");
+      notify(err instanceof ApiError ? err.message : "Не удалось выполнить действие");
     }
   }
 

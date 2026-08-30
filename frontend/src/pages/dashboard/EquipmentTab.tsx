@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, ApiError } from "../../api/client";
 import { useData } from "../../context/DataContext";
 import type { Equipment, EquipmentCategory, EquipmentImportResult, Rental } from "../../api/types";
 import { EQ_META, RENTAL_META, Badge, equipmentDisplayStatus, nextFreeDate, rentalDisplayStatus } from "../../lib/statusMeta";
 import { money, fmtDate, isoAddDays, todayISO } from "../../lib/format";
-import { IconClose, IconCopy, IconEdit, IconTrash, IconChevronDown } from "../../lib/icons";
+import { IconClose, IconCopy, IconEdit, IconTrash, IconChevronDown, IconCheck } from "../../lib/icons";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { useToast } from "../../components/Toast";
 import { parseCsv, csvRowsToObjects, toCsv } from "../../lib/csv";
 import { itemCostForDays } from "../../lib/financeCalc";
 
@@ -177,6 +179,20 @@ const EMPTY_FORM: EquipmentFormState = {
   notes: "",
 };
 
+/** period_price_after хранится в БД/API как цена ЗА ПЕРИОД (period_days
+ * дней) — так удобнее backend'у (см. app/services/pricing.py:
+ * item_cost_for_days: per_day_after = period_price_after / period_days). Но
+ * человеку удобнее вводить и видеть цену ЗА СУТКИ после периода, а не решать
+ * в уме обратную задачу умножения — 16-й проход, обзор по скриншотам, п.2:
+ * форма показывает/принимает уже готовую цену за сутки, конвертация в обе
+ * стороны — здесь и в formToPayload. */
+function periodPriceAfterPerDay(e: Equipment): string {
+  if (e.period_price_after == null) return "";
+  if (!e.period_days) return String(e.period_price_after);
+  const perDay = Math.round((e.period_price_after / e.period_days) * 100) / 100;
+  return String(perDay);
+}
+
 function formFromEquipment(e: Equipment): EquipmentFormState {
   return {
     name: e.name,
@@ -186,7 +202,7 @@ function formFromEquipment(e: Equipment): EquipmentFormState {
     deposit: String(e.deposit),
     period_days: e.period_days != null ? String(e.period_days) : "",
     period_price: e.period_price != null ? String(e.period_price) : "",
-    period_price_after: e.period_price_after != null ? String(e.period_price_after) : "",
+    period_price_after: periodPriceAfterPerDay(e),
     notes: e.notes ?? "",
   };
 }
@@ -218,15 +234,19 @@ function parseDecimalField(raw: string): { value: number | null; empty: boolean;
 }
 
 function formToPayload(form: EquipmentFormState) {
+  const periodDays = form.period_days ? Number(form.period_days) : null;
+  const perDayAfter = parseDecimalField(form.period_price_after).value;
   return {
     name: form.name,
     category: form.category,
     code: form.code || null,
     daily_rate: parseDecimalField(form.daily_rate).value ?? 0,
     deposit: parseDecimalField(form.deposit).value ?? 0,
-    period_days: form.period_days ? Number(form.period_days) : null,
+    period_days: periodDays,
     period_price: parseDecimalField(form.period_price).value,
-    period_price_after: parseDecimalField(form.period_price_after).value,
+    // Конвертация назад в "цену за период", как её хранит backend — см.
+    // periodPriceAfterPerDay() выше.
+    period_price_after: perDayAfter != null && periodDays ? perDayAfter * periodDays : perDayAfter,
     notes: form.notes || null,
   };
 }
@@ -244,6 +264,113 @@ function hasTieredValues(form: EquipmentFormState): boolean {
  * (режим добавления) или нетронутой (режим редактирования) формы. */
 function isFormDirty(current: EquipmentFormState, initial: EquipmentFormState): boolean {
   return (Object.keys(current) as (keyof EquipmentFormState)[]).some((k) => current[k] !== initial[k]);
+}
+
+/** Автодополнение категории — замена нативного `<input list>` + `<datalist>`
+ * (16-й проход, обзор по скриншотам, п.6): у нативного datalist нельзя
+ * задать ширину выпадающего списка через CSS вообще — в Chrome он рисуется
+ * уже самого поля. Панель рендерится через createPortal в document.body с
+ * координатами из getBoundingClientRect() поля — только портал по-настоящему
+ * выходит за пределы overflow:auto у прокручиваемых предков (сам по себе
+ * position:fixed для этого недостаточен: overflow клипует потомков
+ * независимо от их position), что нужно для использования внутри таблицы
+ * предпросмотра CSV-импорта, а не только в обычной форме. Закрывается по
+ * клику вне, скроллу и Escape. */
+function CategoryAutocomplete({
+  value,
+  onChange,
+  categories,
+  placeholder,
+  required,
+  inputClassName,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  categories: string[];
+  placeholder?: string;
+  required?: boolean;
+  inputClassName?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  function openPanel() {
+    const el = inputRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setRect({ top: r.bottom + 4, left: r.left, width: r.width });
+    setOpen(true);
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(e: MouseEvent) {
+      if (inputRef.current?.contains(e.target as Node)) return;
+      if (panelRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    }
+    function onScrollOrResize() {
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    // capture:true — чтобы поймать скролл ВНУТРИ таблицы предпросмотра
+    // импорта (.table-wrap с overflow-y:auto), а не только скролл окна.
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [open]);
+
+  const q = value.trim().toLowerCase();
+  const filtered = (q ? categories.filter((c) => c.toLowerCase().includes(q)) : categories).slice(0, 30);
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        required={required}
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          openPanel();
+        }}
+        onFocus={openPanel}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setOpen(false);
+        }}
+        placeholder={placeholder}
+        className={inputClassName}
+        autoComplete="off"
+      />
+      {open &&
+        rect &&
+        filtered.length > 0 &&
+        createPortal(
+          <div ref={panelRef} className="autocomplete-panel" style={{ top: rect.top, left: rect.left, width: rect.width }}>
+            {filtered.map((name) => (
+              <button
+                type="button"
+                key={name}
+                className="autocomplete-option"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onChange(name);
+                  setOpen(false);
+                }}
+              >
+                {name}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
+    </>
+  );
 }
 
 /** Модалка добавления/изменения оборудования — тот же идиом `<dialog>`
@@ -369,7 +496,7 @@ function EquipmentFormModal({
     const periodPrice = parseDecimalField(form.period_price);
     if (!periodPrice.valid) return "Цена за период должна быть числом.";
     const periodPriceAfter = parseDecimalField(form.period_price_after);
-    if (!periodPriceAfter.valid) return "Цена за период далее должна быть числом.";
+    if (!periodPriceAfter.valid) return "Цена за сутки после периода должна быть числом.";
     return tieredProblem();
   }
 
@@ -414,13 +541,19 @@ function EquipmentFormModal({
   // financeCalc.ts (та же формула, что считает реальную стоимость аренды),
   // а не отдельную копию логики тарифа.
   function previewCost(days: number): number {
+    const periodDays = form.period_days ? Number(form.period_days) : null;
+    const perDayAfter = parseDecimalField(form.period_price_after).value;
     return itemCostForDays(
       {
         equipment_id: "",
         daily_rate_snapshot: previewRate,
-        period_days_snapshot: form.period_days ? Number(form.period_days) : null,
+        period_days_snapshot: periodDays,
         period_price_snapshot: parseDecimalField(form.period_price).value,
-        period_price_after_snapshot: parseDecimalField(form.period_price_after).value,
+        // itemCostForDays() (financeCalc.ts) ожидает "цену за период" (как
+        // хранит backend), а form.period_price_after теперь хранит цену за
+        // сутки (см. periodPriceAfterPerDay) — конвертация та же, что и в
+        // formToPayload.
+        period_price_after_snapshot: perDayAfter != null && periodDays ? perDayAfter * periodDays : perDayAfter,
       },
       days
     );
@@ -471,25 +604,21 @@ function EquipmentFormModal({
               // Владелец может ввести и совсем новое название — оно
               // автоматически заведётся в справочнике при сохранении (см.
               // backend: app/api/routes/equipment.py:_ensure_category).
-              // datalist даёт автодополнение по уже существующим, но не
-              // запрещает свободный ввод — это и есть "владелец создаёт
+              // CategoryAutocomplete даёт автодополнение по уже существующим,
+              // но не запрещает свободный ввод — это и есть "владелец создаёт
               // категории". Поле теперь на своей строке во всю ширину (было
               // в паре с "Инв. номер") — иначе подсказка-плейсхолдер не
-              // помещалась (16-й проход, п.7 предыдущего обзора).
-              <>
-                <input
-                  required
-                  list="equipment-category-options"
-                  value={form.category}
-                  onChange={(e) => setForm({ ...form, category: e.target.value })}
-                  placeholder="Инструмент, электроника… (или новая категория)"
-                />
-                <datalist id="equipment-category-options">
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.name} />
-                  ))}
-                </datalist>
-              </>
+              // помещалась (16-й проход, п.7 предыдущего обзора). Раньше
+              // здесь был нативный `<input list>`+`<datalist>` — заменён на
+              // свой компонент (16-й проход, обзор по скриншотам, п.6:
+              // выпадающий список datalist был уже самого поля).
+              <CategoryAutocomplete
+                required
+                value={form.category}
+                onChange={(v) => setForm({ ...form, category: v })}
+                categories={categories.map((c) => c.name)}
+                placeholder="Инструмент, электроника… (или новая категория)"
+              />
             ) : (
               // Остальные роли — только выбор из уже существующего
               // справочника, свободный текст закрыт: он всё равно будет
@@ -546,7 +675,7 @@ function EquipmentFormModal({
                 inputMode="decimal"
                 value={form.daily_rate}
                 onChange={(e) => setForm({ ...form, daily_rate: e.target.value })}
-                placeholder="напр. 500 или 500,5"
+                placeholder="напр. 500"
               />
             </div>
             <div className="field">
@@ -584,20 +713,20 @@ function EquipmentFormModal({
                   />
                 </div>
                 <div className="field">
-                  <label>Цена за период далее, ₽</label>
+                  <label>Цена за сутки после периода, ₽</label>
                   <input
                     type="text"
                     inputMode="decimal"
                     value={form.period_price_after}
                     onChange={(e) => setForm({ ...form, period_price_after: e.target.value })}
-                    placeholder="напр. 190"
+                    placeholder="напр. 100"
                   />
                 </div>
               </div>
               <div className="field-hint">
-                Заполните, если ставка снижается при длительной аренде: первые N дней — по первой цене, каждый
-                следующий период из N дней — по второй. Например: 690 ₽ за первые 7 дней, затем 190 ₽ за каждые
-                следующие 7 дней.{" "}
+                Заполните, если ставка снижается при длительной аренде: первые N дней — по фиксированной цене, каждый
+                день сверх — по цене за сутки из третьего поля. Например: 690 ₽ за первые 7 дней, затем 100 ₽/сутки за
+                каждый день после.{" "}
                 <button
                   type="button"
                   className="link-btn"
@@ -684,6 +813,7 @@ export function EquipmentDetailPanel({
   const item = equipment.find((e) => e.id === equipmentId);
   const [maintUntil, setMaintUntil] = useState(item?.maintenance_until ?? "");
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const { notify } = useToast();
 
   useEffect(() => {
     setMaintUntil(item?.maintenance_until ?? "");
@@ -709,7 +839,7 @@ export function EquipmentDetailPanel({
       await api.patch(`/businesses/${businessId}/equipment/${equipmentId}`, { status: next });
       await reloadEquipment();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось изменить статус");
+      notify(err instanceof ApiError ? err.message : "Не удалось изменить статус");
     }
   }
 
@@ -719,13 +849,13 @@ export function EquipmentDetailPanel({
       await api.patch(`/businesses/${businessId}/equipment/${equipmentId}`, { maintenance_until: value || null });
       await reloadEquipment();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось изменить дату");
+      notify(err instanceof ApiError ? err.message : "Не удалось изменить дату");
     }
   }
 
   async function handleDelete() {
     if (equipmentHasOpenRentals(equipmentId, rentals)) {
-      alert("Нельзя удалить: по этой позиции есть аренда в работе или бронь. Сначала завершите её.");
+      notify("Нельзя удалить: по этой позиции есть аренда в работе или бронь. Сначала завершите её.");
       return;
     }
     if (!(await confirm(`«${item!.name}» будет удалено безвозвратно.`, { danger: true }))) return;
@@ -734,7 +864,7 @@ export function EquipmentDetailPanel({
       onDeleted();
       await reloadEquipment();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось удалить");
+      notify(err instanceof ApiError ? err.message : "Не удалось удалить");
     }
   }
 
@@ -978,10 +1108,20 @@ function EquipmentCategoriesModal({
   const [renameValue, setRenameValue] = useState("");
   const [rowError, setRowError] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Добавление категории прямо из "Управления категориями" (16-й проход,
+  // обзор по скриншотам, п.1) — раньше единственный способ завести категорию
+  // был вписать новое имя в поле "Категория" формы оборудования (авто-
+  // создание при сохранении); эндпоинт POST .../equipment-categories для
+  // этого уже существовал на backend с 15-го прохода, просто не был вызван
+  // отсюда.
+  const [newCatName, setNewCatName] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
+  const [addBusy, setAddBusy] = useState(false);
   // Сортировка списка (16-й проход, п.4/5 обзора) — тот же idiom
   // sortable/sort-arrow, что и в главной таблице оборудования ниже по файлу.
   const [catSort, setCatSort] = useState<{ key: "name" | "count"; dir: "asc" | "desc" }>({ key: "name", dir: "asc" });
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const { notify } = useToast();
 
   useEffect(() => {
     const dialog = ref.current;
@@ -995,8 +1135,33 @@ function EquipmentCategoriesModal({
       setRenamingId(null);
       setRenameValue("");
       setRowError({});
+      setNewCatName("");
+      setAddError(null);
     }
   }, [open]);
+
+  async function submitNewCategory() {
+    const value = newCatName.trim();
+    if (!value) {
+      setAddError("Название не может быть пустым");
+      return;
+    }
+    if (categories.some((c) => c.name.toLowerCase() === value.toLowerCase())) {
+      setAddError("Такая категория уже есть в справочнике");
+      return;
+    }
+    setAddBusy(true);
+    setAddError(null);
+    try {
+      await api.post(`/businesses/${businessId}/equipment-categories`, { name: value });
+      setNewCatName("");
+      onChanged();
+    } catch (err) {
+      setAddError(err instanceof ApiError ? err.message : "Не удалось добавить категорию");
+    } finally {
+      setAddBusy(false);
+    }
+  }
 
   function toggleCatSort(key: "name" | "count") {
     setCatSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
@@ -1037,7 +1202,7 @@ function EquipmentCategoriesModal({
 
   async function handleDelete(c: EquipmentCategory) {
     if (c.equipment_count > 0) {
-      alert(
+      notify(
         `Нельзя удалить: категорию «${c.name}» использует ${c.equipment_count} ` +
           `${c.equipment_count === 1 ? "позиция" : "позиций"} оборудования. Сначала перенесите их в другую категорию.`
       );
@@ -1049,7 +1214,7 @@ function EquipmentCategoriesModal({
       await api.delete(`/businesses/${businessId}/equipment-categories/${c.id}`);
       onChanged();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось удалить категорию");
+      notify(err instanceof ApiError ? err.message : "Не удалось удалить категорию");
     } finally {
       setBusyId(null);
     }
@@ -1074,8 +1239,30 @@ function EquipmentCategoriesModal({
         </button>
       </div>
       <div className="modal-body">
+        <div className="inline-form" style={{ marginBottom: "14px" }}>
+          <input
+            value={newCatName}
+            onChange={(e) => {
+              setNewCatName(e.target.value);
+              setAddError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void submitNewCategory();
+              }
+            }}
+            placeholder="Новая категория…"
+            disabled={addBusy}
+            style={{ flex: 1 }}
+          />
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => void submitNewCategory()} disabled={addBusy}>
+            {addBusy ? "Добавляем…" : "Добавить"}
+          </button>
+        </div>
+        {addError && <div className="form-error" style={{ marginBottom: "10px" }}>{addError}</div>}
         {categories.length === 0 ? (
-          <div className="empty-note">Справочник пуст — категории появляются автоматически при создании оборудования.</div>
+          <div className="empty-note">Справочник пуст — добавьте первую категорию выше.</div>
         ) : (
           <div className="table-wrap" style={{ maxHeight: "360px", overflowY: "auto" }}>
             <table>
@@ -1379,11 +1566,11 @@ function EquipmentImportModal({
                             />
                           </td>
                           <td>
-                            <input
-                              className="table-input"
-                              list="equipment-import-category-options"
+                            <CategoryAutocomplete
+                              inputClassName="table-input"
                               value={r.values.category}
-                              onChange={(e) => updateCell(idx, "category", e.target.value)}
+                              onChange={(v) => updateCell(idx, "category", v)}
+                              categories={categories.map((c) => c.name)}
                             />
                           </td>
                           <td>
@@ -1399,11 +1586,6 @@ function EquipmentImportModal({
                     </tbody>
                   </table>
                 </div>
-                <datalist id="equipment-import-category-options">
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.name} />
-                  ))}
-                </datalist>
               </>
             )}
             {submitError && <div className="form-error">{submitError}</div>}
@@ -1513,6 +1695,7 @@ export function EquipmentTab({
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
   const { confirm: confirmBulk, dialog: bulkConfirmDialog } = useConfirm();
+  const { notify } = useToast();
 
   const today = todayISO();
   const q = search.trim().toLowerCase();
@@ -1648,7 +1831,7 @@ export function EquipmentTab({
       await Promise.all([reloadEquipment(), reloadEquipmentCategories()]);
       setBulkCategory("");
       setSelectedIds(new Set());
-      if (failed > 0) alert(`Категория изменена у ${ids.length - failed} из ${ids.length}. Ошибок: ${failed}.`);
+      if (failed > 0) notify(`Категория изменена у ${ids.length - failed} из ${ids.length}. Ошибок: ${failed}.`, "info");
     } finally {
       setBulkBusy(false);
     }
@@ -1666,7 +1849,7 @@ export function EquipmentTab({
       await reloadEquipment();
       setBulkStatus("");
       setSelectedIds(new Set());
-      if (failed > 0) alert(`Статус изменён у ${ids.length - failed} из ${ids.length}. Ошибок: ${failed}.`);
+      if (failed > 0) notify(`Статус изменён у ${ids.length - failed} из ${ids.length}. Ошибок: ${failed}.`, "info");
     } finally {
       setBulkBusy(false);
     }
@@ -1682,7 +1865,7 @@ export function EquipmentTab({
     const blocked = ids.filter((id) => equipmentHasOpenRentals(id, rentals));
     const deletable = ids.filter((id) => !equipmentHasOpenRentals(id, rentals));
     if (deletable.length === 0) {
-      alert("Ни одну из выбранных позиций нельзя удалить: по каждой есть аренда в работе или бронь.");
+      notify("Ни одну из выбранных позиций нельзя удалить: по каждой есть аренда в работе или бронь.");
       return;
     }
     const message =
@@ -1697,10 +1880,11 @@ export function EquipmentTab({
       await Promise.all([reloadEquipment(), reloadEquipmentCategories()]);
       setSelectedIds(new Set());
       if (failed > 0 || blocked.length > 0) {
-        alert(
+        notify(
           `Удалено: ${deletable.length - failed}.` +
             (failed > 0 ? ` Ошибок: ${failed}.` : "") +
-            (blocked.length > 0 ? ` Пропущено (аренда в работе): ${blocked.length}.` : "")
+            (blocked.length > 0 ? ` Пропущено (аренда в работе): ${blocked.length}.` : ""),
+          "info"
         );
       }
     } finally {
@@ -1756,19 +1940,32 @@ export function EquipmentTab({
               </button>
               {catFilterOpen && (
                 <div className="cat-filter-panel">
-                  <label className="cat-filter-option">
-                    <input type="checkbox" checked={categoryFilter.length === 0} onChange={() => setCategoryFilter([])} />
-                    Все категории
+                  <label className={"cat-filter-option" + (categoryFilter.length === 0 ? " checked" : "")}>
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={categoryFilter.length === 0}
+                      onChange={() => setCategoryFilter([])}
+                    />
+                    <span className="cat-filter-check">{categoryFilter.length === 0 && <IconCheck />}</span>
+                    <span className="cat-filter-name">Все категории</span>
                   </label>
                   <div className="cat-filter-sep" />
-                  {categoryNames.map((name) => (
-                    <label className="cat-filter-option" key={name}>
+                  {/* Счётчик позиций рядом с названием (16-й проход, обзор по
+                      скриншотам, п.5) — equipment_count уже есть в каждой
+                      категории (используется и в "Управлении категориями"),
+                      просто не выводился здесь. */}
+                  {equipmentCategories.map((c) => (
+                    <label className={"cat-filter-option" + (categoryFilter.includes(c.name) ? " checked" : "")} key={c.id}>
                       <input
                         type="checkbox"
-                        checked={categoryFilter.includes(name)}
-                        onChange={() => toggleCategoryFilterValue(name)}
+                        className="sr-only"
+                        checked={categoryFilter.includes(c.name)}
+                        onChange={() => toggleCategoryFilterValue(c.name)}
                       />
-                      {name}
+                      <span className="cat-filter-check">{categoryFilter.includes(c.name) && <IconCheck />}</span>
+                      <span className="cat-filter-name">{c.name}</span>
+                      <span className="cat-filter-count">{c.equipment_count}</span>
                     </label>
                   ))}
                 </div>

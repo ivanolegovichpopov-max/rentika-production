@@ -131,3 +131,9 @@ export const IconReset = (p: SVGProps<SVGSVGElement>) => (
 export const IconCopy = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></Svg>
 );
+// Галочка выбранного пункта в кастомном мульти-select фильтре категорий
+// (16-й проход, обзор по скриншотам, п.5) — заменяет нативный чекбокс,
+// который "выглядит неаккуратно" по мнению пользователя.
+export const IconCheck = (p: SVGProps<SVGSVGElement>) => (
+  <Svg strokeWidth={2.6} {...p}><polyline points="20 6 9 17 4 12" /></Svg>
+);
