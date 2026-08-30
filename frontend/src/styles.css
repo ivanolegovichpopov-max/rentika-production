@@ -531,7 +531,14 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 
 /* ---------- Пиклист оборудования (форма аренды) ---------- */
 .eq-picklist { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
-.field .eq-pick-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
+/* flex-direction: row — тот же самый баг каскада, что у .cat-filter-option
+   выше (см. комментарий там): .eq-pick-row тоже <label>, и без явного
+   flex-direction колоночное значение базового селектора `label` "протекало"
+   бы сюда, ломая строку "чекбокс — название — ставка" на три строки. Судя по
+   всему, эта строка пиклиста оборудования в форме аренды была сломана этим
+   же образом ещё до 17-го прохода — просто раньше на неё не обратили
+   внимания на скриншотах. */
+.field .eq-pick-row { display: flex; flex-direction: row; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
 .eq-pick-row:last-child { border-bottom: none; }
 .eq-pick-row.disabled { opacity: 0.5; }
 .eq-pick-row input[type=checkbox] { width: 16px; height: 16px; flex: none; }
@@ -690,7 +697,15 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
   box-shadow: var(--shadow-lg); padding: 6px;
 }
 .cat-filter-option {
-  display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; font-size: 13px;
+  /* flex-direction: row обязателен явно — .cat-filter-option это <label>, а
+     базовый селектор `label` в этом файле задаёт flex-direction: column (для
+     обычных полей формы, где подпись должна быть НАД инпутом); т.к. этот
+     класс не переопределял flex-direction, колоночное направление
+     "просачивалось" сюда через каскад (per-property, а не per-rule — то, что
+     .cat-filter-option более специфичен по display, не отменяет действие
+     менее специфичного label по flex-direction) — из-за этого чекбокс,
+     название и счётчик рисовались друг под другом вместо одной строки. */
+  display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; font-size: 13px;
   cursor: pointer; user-select: none;
 }
 .cat-filter-option:hover { background: var(--surface-2); }
