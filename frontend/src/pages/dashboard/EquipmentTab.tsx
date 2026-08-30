@@ -4,9 +4,10 @@ import { useData } from "../../context/DataContext";
 import type { Equipment, EquipmentCategory, EquipmentImportResult, Rental } from "../../api/types";
 import { EQ_META, RENTAL_META, Badge, equipmentDisplayStatus, nextFreeDate, rentalDisplayStatus } from "../../lib/statusMeta";
 import { money, fmtDate, isoAddDays, todayISO } from "../../lib/format";
-import { IconClose, IconCopy, IconEdit, IconTrash } from "../../lib/icons";
+import { IconClose, IconCopy, IconEdit, IconTrash, IconChevronDown } from "../../lib/icons";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { parseCsv, csvRowsToObjects, toCsv } from "../../lib/csv";
+import { itemCostForDays } from "../../lib/financeCalc";
 
 const FILTERS: { id: string; label: string }[] = [
   { id: "all", label: "Все" },
@@ -201,16 +202,31 @@ function formFromEquipmentAsCopy(e: Equipment): EquipmentFormState {
   return { ...formFromEquipment(e), name: e.name + " (копия)", code: "" };
 }
 
+/** Парсинг числового поля, введённого пользователем как текст — принимает и
+ * точку, и запятую как десятичный разделитель (16-й проход, п.5 обзора: на
+ * русской раскладке/цифровой клавиатуре запятая — стандартный десятичный
+ * знак, а нативный `<input type="number">` такой ввод просто не принимает
+ * вовсе, без объяснения причины). `empty` отличает "не заполнено" (пусто —
+ * нормально для необязательных полей) от `valid: false` ("заполнено
+ * нечисловым мусором" — настоящая ошибка, которую раньше маскировал
+ * `Number(...) || 0`, тихо превращая любой мусор в ноль). */
+function parseDecimalField(raw: string): { value: number | null; empty: boolean; valid: boolean } {
+  const trimmed = raw.trim();
+  if (trimmed === "") return { value: null, empty: true, valid: true };
+  const n = Number(trimmed.replace(",", "."));
+  return { value: Number.isFinite(n) ? n : null, empty: false, valid: Number.isFinite(n) };
+}
+
 function formToPayload(form: EquipmentFormState) {
   return {
     name: form.name,
     category: form.category,
     code: form.code || null,
-    daily_rate: Number(form.daily_rate) || 0,
-    deposit: Number(form.deposit) || 0,
+    daily_rate: parseDecimalField(form.daily_rate).value ?? 0,
+    deposit: parseDecimalField(form.deposit).value ?? 0,
     period_days: form.period_days ? Number(form.period_days) : null,
-    period_price: form.period_price ? Number(form.period_price) : null,
-    period_price_after: form.period_price_after ? Number(form.period_price_after) : null,
+    period_price: parseDecimalField(form.period_price).value,
+    period_price_after: parseDecimalField(form.period_price_after).value,
     notes: form.notes || null,
   };
 }
@@ -220,6 +236,14 @@ function formToPayload(form: EquipmentFormState) {
  * редактирование секция сразу была раскрыта, если тариф уже настроен. */
 function hasTieredValues(form: EquipmentFormState): boolean {
   return !!(form.period_days || form.period_price || form.period_price_after);
+}
+
+/** Сравнение текущей формы с исходным состоянием (16-й проход, п.6 обзора) —
+ * используется, чтобы спрашивать подтверждение закрытия ТОЛЬКО если
+ * пользователь реально что-то ввёл/изменил, а не при любом закрытии пустой
+ * (режим добавления) или нетронутой (режим редактирования) формы. */
+function isFormDirty(current: EquipmentFormState, initial: EquipmentFormState): boolean {
+  return (Object.keys(current) as (keyof EquipmentFormState)[]).some((k) => current[k] !== initial[k]);
 }
 
 /** Модалка добавления/изменения оборудования — тот же идиом `<dialog>`
@@ -239,6 +263,7 @@ function EquipmentFormModal({
   resetSignal,
   onClose,
   onSubmit,
+  onManageCategories,
 }: {
   open: boolean;
   title: string;
@@ -259,13 +284,28 @@ function EquipmentFormModal({
   // вкладках.
   resetSignal: number;
   onClose: () => void;
-  onSubmit: (form: EquipmentFormState, addAnother: boolean) => void;
+  // Возвращает Promise — модалка ждёт его, чтобы показать "Сохраняем…" и
+  // заблокировать повторную отправку (16-й проход, п.2 предыдущего обзора:
+  // защита от двойного клика, особенно на бесплатном плане Render с
+  // "холодным" стартом backend'а после простоя).
+  onSubmit: (form: EquipmentFormState, addAnother: boolean) => Promise<void> | void;
+  // Ссылка "Управление категориями" рядом с полем "Категория" (16-й проход,
+  // п.7 предыдущего обзора) — открывает EquipmentCategoriesModal ПОВЕРХ этой
+  // формы, НЕ закрывая её (родитель не сбрасывает modalMode), чтобы, заметив
+  // опечатку в справочнике прямо во время добавления позиции, не пришлось
+  // отменять уже введённые данные. Необязательная — форма работает и без
+  // неё, если родитель её не передал.
+  onManageCategories?: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<EquipmentFormState>(initial);
   const [showTiered, setShowTiered] = useState(hasTieredValues(initial));
   const [localError, setLocalError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  // Отдельный useConfirm — для "Несохранённые изменения будут потеряны?" при
+  // закрытии заполненной формы (16-й проход, п.6 предыдущего обзора).
+  const { confirm: confirmDiscard, dialog: discardDialog } = useConfirm();
 
   useEffect(() => {
     const dialog = ref.current;
@@ -299,13 +339,41 @@ function EquipmentFormModal({
   const trimmedCode = form.code.trim();
   const duplicateCode = trimmedCode !== "" && existingCodes.includes(trimmedCode);
 
-  function validateLocally(): string | null {
-    if (!form.name.trim()) return "Название не может состоять из одних пробелов";
-    if (!form.category.trim()) return "Категория не может состоять из одних пробелов";
+  const trimmedCategory = form.category.trim();
+  // 16-й проход, п.1 предыдущего обзора: подсказка "такой категории ещё нет"
+  // для владельца — видна ДО сохранения, чтобы опечатка не превратилась в
+  // отдельную категорию-дубль (именно так на проде когда-то расплодились
+  // случайные "категории", см. заметки проекта, 15-й проход). Не показана
+  // для остальных ролей — у них поле и так закрытый <select> из справочника.
+  const isNewCategory =
+    isOwner && trimmedCategory !== "" && !categories.some((c) => c.name.toLowerCase() === trimmedCategory.toLowerCase());
+
+  // 16-й проход, п.3 предыдущего обзора: "битая" настройка ступенчатого
+  // тарифа — заполнено 1-2 поля из трёх, третье забыто — раньше молча
+  // игнорировалась (rateLabel требует и period_days, и period_price сразу).
+  function tieredProblem(): string | null {
+    const filled = [form.period_days, form.period_price, form.period_price_after].filter((v) => v.trim() !== "").length;
+    if (filled > 0 && filled < 3) {
+      return "Для ступенчатого тарифа нужно заполнить все три поля: период, цену за период и цену за период далее (или очистить все три).";
+    }
     return null;
   }
 
-  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  function validateLocally(): string | null {
+    if (!form.name.trim()) return "Название не может состоять из одних пробелов";
+    if (!form.category.trim()) return "Категория не может состоять из одних пробелов";
+    const rate = parseDecimalField(form.daily_rate);
+    if (rate.empty || !rate.valid || (rate.value ?? -1) < 0) return "Ставка должна быть неотрицательным числом.";
+    const deposit = parseDecimalField(form.deposit);
+    if (deposit.empty || !deposit.valid || (deposit.value ?? -1) < 0) return "Депозит должен быть неотрицательным числом.";
+    const periodPrice = parseDecimalField(form.period_price);
+    if (!periodPrice.valid) return "Цена за период должна быть числом.";
+    const periodPriceAfter = parseDecimalField(form.period_price_after);
+    if (!periodPriceAfter.valid) return "Цена за период далее должна быть числом.";
+    return tieredProblem();
+  }
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const problem = validateLocally();
     if (problem) {
@@ -318,15 +386,71 @@ function EquipmentFormModal({
     // не дублировать всю разметку полей.
     const submitter = (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     const addAnother = submitter?.dataset.addAnother === "true";
-    onSubmit(form, addAnother);
+    setSubmitting(true);
+    try {
+      await onSubmit(form, addAnother);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // Единая точка закрытия — X, "Отмена", Esc (см. onCancel ниже) и клик мимо
+  // окна (см. onClick на <dialog> ниже) все идут через неё: спрашивает
+  // подтверждение, только если форма реально отличается от исходного
+  // состояния, иначе закрывает сразу (16-й проход, п.2+6 обзора).
+  async function requestClose() {
+    if (submitting) return;
+    if (isFormDirty(form, initial)) {
+      if (!(await confirmDiscard("Несохранённые изменения будут потеряны.", { confirmLabel: "Закрыть без сохранения" })))
+        return;
+    }
+    onClose();
+  }
+
+  const previewRate = parseDecimalField(form.daily_rate).value ?? 0;
+  const showCostPreview = previewRate > 0;
+  // Пример стоимости при вводе ставки/тарифа (16-й проход, п.4 предыдущего
+  // обзора) — переиспользует уже существующую itemCostForDays() из
+  // financeCalc.ts (та же формула, что считает реальную стоимость аренды),
+  // а не отдельную копию логики тарифа.
+  function previewCost(days: number): number {
+    return itemCostForDays(
+      {
+        equipment_id: "",
+        daily_rate_snapshot: previewRate,
+        period_days_snapshot: form.period_days ? Number(form.period_days) : null,
+        period_price_snapshot: parseDecimalField(form.period_price).value,
+        period_price_after_snapshot: parseDecimalField(form.period_price_after).value,
+      },
+      days
+    );
   }
 
   return (
-    <dialog id="modal" className="wide" ref={ref} onClose={onClose}>
-      <form onSubmit={handleSubmit}>
+    <dialog
+      id="modal"
+      className="wide"
+      ref={ref}
+      onClose={onClose}
+      onCancel={(e) => {
+        // Нативный Escape по умолчанию закрыл бы диалог мгновенно — перехватываем,
+        // чтобы провести через ту же проверку "не потерять несохранённое", что и
+        // остальные способы закрытия.
+        e.preventDefault();
+        void requestClose();
+      }}
+      onClick={(e) => {
+        // Клик по затемнённому фону — здесь e.target это сам <dialog> (клик по
+        // видимому содержимому "перехватывается" внутренними элементами формы
+        // раньше); стандартный идиом click-outside-to-close для нативного
+        // <dialog> (16-й проход, п.2 обзора).
+        if (e.target === e.currentTarget) void requestClose();
+      }}
+    >
+      <form onSubmit={(e) => void handleSubmit(e)}>
         <div className="modal-head">
           <h3>{title}</h3>
-          <button type="button" className="icon-btn" onClick={onClose}>
+          <button type="button" className="icon-btn" onClick={() => void requestClose()} disabled={submitting}>
             <IconClose />
           </button>
         </div>
@@ -341,52 +465,64 @@ function EquipmentFormModal({
               placeholder="Например, перфоратор Bosch GBH 5-40"
             />
           </div>
-          <div className="field-row">
-            <div className="field">
-              <label>Категория</label>
-              {isOwner ? (
-                // Владелец может ввести и совсем новое название — оно
-                // автоматически заведётся в справочнике при сохранении (см.
-                // backend: app/api/routes/equipment.py:_ensure_category).
-                // datalist даёт автодополнение по уже существующим, но не
-                // запрещает свободный ввод — это и есть "владелец создаёт
-                // категории".
-                <>
-                  <input
-                    required
-                    list="equipment-category-options"
-                    value={form.category}
-                    onChange={(e) => setForm({ ...form, category: e.target.value })}
-                    placeholder="Инструмент, электроника… (или новая категория)"
-                  />
-                  <datalist id="equipment-category-options">
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.name} />
-                    ))}
-                  </datalist>
-                </>
-              ) : (
-                // Остальные роли — только выбор из уже существующего
-                // справочника, свободный текст закрыт: он всё равно будет
-                // отклонён backend'ом (400), выпадающий список честнее
-                // показывает границы прав, чем текстовое поле, которое
-                // потом откажется сохраняться.
-                <select required value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                  <option value="" disabled>
-                    Выберите категорию…
-                  </option>
+          <div className="field">
+            <label>Категория</label>
+            {isOwner ? (
+              // Владелец может ввести и совсем новое название — оно
+              // автоматически заведётся в справочнике при сохранении (см.
+              // backend: app/api/routes/equipment.py:_ensure_category).
+              // datalist даёт автодополнение по уже существующим, но не
+              // запрещает свободный ввод — это и есть "владелец создаёт
+              // категории". Поле теперь на своей строке во всю ширину (было
+              // в паре с "Инв. номер") — иначе подсказка-плейсхолдер не
+              // помещалась (16-й проход, п.7 предыдущего обзора).
+              <>
+                <input
+                  required
+                  list="equipment-category-options"
+                  value={form.category}
+                  onChange={(e) => setForm({ ...form, category: e.target.value })}
+                  placeholder="Инструмент, электроника… (или новая категория)"
+                />
+                <datalist id="equipment-category-options">
                   {categories.map((c) => (
-                    <option key={c.id} value={c.name}>
-                      {c.name}
-                    </option>
+                    <option key={c.id} value={c.name} />
                   ))}
-                </select>
-              )}
-              {categories.length === 0 && !isOwner && (
-                <div className="field-hint">Справочник категорий пуст — попросите владельца бизнеса добавить категории.</div>
-              )}
-            </div>
-            <div className="field">
+                </datalist>
+              </>
+            ) : (
+              // Остальные роли — только выбор из уже существующего
+              // справочника, свободный текст закрыт: он всё равно будет
+              // отклонён backend'ом (400), выпадающий список честнее
+              // показывает границы прав, чем текстовое поле, которое
+              // потом откажется сохраняться.
+              <select required value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                <option value="" disabled>
+                  Выберите категорию…
+                </option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {categories.length === 0 && !isOwner && (
+              <div className="field-hint">Справочник категорий пуст — попросите владельца бизнеса добавить категории.</div>
+            )}
+            {isNewCategory && (
+              <div className="field-hint">Такой категории пока нет — она будет создана автоматически при сохранении.</div>
+            )}
+            {isOwner && onManageCategories && (
+              <div className="field-hint">
+                <button type="button" className="link-btn" onClick={onManageCategories}>
+                  Управление категориями
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="field-row">
+            <div className="field" style={{ maxWidth: "220px" }}>
               <label>Инв. номер</label>
               <input
                 value={form.code}
@@ -406,18 +542,19 @@ function EquipmentFormModal({
               <label>Ставка, ₽/сутки</label>
               <input
                 required
-                type="number"
-                min="0"
+                type="text"
+                inputMode="decimal"
                 value={form.daily_rate}
                 onChange={(e) => setForm({ ...form, daily_rate: e.target.value })}
+                placeholder="напр. 500 или 500,5"
               />
             </div>
             <div className="field">
               <label>Депозит, ₽</label>
               <input
                 required
-                type="number"
-                min="0"
+                type="text"
+                inputMode="decimal"
                 value={form.deposit}
                 onChange={(e) => setForm({ ...form, deposit: e.target.value })}
               />
@@ -439,8 +576,8 @@ function EquipmentFormModal({
                 <div className="field">
                   <label>Цена за период, ₽</label>
                   <input
-                    type="number"
-                    min="0"
+                    type="text"
+                    inputMode="decimal"
                     value={form.period_price}
                     onChange={(e) => setForm({ ...form, period_price: e.target.value })}
                     placeholder="напр. 690"
@@ -449,8 +586,8 @@ function EquipmentFormModal({
                 <div className="field">
                   <label>Цена за период далее, ₽</label>
                   <input
-                    type="number"
-                    min="0"
+                    type="text"
+                    inputMode="decimal"
                     value={form.period_price_after}
                     onChange={(e) => setForm({ ...form, period_price_after: e.target.value })}
                     placeholder="напр. 190"
@@ -481,6 +618,11 @@ function EquipmentFormModal({
               (необязательно — для скидки при длительной аренде)
             </div>
           )}
+          {showCostPreview && (
+            <div className="field-hint">
+              Пример: 7 дней ≈ {money(previewCost(7))} · 30 дней ≈ {money(previewCost(30))}
+            </div>
+          )}
           <div className="field">
             <label>Заметка</label>
             <textarea
@@ -493,19 +635,20 @@ function EquipmentFormModal({
           {(localError || error) && <div className="form-error">{localError || error}</div>}
         </div>
         <div className="modal-foot">
-          <button type="button" className="btn" onClick={onClose}>
+          <button type="button" className="btn" onClick={() => void requestClose()} disabled={submitting}>
             Отмена
           </button>
           {allowAddAnother && (
-            <button type="submit" className="btn" data-add-another="true">
-              Сохранить и добавить ещё
+            <button type="submit" className="btn" data-add-another="true" disabled={submitting}>
+              {submitting ? "Сохраняем…" : "Сохранить и добавить ещё"}
             </button>
           )}
-          <button type="submit" className="btn btn-primary">
-            Сохранить
+          <button type="submit" className="btn btn-primary" disabled={submitting}>
+            {submitting ? "Сохраняем…" : "Сохранить"}
           </button>
         </div>
       </form>
+      {discardDialog}
     </dialog>
   );
 }
@@ -835,6 +978,9 @@ function EquipmentCategoriesModal({
   const [renameValue, setRenameValue] = useState("");
   const [rowError, setRowError] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Сортировка списка (16-й проход, п.4/5 обзора) — тот же idiom
+  // sortable/sort-arrow, что и в главной таблице оборудования ниже по файлу.
+  const [catSort, setCatSort] = useState<{ key: "name" | "count"; dir: "asc" | "desc" }>({ key: "name", dir: "asc" });
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   useEffect(() => {
@@ -851,6 +997,15 @@ function EquipmentCategoriesModal({
       setRowError({});
     }
   }, [open]);
+
+  function toggleCatSort(key: "name" | "count") {
+    setCatSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
+  }
+  const sortedCategories = [...categories].sort((a, b) => {
+    const dir = catSort.dir === "desc" ? -1 : 1;
+    if (catSort.key === "count") return (a.equipment_count - b.equipment_count) * dir;
+    return a.name.localeCompare(b.name, "ru") * dir;
+  });
 
   function startRename(c: EquipmentCategory) {
     setRenamingId(c.id);
@@ -901,7 +1056,17 @@ function EquipmentCategoriesModal({
   }
 
   return (
-    <dialog ref={ref} onClose={onClose}>
+    <dialog
+      id="modal"
+      ref={ref}
+      onClose={onClose}
+      onClick={(e) => {
+        // Клик по затемнённому фону закрывает модалку — тот же идиом
+        // click-outside-to-close, что и у формы добавления оборудования
+        // (16-й проход, п.2 обзора).
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="modal-head">
         <h3>Категории оборудования</h3>
         <button type="button" className="icon-btn" onClick={onClose}>
@@ -916,13 +1081,23 @@ function EquipmentCategoriesModal({
             <table>
               <thead>
                 <tr>
-                  <th>Название</th>
-                  <th>Позиций</th>
+                  <th className={"sortable" + (catSort.key === "name" ? " active" : "")} onClick={() => toggleCatSort("name")}>
+                    Название
+                    <span className={"sort-arrow" + (catSort.key === "name" ? "" : " sort-arrow-idle")}>
+                      {catSort.key === "name" ? (catSort.dir === "desc" ? "▼" : "▲") : "↕"}
+                    </span>
+                  </th>
+                  <th className={"sortable" + (catSort.key === "count" ? " active" : "")} onClick={() => toggleCatSort("count")}>
+                    Позиций
+                    <span className={"sort-arrow" + (catSort.key === "count" ? "" : " sort-arrow-idle")}>
+                      {catSort.key === "count" ? (catSort.dir === "desc" ? "▼" : "▲") : "↕"}
+                    </span>
+                  </th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {categories.map((c) => (
+                {sortedCategories.map((c) => (
                   <tr key={c.id}>
                     <td>
                       {renamingId === c.id ? (
@@ -1001,9 +1176,10 @@ function EquipmentCategoriesModal({
 
 interface ImportPreviewRow {
   row: number;
-  name: string;
-  category: string;
-  daily_rate: string;
+  // Все колонки шаблона (не только проблемные) — чтобы при сборке
+  // исправленного CSV перед отправкой (см. handleImport) неотредактированные
+  // поля не терялись, см. 16-й проход, п.6 обзора.
+  values: Record<string, string>;
   problems: string[];
 }
 
@@ -1027,11 +1203,15 @@ function validatePreviewRow(obj: Record<string, string>): string[] {
 function EquipmentImportModal({
   open,
   businessId,
+  categories,
   onClose,
   onImported,
 }: {
   open: boolean;
   businessId: string;
+  // Для автодополнения категории при инлайн-редактировании ячейки
+  // предпросмотра (16-й проход, п.6 обзора).
+  categories: EquipmentCategory[];
   onClose: () => void;
   onImported: () => void;
 }) {
@@ -1083,21 +1263,40 @@ function EquipmentImportModal({
     setPreview(
       objects.map((obj, idx) => ({
         row: idx + 2, // строка 1 — заголовок
-        name: obj.name || "",
-        category: obj.category || "",
-        daily_rate: obj.daily_rate || "",
+        values: Object.fromEntries(IMPORT_TEMPLATE_HEADER.map((h) => [h, obj[h] || ""])),
         problems: validatePreviewRow(obj),
       }))
     );
   }
 
+  /** Правка ячейки прямо в таблице предпросмотра (16-й проход, п.6 обзора:
+   * "быстрая смена значений" вместо необходимости чинить сам файл и грузить
+   * заново) — пересчитывает проблемы строки сразу же, чтобы было видно,
+   * решена ли она. */
+  function updateCell(rowIdx: number, field: string, value: string) {
+    setPreview((prev) =>
+      prev.map((r, i) => {
+        if (i !== rowIdx) return r;
+        const values = { ...r.values, [field]: value };
+        return { ...r, values, problems: validatePreviewRow(values) };
+      })
+    );
+  }
+
   async function handleImport() {
-    if (!file) return;
+    if (!file || preview.length === 0) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
+      // Собираем CSV заново из (возможно отредактированных прямо в
+      // предпросмотре) значений, а не отправляем исходный файл как есть —
+      // иначе правки в таблице предпросмотра были бы чисто визуальными и
+      // никак не влияли бы на то, что реально уходит на сервер.
+      const rows = preview.map((r) => IMPORT_TEMPLATE_HEADER.map((h) => r.values[h] ?? ""));
+      const csv = toCsv(IMPORT_TEMPLATE_HEADER, rows);
+      const editedFile = new File(["﻿" + csv], file.name, { type: "text/csv;charset=utf-8" });
       const form = new FormData();
-      form.append("file", file);
+      form.append("file", editedFile);
       const res = await api.postForm<EquipmentImportResult>(`/businesses/${businessId}/equipment/import`, form);
       setResult(res);
       if (res.created > 0) onImported();
@@ -1111,7 +1310,15 @@ function EquipmentImportModal({
   const problemCount = preview.filter((r) => r.problems.length > 0).length;
 
   return (
-    <dialog className="wide" ref={ref} onClose={handleClose}>
+    <dialog
+      id="modal"
+      className="wide"
+      ref={ref}
+      onClose={handleClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleClose();
+      }}
+    >
       <div className="modal-head">
         <h3>Массовый импорт оборудования из CSV</h3>
         <button type="button" className="icon-btn" onClick={handleClose}>
@@ -1145,9 +1352,9 @@ function EquipmentImportModal({
               <>
                 <div className="field-hint" style={{ marginTop: "10px" }}>
                   Найдено строк: {preview.length}
-                  {problemCount > 0 ? `, из них с явными проблемами: ${problemCount} (не пройдут импорт)` : ""}. Это
-                  предварительная проверка на устройстве — окончательную проверку (включая справочник категорий)
-                  выполнит сервер.
+                  {problemCount > 0 ? `, из них с явными проблемами: ${problemCount} (не пройдут импорт)` : ""}. Значения
+                  ниже можно поправить прямо здесь — при импорте уйдут именно они, а не исходный файл.
+                  Окончательную проверку (включая справочник категорий) всё равно выполнит сервер.
                 </div>
                 <div className="table-wrap" style={{ maxHeight: "260px", overflowY: "auto", marginTop: "8px" }}>
                   <table>
@@ -1161,18 +1368,42 @@ function EquipmentImportModal({
                       </tr>
                     </thead>
                     <tbody>
-                      {preview.map((r) => (
+                      {preview.map((r, idx) => (
                         <tr key={r.row}>
                           <td className="mono">{r.row}</td>
-                          <td>{r.name || "—"}</td>
-                          <td>{r.category || "—"}</td>
-                          <td className="mono">{r.daily_rate || "—"}</td>
+                          <td>
+                            <input
+                              className="table-input"
+                              value={r.values.name}
+                              onChange={(e) => updateCell(idx, "name", e.target.value)}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              className="table-input"
+                              list="equipment-import-category-options"
+                              value={r.values.category}
+                              onChange={(e) => updateCell(idx, "category", e.target.value)}
+                            />
+                          </td>
+                          <td>
+                            <input
+                              className="table-input mono"
+                              value={r.values.daily_rate}
+                              onChange={(e) => updateCell(idx, "daily_rate", e.target.value)}
+                            />
+                          </td>
                           <td>{r.problems.length > 0 ? r.problems.join(", ") : "—"}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+                <datalist id="equipment-import-category-options">
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.name} />
+                  ))}
+                </datalist>
               </>
             )}
             {submitError && <div className="form-error">{submitError}</div>}
@@ -1257,7 +1488,13 @@ export function EquipmentTab({
 }) {
   const { equipment, equipmentCategories, rentals, reloadEquipment, reloadEquipmentCategories } = useData();
   const [sort, setSort] = useState<EquipmentSort>({ key: null, dir: "asc" });
-  const [categoryFilter, setCategoryFilter] = useState("all");
+  // Массив вместо одиночного значения — 16-й проход, п.11 обзора:
+  // мультивыбор категорий в фильтре. Пустой массив = "Все категории" (тот же
+  // смысл, что раньше был у "all"), непустой = показывать позиции ЛЮБОЙ из
+  // выбранных категорий.
+  const [categoryFilter, setCategoryFilter] = useState<string[]>([]);
+  const [catFilterOpen, setCatFilterOpen] = useState(false);
+  const catFilterRef = useRef<HTMLDivElement>(null);
   const [modalMode, setModalMode] = useState<"add" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [copySource, setCopySource] = useState<Equipment | null>(null);
@@ -1283,7 +1520,7 @@ export function EquipmentTab({
   // комбинируется с обоими (см. согласование с пользователем в тринадцатом
   // проходе: "Фильтр категорий обязательно нужен").
   const bySearchAndCategory = equipment.filter((e) => {
-    const matchesCategory = categoryFilter === "all" || e.category === categoryFilter;
+    const matchesCategory = categoryFilter.length === 0 || categoryFilter.includes(e.category);
     const matchesSearch = !q || (e.name + " " + e.category + " " + (e.code ?? "")).toLowerCase().includes(q);
     return matchesCategory && matchesSearch;
   });
@@ -1306,6 +1543,23 @@ export function EquipmentTab({
     setSelectedIds(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, categoryFilter, search]);
+
+  // Закрытие выпадающей панели мультивыбора категорий по клику вне неё
+  // (16-й проход, п.11 обзора) — это не <dialog>, а обычный абсолютно
+  // спозиционированный блок, поэтому click-outside реализован через
+  // document-листенер, а не через нативный backdrop-клик, как у модалок.
+  useEffect(() => {
+    if (!catFilterOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (catFilterRef.current && !catFilterRef.current.contains(e.target as Node)) setCatFilterOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [catFilterOpen]);
+
+  function toggleCategoryFilterValue(name: string) {
+    setCategoryFilter((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
+  }
 
   function toggleSort(key: string) {
     setSort((prev) => {
@@ -1486,19 +1740,40 @@ export function EquipmentTab({
             ))}
           </div>
           {categoryNames.length > 0 && (
-            <select
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-              style={{ maxWidth: "220px" }}
-              title="Фильтр по категории"
-            >
-              <option value="all">Все категории</option>
-              {categoryNames.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
+            // Мультивыбор категорий вместо нативного одиночного <select>
+            // (16-й проход, п.10+11 обзора) — заодно решает проблему со
+            // стрелочкой нативного select'а (он вообще не был кастомизирован
+            // и рисовался браузером как есть) и добавляет выбор нескольких
+            // категорий сразу.
+            <div className="cat-filter" ref={catFilterRef}>
+              <button type="button" className="btn cat-filter-btn" onClick={() => setCatFilterOpen((v) => !v)}>
+                {categoryFilter.length === 0
+                  ? "Все категории"
+                  : categoryFilter.length === 1
+                  ? categoryFilter[0]
+                  : `Категорий: ${categoryFilter.length}`}
+                <IconChevronDown />
+              </button>
+              {catFilterOpen && (
+                <div className="cat-filter-panel">
+                  <label className="cat-filter-option">
+                    <input type="checkbox" checked={categoryFilter.length === 0} onChange={() => setCategoryFilter([])} />
+                    Все категории
+                  </label>
+                  <div className="cat-filter-sep" />
+                  {categoryNames.map((name) => (
+                    <label className="cat-filter-option" key={name}>
+                      <input
+                        type="checkbox"
+                        checked={categoryFilter.includes(name)}
+                        onChange={() => toggleCategoryFilterValue(name)}
+                      />
+                      {name}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
@@ -1656,12 +1931,14 @@ export function EquipmentTab({
         allowAddAnother={modalMode === "add"}
         resetSignal={formResetSignal}
         onClose={closeFormModal}
-        onSubmit={(form, addAnother) => void handleSubmitForm(form, addAnother)}
+        onSubmit={(form, addAnother) => handleSubmitForm(form, addAnother)}
+        onManageCategories={isOwner ? () => setCategoriesModalOpen(true) : undefined}
       />
 
       <EquipmentImportModal
         open={importOpen}
         businessId={businessId}
+        categories={equipmentCategories}
         onClose={() => setImportOpen(false)}
         onImported={() => void Promise.all([reloadEquipment(), reloadEquipmentCategories()])}
       />

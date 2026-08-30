@@ -640,6 +640,46 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .badge-maintenance, .badge-watch, .badge-overdue { background: var(--warning-soft); color: var(--warning-ink); border-color: transparent; }
 .badge-retired, .badge-cancelled, .badge-blacklist { background: var(--critical-soft); color: var(--critical-ink); border-color: transparent; }
 
+/* ---------- Вкладка "Оборудование": мульти-select фильтр категорий ----------
+   16-й проход (обзор вкладки «Оборудование», п.10-11): нативный <select>
+   заменён на кнопку + всплывающую панель чекбоксов (EquipmentTab.tsx,
+   toggleCategoryFilterValue/catFilterOpen), т.к. у native select multiple
+   плохой UX, а стрелку одиночного select нельзя аккуратно подвинуть без
+   appearance:none — здесь стрелка (IconChevronDown) уже её собственный
+   элемент внутри кнопки, а не браузерный рендер, поэтому не "съезжает". */
+.cat-filter { position: relative; display: inline-block; }
+.cat-filter-btn {
+  display: inline-flex; align-items: center; gap: 8px; font-family: inherit; font-size: 13.5px;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  color: var(--ink); cursor: pointer; white-space: nowrap;
+}
+.cat-filter-btn:hover { border-color: var(--accent); }
+.cat-filter-btn svg { flex: none; opacity: 0.6; }
+.cat-filter-panel {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 5; min-width: 220px; max-height: 280px;
+  overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow-lg); padding: 6px;
+}
+.cat-filter-option {
+  display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; font-size: 13px;
+  cursor: pointer; user-select: none;
+}
+.cat-filter-option:hover { background: var(--surface-2); }
+.cat-filter-option input[type="checkbox"] { margin: 0; padding: 0; width: 15px; height: 15px; }
+.cat-filter-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+
+/* ---------- Вкладка "Оборудование": инлайн-редактирование строк CSV-импорта ----------
+   16-й проход (п.6 обзора): вместо "поправь файл и загрузи заново" — правка
+   значений прямо в таблице предпросмотра (EquipmentImportModal), с
+   пересчётом ошибок строки на лету (updateCell). Компактнее обычного
+   input/select, чтобы не раздувать высоту строки таблицы. */
+.table-input {
+  width: 100%; min-width: 90px; padding: 5px 8px; font-size: 13px; border: 1px solid transparent;
+  border-radius: 6px; background: transparent; color: var(--ink);
+}
+.table-input:hover { border-color: var(--border); }
+.table-input:focus { border-color: var(--accent); background: var(--surface); }
+
 /* ---------- Личные сообщения (MessagesTab.tsx) ---------- */
 .msg-shell { display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start; height: calc(100vh - 190px); min-height: 420px; }
 .msg-list-pane, .msg-thread-pane { display: flex; flex-direction: column; height: 100%; overflow: hidden; }

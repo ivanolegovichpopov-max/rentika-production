@@ -324,18 +324,24 @@ function DashboardShell({
         <div className="team-block">
           <div className="team-label">Команда</div>
           <div className="team-list">
-            {activeEmployees.slice(0, 6).map((emp) => (
-              <button
-                type="button"
-                className="team-row team-row-clickable"
-                key={emp.id}
-                title={`Открыть ${emp.name} в разделе «Сотрудники»`}
-                onClick={() => navigate("employees", { highlightEmployeeId: emp.id })}
-              >
-                <span className="avatar" style={{ background: colorFromId(emp.id) }}>{initials(emp.name)}</span>
-                <span className="team-name">{emp.name}</span>
-              </button>
-            ))}
+            {activeEmployees.slice(0, 6).map((emp) => {
+              // 16-й проход (обзор вкладки «Оборудование», п.9): собственная
+              // строка пользователя в «Команде» раньше вела в «Сотрудники»
+              // (как и строки коллег) — логичнее открыть свой же «Профиль».
+              const isSelf = emp.user_id === user?.id;
+              return (
+                <button
+                  type="button"
+                  className="team-row team-row-clickable"
+                  key={emp.id}
+                  title={isSelf ? "Открыть мой профиль" : `Открыть ${emp.name} в разделе «Сотрудники»`}
+                  onClick={() => (isSelf ? navigate("profile") : navigate("employees", { highlightEmployeeId: emp.id }))}
+                >
+                  <span className="avatar" style={{ background: colorFromId(emp.id) }}>{initials(emp.name)}</span>
+                  <span className="team-name">{emp.name}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
