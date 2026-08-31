@@ -38,6 +38,7 @@ def _to_out(db: Session, rental: Rental) -> RentalOut:
                 "period_price_after": float(it.period_price_after_snapshot)
                 if it.period_price_after_snapshot is not None
                 else None,
+                "after_period_days": it.after_period_days_snapshot,
             }
             for it in items
         ],
@@ -125,6 +126,7 @@ async def create_rental(body: RentalCreate, ctx: BusinessContext = Depends(edit_
                 period_days_snapshot=equipment.period_days,
                 period_price_snapshot=equipment.period_price,
                 period_price_after_snapshot=equipment.period_price_after,
+                after_period_days_snapshot=equipment.after_period_days,
             )
         )
         if rental.status == RentalStatus.active:
@@ -356,6 +358,7 @@ async def edit_rental(
                     period_days_snapshot=equipment.period_days,
                     period_price_snapshot=equipment.period_price,
                     period_price_after_snapshot=equipment.period_price_after,
+                    after_period_days_snapshot=equipment.after_period_days,
                 )
             )
             if rental.status == RentalStatus.active:

@@ -44,6 +44,18 @@ class EquipmentCategoryRename(BaseModel):
     _strip_name = field_validator("name")(_strip_or_raise)
 
 
+class EquipmentReorder(BaseModel):
+    """Тело запроса на ручной порядок справочника (категорий/складов) —
+    двадцатый проход, п.1 обзора: перетаскивание строк в модалках
+    "Категории"/"Склады". order — ПОЛНЫЙ список id записей справочника этого
+    бизнеса в желаемом порядке; частичный список отклоняется (см.
+    app/api/routes/equipment.py:reorder_equipment_categories/warehouses) —
+    иначе непереданные записи остались бы с "дырявым" position и порядок
+    между уже упорядоченными и неупомянутыми записями стал бы непредсказуем."""
+
+    order: list[uuid.UUID] = Field(min_length=1)
+
+
 class EquipmentCategoryOut(BaseModel):
     id: uuid.UUID
     name: str
@@ -95,6 +107,14 @@ class EquipmentCreate(BaseModel):
     period_days: int | None = Field(default=None, ge=1)
     period_price: float | None = Field(default=None, ge=0)
     period_price_after: float | None = Field(default=None, ge=0)
+    # Длина "шага после" ступенчатого тарифа в днях (двадцатый проход, п.4
+    # обзора) — см. докстринг Equipment.after_period_days и
+    # app/services/pricing.py:item_cost_for_days. Как и три поля тарифа выше,
+    # backend НЕ требует их обязательного совместного заполнения (та же
+    # снисходительность, что и раньше — "всё или ничего" проверяет только
+    # фронт, см. EquipmentTab.tsx:tieredProblem) — незаполненный тариф просто
+    # не применяется (item_cost_for_days откатывается на daily_rate).
+    after_period_days: int | None = Field(default=None, ge=1)
     # Склад — необязательное поле (восемнадцатый проход), в отличие от
     # category: не у каждого бизнеса несколько точек хранения.
     warehouse: str | None = Field(default=None, max_length=255)
@@ -103,6 +123,22 @@ class EquipmentCreate(BaseModel):
     _strip_name = field_validator("name")(_strip_or_raise)
     _strip_category = field_validator("category")(_strip_or_raise)
     _strip_warehouse = field_validator("warehouse")(_strip_optional)
+
+
+class EquipmentBulkCreate(EquipmentCreate):
+    """То же самое, что EquipmentCreate, плюс количество одинаковых позиций
+    (двадцатый проход, п.3 обзора — "30 пар одной модели костылей"). Каждая
+    позиция остаётся ОТДЕЛЬНОЙ строкой оборудования (свой id, свой статус,
+    своя история аренд) — это сознательно НЕ поле "количество" на уровне
+    одной записи (см. обсуждение с пользователем: для проката важно
+    отслеживать состояние/повреждения/аренду каждой физической единицы по
+    отдельности, а не только суммарный остаток). quantity — только удобство
+    ввода на одной форме, а не новая модель данных; см.
+    app/api/routes/equipment.py:create_equipment_bulk и группировку
+    одинаковых позиций одной строкой в таблице на фронте
+    (EquipmentTab.tsx:buildEquipmentRenderRows)."""
+
+    quantity: int = Field(default=1, ge=1, le=200)
 
 
 class EquipmentUpdate(BaseModel):
@@ -121,6 +157,7 @@ class EquipmentUpdate(BaseModel):
     period_days: int | None = Field(default=None, ge=1)
     period_price: float | None = Field(default=None, ge=0)
     period_price_after: float | None = Field(default=None, ge=0)
+    after_period_days: int | None = Field(default=None, ge=1)
     warehouse: str | None = Field(default=None, max_length=255)
     status: EquipmentStatus | None = None
     maintenance_until: date | None = None
@@ -141,6 +178,7 @@ class EquipmentOut(BaseModel):
     period_days: int | None
     period_price: float | None
     period_price_after: float | None
+    after_period_days: int | None
     warehouse: str | None
     status: EquipmentStatus
     maintenance_until: date | None
@@ -166,6 +204,7 @@ class EquipmentImportRow(BaseModel):
     period_days: str = ""
     period_price: str = ""
     period_price_after: str = ""
+    after_period_days: str = ""
     warehouse: str | None = None
     notes: str | None = None
 
@@ -236,6 +275,7 @@ class RentalItemOut(BaseModel):
     period_days_snapshot: int | None
     period_price_snapshot: float | None
     period_price_after_snapshot: float | None
+    after_period_days_snapshot: int | None
 
     model_config = {"from_attributes": True}
 

@@ -69,6 +69,12 @@ function itemCostForDays(eq: Equipment, days: number): number {
   const P = eq.period_days;
   if (days <= P) return eq.daily_rate * days;
   const extraDays = days - P;
+  // Блочная надбавка (двадцатый проход) — см. financeCalc.ts:itemCostForDays,
+  // та же формула, продублированная здесь по тому же принципу, что и раньше.
+  if (eq.after_period_days) {
+    const blocks = Math.ceil(extraDays / eq.after_period_days);
+    return eq.period_price + blocks * (eq.period_price_after || 0);
+  }
   const perDayAfter = (eq.period_price_after || 0) / P;
   return eq.period_price + extraDays * perDayAfter;
 }
@@ -632,7 +638,13 @@ export function CalendarTab({ businessId, search }: { businessId: string; search
                         {e.name}
                         <span className="cat">
                           {e.period_days && e.period_price
-                            ? `${money(e.period_price)}/${e.period_days}дн${e.period_price_after ? ` → ${money(e.period_price_after)}/${e.period_days}дн` : ""}`
+                            ? `${money(e.period_price)}/${e.period_days}дн${
+                                e.period_price_after
+                                  ? ` → ${money(e.period_price_after)}/${
+                                      (e.after_period_days || 1) === 1 ? "сутки" : `${e.after_period_days} дн`
+                                    }`
+                                  : ""
+                              }`
                             : `${money(e.daily_rate)}/сутки`}
                         </span>
                       </div>

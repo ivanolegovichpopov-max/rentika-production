@@ -3,7 +3,7 @@ import io
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.audit import log_action
@@ -12,6 +12,7 @@ from app.database import get_db
 from app.models.business import PermissionLevel, ResourceType
 from app.models.inventory import Equipment, EquipmentCategory, EquipmentStatus, EquipmentWarehouse, Rental, RentalItem, RentalStatus
 from app.schemas.inventory import (
+    EquipmentBulkCreate,
     EquipmentCategoryCreate,
     EquipmentCategoryOut,
     EquipmentCategoryRename,
@@ -19,6 +20,7 @@ from app.schemas.inventory import (
     EquipmentImportResult,
     EquipmentImportRowResult,
     EquipmentOut,
+    EquipmentReorder,
     EquipmentUpdate,
     EquipmentWarehouseCreate,
     EquipmentWarehouseOut,
@@ -40,6 +42,21 @@ def _require_owner(ctx: BusinessContext) -> None:
     # те же дубли/мусор, от которых справочник и должен защищать.
     if not ctx.full_access:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Управление справочником категорий доступно только владельцу бизнеса")
+
+
+def _next_category_position(db: Session, business_id) -> int:
+    """Позиция для НОВОЙ записи справочника категорий — двадцатый проход,
+    п.1 обзора (перетаскивание). Новые записи всегда добавляются в конец
+    текущего ручного порядка, а не получают одинаковый дефолт 0 (что сделало
+    бы порядок между несколькими новыми записями недетерминированным до
+    первого перетаскивания)."""
+    count = db.scalar(select(func.count()).select_from(EquipmentCategory).where(EquipmentCategory.business_id == business_id))
+    return count or 0
+
+
+def _next_warehouse_position(db: Session, business_id) -> int:
+    count = db.scalar(select(func.count()).select_from(EquipmentWarehouse).where(EquipmentWarehouse.business_id == business_id))
+    return count or 0
 
 
 def _ensure_category(db: Session, ctx: BusinessContext, name: str) -> str:
@@ -82,7 +99,7 @@ def _ensure_category(db: Session, ctx: BusinessContext, name: str) -> str:
             status.HTTP_400_BAD_REQUEST,
             f'Категория «{name}» не найдена в справочнике. Обратитесь к владельцу бизнеса, чтобы добавить её.',
         )
-    db.add(EquipmentCategory(business_id=ctx.business_id, name=name))
+    db.add(EquipmentCategory(business_id=ctx.business_id, name=name, position=_next_category_position(db, ctx.business_id)))
     db.flush()
     return name
 
@@ -115,8 +132,14 @@ def _category_out(category: EquipmentCategory, counts: dict[str, int]) -> Equipm
 
 @router.get("-categories", response_model=list[EquipmentCategoryOut])
 async def list_equipment_categories(ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)):
+    # Сортировка по ручному порядку (position), а не по алфавиту — двадцатый
+    # проход, п.1 обзора: перетаскивание строк в модалке "Категории" теперь
+    # реально на что-то влияет и здесь, и в фильтре по категории на панели
+    # инструментов (тот же список приходит оттуда же).
     categories = db.scalars(
-        select(EquipmentCategory).where(EquipmentCategory.business_id == ctx.business_id).order_by(EquipmentCategory.name)
+        select(EquipmentCategory)
+        .where(EquipmentCategory.business_id == ctx.business_id)
+        .order_by(EquipmentCategory.position, EquipmentCategory.name)
     ).all()
     counts = _category_equipment_counts(db, ctx.business_id)
     return [_category_out(c, counts) for c in categories]
@@ -131,7 +154,7 @@ async def create_equipment_category(
     categories = db.scalars(select(EquipmentCategory).where(EquipmentCategory.business_id == ctx.business_id)).all()
     if any(c.name.lower() == name.lower() for c in categories):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Такая категория уже есть в справочнике")
-    category = EquipmentCategory(business_id=ctx.business_id, name=name)
+    category = EquipmentCategory(business_id=ctx.business_id, name=name, position=len(categories))
     db.add(category)
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="equipment_category")
     db.commit()
@@ -220,6 +243,28 @@ async def delete_equipment_category(
     db.commit()
 
 
+@router.post("-categories/reorder", response_model=list[EquipmentCategoryOut])
+async def reorder_equipment_categories(
+    body: EquipmentReorder, ctx: BusinessContext = Depends(get_business_context), db: Session = Depends(get_db)
+):
+    """Ручной порядок справочника категорий — двадцатый проход, п.1 обзора
+    ("перетаскивание категорий/складов — согласен, делаем"). POST, а не
+    PATCH/{id} — единственный запрос перезаписывает position у ВСЕГО набора
+    сразу (перетаскивание одной строки в UI меняет относительный порядок
+    многих записей, не только одной)."""
+    _require_owner(ctx)
+    _apply_reorder(db, EquipmentCategory, ctx, body.order, "категории")
+    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="reorder", resource="equipment_category")
+    db.commit()
+    categories = db.scalars(
+        select(EquipmentCategory)
+        .where(EquipmentCategory.business_id == ctx.business_id)
+        .order_by(EquipmentCategory.position, EquipmentCategory.name)
+    ).all()
+    counts = _category_equipment_counts(db, ctx.business_id)
+    return [_category_out(c, counts) for c in categories]
+
+
 # --- Справочник складов (восемнадцатый проход) -------------------------------
 #
 # Точная копия механики справочника категорий выше (_ensure_category/
@@ -248,7 +293,7 @@ def _ensure_warehouse(db: Session, ctx: BusinessContext, name: str | None) -> st
             status.HTTP_400_BAD_REQUEST,
             f'Склад «{name}» не найден в справочнике. Обратитесь к владельцу бизнеса, чтобы добавить его.',
         )
-    db.add(EquipmentWarehouse(business_id=ctx.business_id, name=name))
+    db.add(EquipmentWarehouse(business_id=ctx.business_id, name=name, position=_next_warehouse_position(db, ctx.business_id)))
     db.flush()
     return name
 
@@ -275,11 +320,32 @@ def _warehouse_out(warehouse: EquipmentWarehouse, counts: dict[str, int]) -> Equ
 
 @router.get("-warehouses", response_model=list[EquipmentWarehouseOut])
 async def list_equipment_warehouses(ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)):
+    # См. list_equipment_categories выше — та же смена сортировки на
+    # ручной порядок (position).
     warehouses = db.scalars(
-        select(EquipmentWarehouse).where(EquipmentWarehouse.business_id == ctx.business_id).order_by(EquipmentWarehouse.name)
+        select(EquipmentWarehouse)
+        .where(EquipmentWarehouse.business_id == ctx.business_id)
+        .order_by(EquipmentWarehouse.position, EquipmentWarehouse.name)
     ).all()
     counts = _warehouse_equipment_counts(db, ctx.business_id)
     return [_warehouse_out(w, counts) for w in warehouses]
+
+
+def _apply_reorder(db: Session, model, ctx: BusinessContext, order: list, noun: str) -> None:
+    """Общая реализация ручного порядка для категорий/складов — двадцатый
+    проход, п.1 обзора. `order` — ПОЛНЫЙ список id записей этого бизнеса в
+    желаемом порядке (см. докстринг EquipmentReorder про то, почему частичный
+    список отклоняется, а не молча игнорирует непереданные записи)."""
+    rows = db.scalars(select(model).where(model.business_id == ctx.business_id)).all()
+    by_id = {row.id: row for row in rows}
+    order_ids = list(dict.fromkeys(order))  # де-дуп, сохраняя порядок — на случай случайного дубля в теле запроса
+    if set(order_ids) != set(by_id.keys()):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Список должен содержать все {noun} этого бизнеса ровно по одному разу, без пропусков.",
+        )
+    for position, row_id in enumerate(order_ids):
+        by_id[row_id].position = position
 
 
 @router.post("-warehouses", response_model=EquipmentWarehouseOut, status_code=status.HTTP_201_CREATED)
@@ -291,7 +357,7 @@ async def create_equipment_warehouse(
     warehouses = db.scalars(select(EquipmentWarehouse).where(EquipmentWarehouse.business_id == ctx.business_id)).all()
     if any(w.name.lower() == name.lower() for w in warehouses):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Такой склад уже есть в справочнике")
-    warehouse = EquipmentWarehouse(business_id=ctx.business_id, name=name)
+    warehouse = EquipmentWarehouse(business_id=ctx.business_id, name=name, position=len(warehouses))
     db.add(warehouse)
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="equipment_warehouse")
     db.commit()
@@ -360,6 +426,24 @@ async def delete_equipment_warehouse(
     db.commit()
 
 
+@router.post("-warehouses/reorder", response_model=list[EquipmentWarehouseOut])
+async def reorder_equipment_warehouses(
+    body: EquipmentReorder, ctx: BusinessContext = Depends(get_business_context), db: Session = Depends(get_db)
+):
+    """См. reorder_equipment_categories выше — точная копия механики."""
+    _require_owner(ctx)
+    _apply_reorder(db, EquipmentWarehouse, ctx, body.order, "склады")
+    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="reorder", resource="equipment_warehouse")
+    db.commit()
+    warehouses = db.scalars(
+        select(EquipmentWarehouse)
+        .where(EquipmentWarehouse.business_id == ctx.business_id)
+        .order_by(EquipmentWarehouse.position, EquipmentWarehouse.name)
+    ).all()
+    counts = _warehouse_equipment_counts(db, ctx.business_id)
+    return [_warehouse_out(w, counts) for w in warehouses]
+
+
 # --- Оборудование -------------------------------------------------------------
 
 
@@ -383,6 +467,47 @@ async def create_equipment(body: EquipmentCreate, ctx: BusinessContext = Depends
     db.commit()
     db.refresh(item)
     return item
+
+
+@router.post("/bulk", response_model=list[EquipmentOut], status_code=status.HTTP_201_CREATED)
+async def create_equipment_bulk(body: EquipmentBulkCreate, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)):
+    """Массовое добавление N одинаковых позиций одной формой (двадцатый
+    проход, п.3 обзора — "30 пар одной модели костылей"). НЕ трогает
+    существующий POST /equipment: тот остаётся для одиночного добавления
+    (quantity=1) — отдельный эндпоинт, а не расширение единственного, чтобы
+    response_model не пришлось делать неоднозначным Union[Equipment,
+    list[Equipment]] (см. EquipmentBulkCreate в схемах). Каждая созданная
+    позиция — своя ОТДЕЛЬНАЯ строка Equipment (свой статус, своя история
+    аренд); на фронте одинаковые позиции визуально сворачиваются в одну
+    строку таблицы (см. EquipmentTab.tsx), но в базе и в API это всегда N
+    независимых записей."""
+    canonical_category = _ensure_category(db, ctx, body.category)
+    canonical_warehouse = _ensure_warehouse(db, ctx, body.warehouse)
+    data = body.model_dump(exclude={"quantity"})
+    data["category"] = canonical_category
+    data["warehouse"] = canonical_warehouse
+    base_code = (data.get("code") or "").strip() or None
+    items: list[Equipment] = []
+    for i in range(1, body.quantity + 1):
+        item_data = dict(data)
+        # Инвентарный номер не обязателен — если пользователь его не указал,
+        # все N позиций тоже остаются без номера (нечего суффиксовать). Если
+        # указан, при quantity>1 к нему добавляется "-1", "-2", … — иначе
+        # все N позиций получили бы БУКВАЛЬНО ОДИНАКОВЫЙ номер, что сделало
+        # бы мягкое предупреждение о дубле (EquipmentFormModal.duplicateCode)
+        # бессмысленным сразу для всей партии.
+        if base_code and body.quantity > 1:
+            item_data["code"] = f"{base_code}-{i}"
+        item = Equipment(business_id=ctx.business_id, **item_data)
+        db.add(item)
+        items.append(item)
+    log_action(
+        db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="equipment", resource_id=f"{body.quantity} позиций"
+    )
+    db.commit()
+    for item in items:
+        db.refresh(item)
+    return items
 
 
 @router.patch("/{equipment_id}", response_model=EquipmentOut)
@@ -465,7 +590,8 @@ async def delete_equipment(
 #
 # Формат — заголовок первой строкой, порядок столбцов не важен (читаем по
 # именам): name,category,code,daily_rate,deposit,period_days,period_price,
-# period_price_after,notes. Обязательны только name/category/daily_rate —
+# period_price_after,after_period_days,notes. Обязательны только
+# name/category/daily_rate —
 # остальное можно оставлять пустым. Один файл — одна транзакция: все строки
 # валидируются, накопленные объекты добавляются в сессию, и только если
 # импорт не пуст — один общий db.commit() в самом конце (не построчные
@@ -536,6 +662,7 @@ async def import_equipment(
             period_days = _parse_int(row.get("period_days", ""), "period_days")
             period_price = _parse_number(row.get("period_price", ""), "period_price")
             period_price_after = _parse_number(row.get("period_price_after", ""), "period_price_after")
+            after_period_days = _parse_int(row.get("after_period_days", ""), "after_period_days")
 
             canonical_category = _ensure_category(db, ctx, category)
             canonical_warehouse = _ensure_warehouse(db, ctx, row.get("warehouse") or None)
@@ -550,6 +677,7 @@ async def import_equipment(
                 period_days=period_days,
                 period_price=period_price,
                 period_price_after=period_price_after,
+                after_period_days=after_period_days,
                 warehouse=canonical_warehouse,
                 notes=row.get("notes") or None,
             )

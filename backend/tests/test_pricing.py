@@ -143,3 +143,89 @@ def test_breakdown_uses_actual_return_over_today_when_present():
     assert breakdown["actual_days"] == 29
     assert breakdown["late_fee"] == 0
     assert breakdown["total"] == 1287
+
+
+# --- after_period_days: блочная ("любая часть шага сверху") надбавка --------
+#
+# Двадцатый проход, п.4 обзора: "190₽ за любую часть недели сверху" — вместо
+# старой линейной надбавки (period_price_after, делённая на period_days и
+# размазанная на каждый день) теперь у "шага после" СВОЯ длина, и он
+# начисляется целиком за любой начатый шаг, а не пропорционально дням.
+
+
+def test_after_period_days_charges_full_block_for_a_partial_extra_week():
+    """Ровно пример из обзора пользователя: костыли — 690₽ за первые 14 дней,
+    затем 190₽ за каждую начатую неделю сверху. 16 дней аренды = 14 базовых +
+    2 дня в НАЧАТУЮ, но не закрытую вторую неделю → всё равно полные 190₽,
+    а не 190×2/7 ≈ 54,29₽, как дала бы старая линейная формула."""
+    cost = item_cost_for_days(
+        daily_rate=50, days=16, period_days=14, period_price=690, period_price_after=190, after_period_days=7
+    )
+    assert cost == 690 + 190  # ровно один начатый шаг сверху
+
+
+def test_after_period_days_charges_two_full_blocks_when_extra_days_fill_them_exactly():
+    # 14 базовых + ровно 14 дней сверху (два полных семидневных шага) — без
+    # "лишнего" начатого шага.
+    cost = item_cost_for_days(
+        daily_rate=50, days=28, period_days=14, period_price=690, period_price_after=190, after_period_days=7
+    )
+    assert cost == 690 + 190 * 2
+
+
+def test_after_period_days_one_day_matches_old_ui_conversion():
+    """Сап-борд из обзора: 2290₽ за первые 3 дня, затем 490₽/сутки. ДО этого
+    прохода форма конвертировала введённую пользователем "цену за сутки"
+    (490) в period_price_after = 490×period_days ПЕРЕД отправкой на backend
+    (см. историю EquipmentTab.tsx:formToPayload/periodPriceAfterPerDay) —
+    поэтому реальный старый сквозной сценарий "хочу 490₽/сутки" хранился как
+    period_price_after=1470 при period_days=3, а не как 490. Новая механика
+    (after_period_days=1, period_price_after=490 — уже без скрытого
+    умножения) должна давать РОВНО ТО ЖЕ число для того же самого желания
+    пользователя, потому что число дней аренды всегда целое — "любой начатый
+    шаг в 1 день" и "линейная надбавка по дням" тождественны. Это и есть
+    гарантия того, что бэкафилл существующих позиций
+    (0011_equipment_ordering_and_tiered_pricing.py, after_period_days=1 с
+    пересчётом period_price_after/period_days) не меняет задним числом уже
+    посчитанные суммы."""
+    days = 9  # 3 базовых + 6 суток сверху
+    old_style_period_price_after = 490 * 3  # то, что раньше реально отправляла форма
+    without_after_period_days = item_cost_for_days(
+        daily_rate=99, days=days, period_days=3, period_price=2290, period_price_after=old_style_period_price_after
+    )
+    with_block = item_cost_for_days(
+        daily_rate=99, days=days, period_days=3, period_price=2290, period_price_after=490, after_period_days=1
+    )
+    assert with_block == without_after_period_days == 2290 + 490 * 6
+
+
+def test_after_period_days_within_first_period_still_uses_daily_rate():
+    # Тот же принцип, что и test_pricing_within_period_uses_daily_rate_not_period_price
+    # выше — after_period_days вообще не участвует, пока дни аренды не
+    # превысили period_days.
+    cost = item_cost_for_days(
+        daily_rate=50, days=10, period_days=14, period_price=690, period_price_after=190, after_period_days=7
+    )
+    assert cost == 500
+
+
+def test_breakdown_with_after_period_days_matches_block_billing():
+    breakdown = compute_rental_breakdown(
+        items=[
+            {
+                "daily_rate": 50,
+                "period_days": 14,
+                "period_price": 690,
+                "period_price_after": 190,
+                "after_period_days": 7,
+            }
+        ],
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 9, 16),  # 16 дней — 14 + начатая вторая неделя
+        actual_return=None,
+        today=date(2026, 9, 16),
+        damage_fee=0,
+        discount=0,
+    )
+    assert breakdown["planned_days"] == 16
+    assert breakdown["base"] == 690 + 190

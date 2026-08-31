@@ -380,6 +380,27 @@ tbody tr[data-clickable="true"] { cursor: pointer; }
 tbody tr[data-clickable="true"]:hover { background: var(--surface-2); }
 .cell-name { font-weight: 700; }
 .cell-sub { color: var(--muted); font-size: 12px; }
+/* Точка "есть заметка" у строки оборудования (16-й проход) — вынесена в
+   класс из инлайн-style, чтобы её мог переиспользовать и заголовок группы
+   (двадцатый проход, п.3 обзора). */
+.cell-note-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); margin-left: 6px; vertical-align: middle;
+}
+
+/* ---------- Группировка одинаковых позиций оборудования (двадцатый
+   проход, п.3 обзора: "30 пар костылей одной модели") ---------- */
+.group-header-row { background: var(--surface-2); }
+.group-header-row:hover { background: var(--surface-3); }
+.group-chevron {
+  display: inline-flex; vertical-align: middle; margin-right: 6px; color: var(--muted);
+  transition: transform .15s ease;
+}
+.group-chevron.expanded { transform: rotate(180deg); }
+.group-status-breakdown { display: flex; flex-wrap: wrap; gap: 4px; }
+.group-item-row td { background: var(--surface-2); }
+.group-item-row:hover td { background: var(--surface-3); }
+.cell-name-indented { padding-left: 22px; font-size: 12.5px; }
 
 /* ---------- Карточка аренды ---------- */
 .rental-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow-sm); display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; margin-bottom: 10px; }
@@ -431,6 +452,15 @@ tbody tr[data-clickable="true"]:hover { background: var(--surface-2); }
 .cal-group-drag { display: flex; color: var(--muted); flex: none; cursor: grab; }
 .cal-group-drag:active { cursor: grabbing; }
 .cal-group-count { font-family: "Roboto Mono"; font-weight: 500; color: var(--muted); font-size: 10.5px; }
+
+/* Ручной порядок строк в таблицах (категории/склады оборудования,
+   двадцатый проход) — тот же idiom dragging/drag-over, что у cal-group-row
+   выше, но применён к обычной строке <tr>. */
+tr.row-draggable.dragging { opacity: 0.4; }
+tr.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background: var(--accent-soft); }
+.drag-handle-cell { width: 28px; color: var(--muted); cursor: grab; display: flex; align-items: center; justify-content: center; }
+.drag-handle-cell:active { cursor: grabbing; }
+.drag-handle-cell.disabled { color: var(--border); cursor: not-allowed; }
 /* z-index:0 замыкает собственный стек внутри ячейки (today-обводка, подсветка выбора)
    в её локальный контекст наложения — без этого их z-index сравнивался бы напрямую
    с закреплённой колонкой названия/шапкой (у них тоже задан z-index) и мог перекрыть их
@@ -523,6 +553,9 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .field textarea { resize: vertical; min-height: 56px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .field-row-3 { grid-template-columns: 1fr 1fr 1fr; }
+/* Ступенчатый тариф со свободной длиной шага "после" — 4 поля в ряд
+   (двадцатый проход, п.4 обзора). */
+.field-row-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
 .field-hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
 /* Кнопка-ссылка внутри field-hint (напр. "+ Добавить ступенчатый тариф" в
    форме оборудования, 14-й проход) — выглядит как текст, не как кнопка. */
@@ -626,6 +659,7 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 @media (max-width: 520px) {
   .team-block { display: none; }
   .field-row-3 { grid-template-columns: 1fr; }
+  .field-row-4 { grid-template-columns: 1fr; }
 }
 
 /* ---------- Совместимость: экраны без прямого аналога в демо ---------- */
@@ -724,6 +758,18 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .cat-filter-option.checked .cat-filter-check { background: var(--accent); border-color: var(--accent); }
 .cat-filter-check svg { width: 11px; height: 11px; }
 .cat-filter-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+
+/* ---------- Попап настройки столбцов таблицы оборудования (двадцатый
+   проход, п.2 обзора) — тот же контейнер .cat-filter/.cat-filter-panel, что
+   и у фильтров категории/склада выше, но строки — не чекбокс-фильтр, а
+   перетаскиваемые переключатели видимости столбца. ---------- */
+.col-settings-row {
+  display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 2px; border-radius: 6px;
+}
+.col-settings-row.row-draggable.dragging { opacity: 0.4; }
+.col-settings-row.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background: var(--accent-soft); }
+.col-settings-grip { flex: none; color: var(--muted); cursor: grab; display: flex; align-items: center; }
+.col-settings-grip:active { cursor: grabbing; }
 
 /* ---------- Автодополнение категории (CategoryAutocomplete в EquipmentTab.tsx) ----------
    16-й проход (обзор по скриншотам, п.6): замена нативного <input list>+

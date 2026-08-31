@@ -268,3 +268,42 @@ def test_import_row_with_warehouse_column(client):
     body = resp.json()
     assert body["created"] == 1
     assert body["results"][0]["equipment"]["warehouse"] == "Склад Б"
+
+
+# --- Ручной порядок (двадцатый проход, п.1 обзора) — см. точную копию тестов
+# в test_equipment_categories.py.
+
+
+def test_owner_can_reorder_warehouses(client):
+    owner = register_business(client, email="reorder-wh@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+    names = ["Центральный", "Северный", "Южный"]
+    ids = [
+        client.post(f"/api/businesses/{business_id}/equipment-warehouses", json={"name": n}, headers=headers).json()["id"]
+        for n in names
+    ]
+    new_order = [ids[1], ids[2], ids[0]]
+    resp = client.post(f"/api/businesses/{business_id}/equipment-warehouses/reorder", json={"order": new_order}, headers=headers)
+    assert resp.status_code == 200
+    assert [w["name"] for w in resp.json()] == ["Северный", "Южный", "Центральный"]
+
+    listed_after = client.get(f"/api/businesses/{business_id}/equipment-warehouses", headers=headers).json()
+    assert [w["name"] for w in listed_after] == ["Северный", "Южный", "Центральный"]
+
+
+def test_reorder_warehouses_requires_owner(client):
+    owner = register_business(client, email="reorder-wh-403@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    owner_headers = auth_headers(owner["access_token"])
+    wh_id = client.post(
+        f"/api/businesses/{business_id}/equipment-warehouses", json={"name": "Склад"}, headers=owner_headers
+    ).json()["id"]
+    employee_token = _make_edit_employee(client, owner["access_token"], business_id, email="reorder-wh-403-emp@example.com")
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/equipment-warehouses/reorder",
+        json={"order": [wh_id]},
+        headers=auth_headers(employee_token),
+    )
+    assert resp.status_code == 403

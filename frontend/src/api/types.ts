@@ -55,6 +55,12 @@ export interface Equipment {
   period_days: number | null;
   period_price: number | null;
   period_price_after: number | null;
+  // Длина "шага после" ступенчатого тарифа в днях — двадцатый проход, п.4
+  // обзора ("190₽ за любую часть недели сверху"): period_price_after теперь
+  // взимается ЦЕЛИКОМ за каждый полный или начатый шаг этой длины (а не
+  // размазывается линейно по дням, как раньше) — см.
+  // app/services/pricing.py:item_cost_for_days и financeCalc.ts:itemCostForDays.
+  after_period_days: number | null;
   // Склад/точка хранения (восемнадцатый проход) — необязательное поле, в
   // отличие от category.
   warehouse: string | null;
@@ -115,6 +121,9 @@ export interface RentalItem {
   period_days_snapshot: number | null;
   period_price_snapshot: number | null;
   period_price_after_snapshot: number | null;
+  // См. Equipment.after_period_days — снимок того же поля на момент
+  // оформления аренды (двадцатый проход).
+  after_period_days_snapshot: number | null;
 }
 
 export interface Rental {

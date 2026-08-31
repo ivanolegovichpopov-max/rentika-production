@@ -576,3 +576,61 @@ def test_delete_category_requires_owner(client):
         f"/api/businesses/{business_id}/equipment-categories/{cat['id']}", headers=auth_headers(employee_token)
     )
     assert resp.status_code == 403
+
+
+# --- Ручной порядок (двадцатый проход, п.1 обзора) ---------------------------
+
+
+def test_owner_can_reorder_categories(client):
+    owner = register_business(client, email="reorder-cat@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+    names = ["Альфа", "Бета", "Гамма"]
+    ids = [
+        client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": n}, headers=headers).json()["id"]
+        for n in names
+    ]
+    # По умолчанию (без ручной перестановки) список идёт в порядке создания.
+    listed = client.get(f"/api/businesses/{business_id}/equipment-categories", headers=headers).json()
+    assert [c["name"] for c in listed] == names
+
+    # Переставляем: последняя категория — первой.
+    new_order = [ids[2], ids[0], ids[1]]
+    resp = client.post(f"/api/businesses/{business_id}/equipment-categories/reorder", json={"order": new_order}, headers=headers)
+    assert resp.status_code == 200
+    assert [c["name"] for c in resp.json()] == ["Гамма", "Альфа", "Бета"]
+
+    # Порядок сохраняется — виден и при обычном GET, не только в ответе reorder.
+    listed_after = client.get(f"/api/businesses/{business_id}/equipment-categories", headers=headers).json()
+    assert [c["name"] for c in listed_after] == ["Гамма", "Альфа", "Бета"]
+
+
+def test_reorder_categories_rejects_incomplete_list(client):
+    owner = register_business(client, email="reorder-cat-incomplete@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    headers = auth_headers(owner["access_token"])
+    ids = [
+        client.post(f"/api/businesses/{business_id}/equipment-categories", json={"name": n}, headers=headers).json()["id"]
+        for n in ["Альфа", "Бета"]
+    ]
+    # Пропущена одна из двух категорий — список должен быть отклонён, а не
+    # молча оставить пропущенную запись с "дырявым" position.
+    resp = client.post(f"/api/businesses/{business_id}/equipment-categories/reorder", json={"order": [ids[0]]}, headers=headers)
+    assert resp.status_code == 400
+
+
+def test_reorder_categories_requires_owner(client):
+    owner = register_business(client, email="reorder-cat-403@example.com", password="correct horse battery staple")
+    business_id = _get_business_id(client, owner["access_token"])
+    owner_headers = auth_headers(owner["access_token"])
+    cat_id = client.post(
+        f"/api/businesses/{business_id}/equipment-categories", json={"name": "Инструмент"}, headers=owner_headers
+    ).json()["id"]
+    employee_token = _make_edit_employee(client, owner["access_token"], business_id, email="reorder-cat-403-emp@example.com")
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/equipment-categories/reorder",
+        json={"order": [cat_id]},
+        headers=auth_headers(employee_token),
+    )
+    assert resp.status_code == 403

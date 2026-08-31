@@ -66,6 +66,16 @@ class EquipmentCategory(Base):
         GUID(), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Ручной порядок для перетаскивания в UI (двадцатый проход, п.1 обзора —
+    # "перетаскивание категорий/складов"). НЕ уникально и НЕ обязательно
+    # плотное (0,1,2,…) — только относительный порядок сортировки внутри
+    # бизнеса имеет значение; см. app/api/routes/equipment.py:
+    # _next_category_position (новые записи добавляются в конец) и
+    # reorder_equipment_categories (перезаписывает position у всего набора
+    # разом при перетаскивании). Бэкафилл существующих записей — см.
+    # 0011_equipment_ordering_and_tiered_pricing.py (по алфавиту, чтобы
+    # порядок списка не "прыгнул" сразу после миграции).
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -85,6 +95,8 @@ class EquipmentWarehouse(Base):
         GUID(), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # См. EquipmentCategory.position выше — та же механика ручного порядка.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -109,11 +121,25 @@ class Equipment(Base):
     code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     daily_rate: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     deposit: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
-    # Ступенчатый тариф (опционально): после period_days цена за день падает
-    # до period_price_after; period_price — цена за первый период целиком.
+    # Ступенчатый тариф (опционально): первые period_days дней стоят
+    # period_price целиком; каждый ПОЛНЫЙ ИЛИ НАЧАТЫЙ шаг длиной
+    # after_period_days дней сверх этого стоит period_price_after (двадцатый
+    # проход, п.4 обзора — "190₽ за любую часть недели сверху": раньше
+    # period_price_after делился на period_days и размазывался линейно по
+    # дням, из-за чего "цену за неделю" нельзя было ввести напрямую — только
+    # пересчитав её в цену за сутки в уме. Теперь у "шага после" своя
+    # собственная длина, независимая от длины первого периода — см.
+    # app/services/pricing.py:item_cost_for_days. after_period_days==None —
+    # это ТОЛЬКО обратная совместимость сырых вызовов функции без явного
+    # значения (см. докстринг item_cost_for_days); у любой записи в БД,
+    # где вообще задан ступенчатый тариф, это поле всегда заполнено (см.
+    # 0011_equipment_ordering_and_tiered_pricing.py — бэкафилл существующих
+    # строк на after_period_days=1 с пересчётом period_price_after к цене за
+    # одни сутки, что математически не меняет уже посчитанные суммы).
     period_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     period_price: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     period_price_after: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    after_period_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[EquipmentStatus] = mapped_column(
         Enum(EquipmentStatus, name="equipment_status"), default=EquipmentStatus.available, nullable=False
     )
@@ -195,3 +221,6 @@ class RentalItem(Base):
     period_days_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     period_price_snapshot: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
     period_price_after_snapshot: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # См. Equipment.after_period_days — снимок того же поля на момент
+    # оформления аренды (двадцатый проход).
+    after_period_days_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)

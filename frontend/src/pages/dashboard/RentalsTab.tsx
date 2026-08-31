@@ -107,29 +107,39 @@ function isUnderMaintenanceOn(eq: Equipment, dateIso: string): boolean {
   return dateIso <= eq.maintenance_until;
 }
 
-/** periodPriceAfter хранится как цена ЗА ПЕРИОД (periodDays дней), поэтому
- * для показа "после периода" делим на periodDays и печатаем ₽/сутки —
- * восемнадцатый проход, обзор по скриншотам, п.4 (тот же фикс, что и в
- * EquipmentTab.tsx:rateLabel — см. комментарий там). */
+/** periodPriceAfter теперь — цена за ОДИН ПОЛНЫЙ ИЛИ НАЧАТЫЙ шаг длиной
+ * afterPeriodDays дней (двадцатый проход, п.4 обзора), а не цена, размазанная
+ * линейно по дням — см. комментарий у EquipmentTab.tsx:rateLabel и
+ * financeCalc.ts:itemCostForDays. afterPeriodDays==1 печатается как
+ * "/сутки" для читаемости (самый частый случай — посуточная надбавка), любая
+ * другая длина шага — как "/N дн". */
 function rateLabel(
   dailyRate: number,
   periodDays: number | null,
   periodPrice: number | null,
-  periodPriceAfter: number | null
+  periodPriceAfter: number | null,
+  afterPeriodDays: number | null
 ): string {
   if (periodDays && periodPrice) {
-    const afterPerDay = periodPriceAfter != null ? Math.round((periodPriceAfter / periodDays) * 100) / 100 : null;
-    return `${money(periodPrice)}/${periodDays}дн` + (afterPerDay != null ? ` → ${money(afterPerDay)}/сутки` : "");
+    const afterDays = afterPeriodDays || 1;
+    const afterUnit = afterDays === 1 ? "сутки" : `${afterDays} дн`;
+    return `${money(periodPrice)}/${periodDays}дн` + (periodPriceAfter != null ? ` → ${money(periodPriceAfter)}/${afterUnit}` : "");
   }
   return `${money(dailyRate)}/сутки`;
 }
 
 function equipmentRateLabel(e: Equipment): string {
-  return rateLabel(e.daily_rate, e.period_days, e.period_price, e.period_price_after);
+  return rateLabel(e.daily_rate, e.period_days, e.period_price, e.period_price_after, e.after_period_days);
 }
 
 function itemRateLabel(it: RentalItem): string {
-  return rateLabel(it.daily_rate_snapshot, it.period_days_snapshot, it.period_price_snapshot, it.period_price_after_snapshot);
+  return rateLabel(
+    it.daily_rate_snapshot,
+    it.period_days_snapshot,
+    it.period_price_snapshot,
+    it.period_price_after_snapshot,
+    it.after_period_days_snapshot
+  );
 }
 
 /* ============================================================
@@ -149,6 +159,13 @@ function itemCostForDays(it: RentalItem, days: number): number {
   if (!periodDays || !periodPrice) return dailyRate * days;
   if (days <= periodDays) return dailyRate * days;
   const extraDays = days - periodDays;
+  const afterUnit = it.after_period_days_snapshot;
+  // Блочная надбавка (двадцатый проход) — см. financeCalc.ts:itemCostForDays,
+  // та же формула, продублированная здесь по тому же принципу, что и раньше.
+  if (afterUnit) {
+    const blocks = Math.ceil(extraDays / afterUnit);
+    return periodPrice + blocks * (periodPriceAfter || 0);
+  }
   const perDayAfter = (periodPriceAfter || 0) / periodDays;
   return periodPrice + extraDays * perDayAfter;
 }

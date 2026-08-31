@@ -177,25 +177,33 @@ export function overlapDays(aStart: string, aEnd: string, bStart: string, bEnd: 
 
 /** Стоимость ОДНОЙ позиции аренды за N дней с учётом ступенчатого тарифа
  * (если задан period_days_snapshot/period_price_snapshot) — первые
- * period_days_snapshot дней стоят period_price_snapshot, каждый день СВЕРХ
- * этого — per_day_after = period_price_after_snapshot / period_days_snapshot
- * (без округления до целых периодов). Формула приведена в соответствие с
+ * period_days_snapshot дней стоят period_price_snapshot, каждый ПОЛНЫЙ ИЛИ
+ * НАЧАТЫЙ шаг длиной after_period_days_snapshot дней СВЕРХ этого стоит
+ * period_price_after_snapshot целиком (двадцатый проход, п.4 обзора —
+ * "190₽ за любую часть недели сверху"; раньше здесь была плавная линейная
+ * надбавка — period_price_after, размазанная по дням делением на
+ * period_days, без своей длины шага). Формула приведена в соответствие с
  * app/services/pricing.py:item_cost_for_days (backend, источник истины для
- * реального биллинга) и с локальной копией в RentalsTab.tsx — 16-й проход,
- * обзор по скриншотам, п.2: раньше здесь (и в идентичной копии в
- * CalendarTab.tsx) была ДРУГАЯ формула — "каждый следующий ПОЛНЫЙ период по
- * period_price_after, остаток пропорционально" — что давало иное число, чем
- * реально спишет backend при возврате, стоило по-крупному разойтись на
- * сроках длиннее двух периодов. Расхождение обнаружено при переносе поля
- * "Цена за период далее" на посуточный ввод (см. EquipmentFormModal) —
- * предпросмотр стоимости в форме добавления оборудования использует именно
- * эту функцию. */
+ * реального биллинга) и с локальными копиями в RentalsTab.tsx/
+ * CalendarTab.tsx — держать все три синхронными при любом изменении формулы
+ * (16-й проход, обзор по скриншотам, п.2, зафиксировал этот принцип после
+ * обнаруженного тогда расхождения). after_period_days_snapshot==null — фолбэк
+ * на старую линейную формулу (см. докстринг item_cost_for_days в
+ * pricing.py) — у всех существующих в БД снимков после миграции
+ * 0011_equipment_ordering_and_tiered_pricing.py это поле заполнено, так что
+ * в реальных данных это по сути мёртвый путь, оставленный только ради
+ * полного соответствия backend-функции. */
 export function itemCostForDays(it: RentalItem, days: number): number {
   if (days <= 0) return 0;
   if (!it.period_days_snapshot || !it.period_price_snapshot) return it.daily_rate_snapshot * days;
   const P = it.period_days_snapshot;
   if (days <= P) return it.daily_rate_snapshot * days;
   const extraDays = days - P;
+  const afterUnit = it.after_period_days_snapshot;
+  if (afterUnit) {
+    const blocks = Math.ceil(extraDays / afterUnit);
+    return it.period_price_snapshot + blocks * (it.period_price_after_snapshot || 0);
+  }
   const perDayAfter = (it.period_price_after_snapshot || 0) / P;
   return it.period_price_snapshot + extraDays * perDayAfter;
 }
