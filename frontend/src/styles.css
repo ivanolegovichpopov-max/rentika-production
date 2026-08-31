@@ -458,7 +458,13 @@ tbody tr[data-clickable="true"]:hover { background: var(--surface-2); }
    выше, но применён к обычной строке <tr>. */
 tr.row-draggable.dragging { opacity: 0.4; }
 tr.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background: var(--accent-soft); }
-.drag-handle-cell { width: 28px; color: var(--muted); cursor: grab; display: flex; align-items: center; justify-content: center; }
+/* padding: 0 — обязателен: базовое правило "tbody td { padding: 12px 16px }"
+   выше по каскаду даёт 32px горизонтального паддинга (border-box), а тут
+   width:28px — контейнер оказывается ýже своего собственного паддинга,
+   flex-элемент (IconGrip, 12×12) сжимается до width:0 и визуально
+   пропадает (ручку перетаскивания было не видно вообще — п.1 обзора,
+   двадцать второй проход, повторная жалоба после фикса подсветки). */
+.drag-handle-cell { width: 28px; padding: 0; color: var(--muted); cursor: grab; display: flex; align-items: center; justify-content: center; }
 .drag-handle-cell:active { cursor: grabbing; }
 .drag-handle-cell.disabled { color: var(--border); cursor: not-allowed; }
 /* z-index:0 замыкает собственный стек внутри ячейки (today-обводка, подсветка выбора)
