@@ -445,6 +445,15 @@ export function CreateRentalModal({
           placeholder="Выберите клиента"
           options={clients.map((c) => ({ value: c.id, label: c.name + (c.phone ? ` · ${c.phone}` : "") }))}
         />
+        {/* 26-й проход, проф. обзор: раньше рейтинг "чёрный список" нигде не
+            всплывал в момент, когда это важнее всего — при оформлении НОВОЙ
+            аренды. Не блокирует (решение по-прежнему за сотрудником — клиент
+            мог уже всё вернуть/загладить), но предупреждает явно. */}
+        {selectedClient?.rating === "blacklist" && (
+          <div className="form-error" style={{ marginTop: "6px" }}>
+            Клиент в чёрном списке{selectedClient.blacklist_reason ? `: ${selectedClient.blacklist_reason}` : ""}
+          </div>
+        )}
       </div>
       <div className="field-row">
         <div className="field">

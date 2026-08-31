@@ -9,7 +9,7 @@ import enum
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -208,7 +208,50 @@ class Client(Base):
     # из команды видел, ПОЧЕМУ клиент проблемный, а не только сам факт.
     # Очищается фронтом при снятии статуса "чёрный список" (см. ClientsTab.tsx).
     blacklist_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # ---- 26-й проход (обзор вкладки «Клиенты» — проф. взгляд + «глазами
+    # обычного пользователя», согласовано целиком) ----
+    # День рождения — только дата, без времени: используется на фронте для
+    # фильтра "Дни рождения на этой неделе" (тот же принцип, что и
+    # isDormantClient в ClientsTab.tsx — считается из уже загруженного
+    # списка, отдельный эндпоинт не нужен).
+    birthday: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    # Доп. контакты клиента-организации ([{name, role, phone}, ...]) —
+    # JSON-список, целиком перезаписывается при сохранении формы, в отличие
+    # от client_notes у него нет своего времени/автора на запись (см.
+    # комментарий в alembic/versions/0013_client_extras.py).
+    additional_contacts: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ClientDocument(Base):
+    """Прикреплённый скан/фото документа клиента (паспорт, доверенность и
+    т.п.) — 26-й проход. Хранится как base64 в текстовой колонке: в проекте
+    нет настроенного объектного хранилища (S3/аналоги), а для объёма файлов,
+    разумного для скана документа (лимит проверяется в
+    app/api/routes/clients.py), Postgres/SQLite TEXT достаточно — заводить
+    внешнее хранилище было бы непропорционально задаче. Append-only с точки
+    зрения содержимого (файл не редактируется, только удаляется целиком),
+    тем же духом, что и ClientNote."""
+
+    __tablename__ = "client_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    employee_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    data_base64: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now()
+    )
 
 
 class ClientNote(Base):

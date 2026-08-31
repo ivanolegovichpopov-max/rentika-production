@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "../../api/client";
 import { useData } from "../../context/DataContext";
-import type { Client, ClientImportResult, ClientNote, Rental } from "../../api/types";
+import type { Client, ClientContact, ClientDocument, ClientImportResult, ClientNote, Equipment, Rental } from "../../api/types";
 import { RATING_META, RENTAL_META, Badge, rentalDisplayStatus } from "../../lib/statusMeta";
-import { money, fmtDate, colorFromId, initials } from "../../lib/format";
-import { IconClose, IconEdit, IconTrash, IconPhone, IconSend } from "../../lib/icons";
+import { money, fmtDate, colorFromId, initials, formatPhoneInput } from "../../lib/format";
+import { IconClose, IconEdit, IconTrash, IconPhone, IconSend, IconMail, IconFile, IconGift } from "../../lib/icons";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
@@ -31,6 +31,10 @@ interface ClientFormState {
   inn: string;
   defaultDiscountPercent: string; // строкой, как остальные числовые поля форм в проекте (см. daily_rate у оборудования)
   tags: string;
+  // ---- 26-й проход (проф. взгляд + «глазами обычного пользователя»,
+  // согласовано целиком) ----
+  birthday: string; // "YYYY-MM-DD" или ""
+  additionalContacts: ClientContact[];
 }
 
 const EMPTY_CLIENT_FORM: ClientFormState = {
@@ -44,6 +48,8 @@ const EMPTY_CLIENT_FORM: ClientFormState = {
   inn: "",
   defaultDiscountPercent: "",
   tags: "",
+  birthday: "",
+  additionalContacts: [],
 };
 
 function formFromClient(c: Client): ClientFormState {
@@ -58,6 +64,8 @@ function formFromClient(c: Client): ClientFormState {
     inn: c.inn ?? "",
     defaultDiscountPercent: c.default_discount_percent != null ? String(c.default_discount_percent) : "",
     tags: c.tags ?? "",
+    birthday: c.birthday ?? "",
+    additionalContacts: c.additional_contacts ?? [],
   };
 }
 
@@ -76,6 +84,16 @@ function clientFormToPayload(f: ClientFormState) {
     inn: f.clientType === "company" ? f.inn.trim() || null : null,
     default_discount_percent: f.defaultDiscountPercent.trim() === "" ? null : Number(f.defaultDiscountPercent),
     tags: f.tags.trim() || null,
+    birthday: f.birthday.trim() === "" ? null : f.birthday,
+    // Доп. контакты сохраняются только для организации, тем же принципом,
+    // что и contact_person/inn выше — и пустые строки внутри каждой записи
+    // приводятся к null, чтобы не плодить в базе "почти пустые" объекты.
+    additional_contacts:
+      f.clientType === "company" && f.additionalContacts.length > 0
+        ? f.additionalContacts
+            .map((c) => ({ name: c.name.trim(), role: (c.role ?? "").trim() || null, phone: (c.phone ?? "").trim() || null }))
+            .filter((c) => c.name !== "")
+        : null,
   };
 }
 
@@ -212,32 +230,116 @@ function ClientFormModal({
           <div className="field-row">
             <div className="field">
               <label>Телефон</label>
-              <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+7 900 000-00-00" />
+              <input
+                value={form.phone}
+                // Маска ввода (26-й проход) — форматирует по мере набора, см.
+                // formatPhoneInput в lib/format.ts. Не мешает вставке готового
+                // номера целиком — маска применяется к результату в любом случае.
+                onChange={(e) => setForm({ ...form, phone: formatPhoneInput(e.target.value) })}
+                placeholder="+7 900 000-00-00"
+              />
             </div>
             <div className="field">
               <label>Email</label>
               <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
             </div>
           </div>
-          <div className="field">
-            <label>{form.clientType === "company" ? "Документ / реквизиты" : "Документ (паспорт)"}</label>
-            <input value={form.doc} onChange={(e) => setForm({ ...form, doc: e.target.value })} />
+          <div className="field-row">
+            <div className="field">
+              <label>{form.clientType === "company" ? "Документ / реквизиты" : "Документ (паспорт)"}</label>
+              <input value={form.doc} onChange={(e) => setForm({ ...form, doc: e.target.value })} />
+            </div>
+            <div className="field">
+              {/* День рождения (26-й проход, «глазами обычного пользователя»)
+                  — используется фильтром "Дни рождения на этой неделе" в
+                  таблице клиентов, повод напомнить о себе скидкой. */}
+              <label>День рождения (необязательно)</label>
+              <input type="date" value={form.birthday} onChange={(e) => setForm({ ...form, birthday: e.target.value })} />
+            </div>
           </div>
           {form.clientType === "company" && (
-            <div className="field-row">
-              <div className="field">
-                <label>Контактное лицо</label>
-                <input
-                  value={form.contactPerson}
-                  onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
-                  placeholder="Кто по факту забирает/сдаёт технику"
-                />
+            <>
+              <div className="field-row">
+                <div className="field">
+                  <label>Контактное лицо</label>
+                  <input
+                    value={form.contactPerson}
+                    onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
+                    placeholder="Кто по факту забирает/сдаёт технику"
+                  />
+                </div>
+                <div className="field">
+                  <label>ИНН</label>
+                  <input value={form.inn} onChange={(e) => setForm({ ...form, inn: e.target.value })} />
+                </div>
               </div>
+              {/* Доп. контакты организации (26-й проход, проф. обзор, п.5) —
+                  у реальных компаний-арендаторов часто несколько живых
+                  контактов (снабженец, бухгалтерия, водитель), одного поля
+                  "Контактное лицо" не хватает. Простой репитер строк, тем же
+                  идиомом "добавить/убрать строку", что уже есть в проекте у
+                  ступенчатого тарифа оборудования. */}
               <div className="field">
-                <label>ИНН</label>
-                <input value={form.inn} onChange={(e) => setForm({ ...form, inn: e.target.value })} />
+                <label>Другие контакты (необязательно)</label>
+                {form.additionalContacts.map((contact, idx) => (
+                  // .field-row по умолчанию — CSS-грид ровно на 2 колонки (см.
+                  // styles.css), для 4 полей в ряд (имя/роль/телефон/удалить)
+                  // нужен модификатор .field-row-4 — тем же паттерном, что и
+                  // ступенчатый тариф оборудования (EquipmentFormModal.tsx).
+                  // Без него третье и четвёртое поле молча переносились на
+                  // новую строку — поймано на скриншот-проверке перед сдачей.
+                  <div key={idx} className="field-row field-row-4" style={{ marginBottom: "6px", alignItems: "flex-start" }}>
+                    <input
+                      style={{ flex: 2 }}
+                      value={contact.name}
+                      placeholder="Имя"
+                      onChange={(e) => {
+                        const next = form.additionalContacts.slice();
+                        next[idx] = { ...next[idx], name: e.target.value };
+                        setForm({ ...form, additionalContacts: next });
+                      }}
+                    />
+                    <input
+                      style={{ flex: 2 }}
+                      value={contact.role ?? ""}
+                      placeholder="Роль (снабжение, бухгалтерия…)"
+                      onChange={(e) => {
+                        const next = form.additionalContacts.slice();
+                        next[idx] = { ...next[idx], role: e.target.value };
+                        setForm({ ...form, additionalContacts: next });
+                      }}
+                    />
+                    <input
+                      style={{ flex: 2 }}
+                      value={contact.phone ?? ""}
+                      placeholder="Телефон"
+                      onChange={(e) => {
+                        const next = form.additionalContacts.slice();
+                        next[idx] = { ...next[idx], phone: formatPhoneInput(e.target.value) };
+                        setForm({ ...form, additionalContacts: next });
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="Убрать контакт"
+                      onClick={() => setForm({ ...form, additionalContacts: form.additionalContacts.filter((_, i) => i !== idx) })}
+                    >
+                      <IconClose />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() =>
+                    setForm({ ...form, additionalContacts: [...form.additionalContacts, { name: "", role: null, phone: null }] })
+                  }
+                >
+                  + Добавить контакт
+                </button>
               </div>
-            </div>
+            </>
           )}
           <div className="field-row">
             <div className="field">
@@ -307,6 +409,10 @@ const CLIENT_SORT_COLUMNS: { key: string; label: string }[] = [
   { key: "rating", label: "Рейтинг" },
   { key: "rentals", label: "Аренды" },
   { key: "lastRental", label: "Последняя аренда" },
+  // 26-й проход, проф. обзор, п.1: раньше "кто мои самые ценные клиенты"
+  // можно было узнать только через CSV-экспорт (там выручка уже считалась,
+  // exportClientsCsv ниже) — в самой таблице отсортировать было нельзя.
+  { key: "revenue", label: "Выручка" },
 ];
 
 // Приоритет при сортировке по рейтингу — проблемные клиенты первые, тем же
@@ -345,14 +451,90 @@ function isDormantClient(clientId: string, rentals: Rental[]): boolean {
   return daysSince >= DORMANT_DAYS_THRESHOLD;
 }
 
+/** День рождения клиента приходится на ближайшие 7 дней (включая сегодня) —
+ * 26-й проход, «глазами обычного пользователя»: повод напомнить о себе
+ * скидкой/поздравлением. Сравнение по месяцу/дню, год рождения не важен
+ * (Client.birthday хранит полную дату только потому, что так проще всего
+ * ввести — см. app/models/inventory.py). Оборачивает год (например, у
+ * клиента ДР 2 января, а сегодня 29 декабря) — проверяется явно, а не через
+ * вычитание миллисекунд, которое эту границу года не учло бы. */
+function isBirthdayThisWeek(birthday: string | null): boolean {
+  if (!birthday) return false;
+  const [, mStr, dStr] = birthday.split("-");
+  const bMonth = Number(mStr) - 1;
+  const bDay = Number(dStr);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() + i);
+    if (d.getMonth() === bMonth && d.getDate() === bDay) return true;
+  }
+  return false;
+}
+
+/** "Неполный профиль" — нет ни телефона, ни документа (26-й проход, проф.
+ * обзор, п.6): для арендного бизнеса это риск — отдать технику клиенту, с
+ * которым потом не связаться и предъявить нечего. Пока указано хотя бы
+ * что-то одно, профиль неполным не считается — это мягкая подсказка "стоит
+ * дозаполнить", а не жёсткий запрет создавать таких клиентов. */
+function isIncompleteProfile(c: Client): boolean {
+  return !c.phone && !c.doc;
+}
+
+/** Выручка клиента за всё время — только по ЗАВЕРШЁННЫМ (returned) арендам,
+ * тот же расчёт, что и lifetimeRevenue в ClientDetailPanel и exportClientsCsv
+ * ниже (26-й проход: вынесено в отдельную функцию, чтобы использовать ещё и
+ * для сортировки колонки "Выручка", и для вычисления уровня клиента — см.
+ * computeClientValueTiers). */
+function clientLifetimeRevenue(clientId: string, rentals: Rental[]): number {
+  return rentals
+    .filter((r) => r.client_id === clientId && r.status === "returned")
+    .reduce((s, r) => s + r.total, 0);
+}
+
 function clientSortValue(c: Client, key: string, rentals: Rental[]): string | number {
   if (key === "name") return c.name.toLowerCase();
   if (key === "doc") return (c.doc ?? "").toLowerCase();
   if (key === "rating") return CLIENT_RATING_PRIORITY[c.rating] ?? 99;
   if (key === "rentals") return rentals.filter((r) => r.client_id === c.id).length;
   if (key === "lastRental") return lastRentalDate(c.id, rentals);
+  if (key === "revenue") return clientLifetimeRevenue(c.id, rentals);
   return 0;
 }
+
+/** Уровень "ценности" клиента по выручке за всё время — отдельная ось от
+ * рейтинга надёжности (тот про проблемность, этот про то, сколько клиент
+ * реально принёс денег). 26-й проход, «глазами обычного пользователя»:
+ * вместо произвольных фиксированных порогов в рублях (которые не подошли бы
+ * ни маленькому, ни крупному бизнесу без ручной настройки) — перцентиль
+ * СРЕДИ клиентов ЭТОГО бизнеса: топ-10% по выручке — "top", следующие до
+ * ~35% — "active". Считается по ВСЕМ клиентам бизнеса, не по отфильтрованному
+ * списку — иначе бейдж прыгал бы при смене фильтра. При малом числе платящих
+ * клиентов (< MIN_CLIENTS_FOR_TIERS) бейджи не показываются вовсе — на
+ * выборке в 2-3 клиента "топ-10%" не несёт смысла, только шумит. */
+const MIN_CLIENTS_FOR_TIERS = 5;
+
+function computeClientValueTiers(clients: Client[], rentals: Rental[]): Map<string, "top" | "active"> {
+  const withRevenue = clients
+    .map((c) => ({ id: c.id, revenue: clientLifetimeRevenue(c.id, rentals) }))
+    .filter((r) => r.revenue > 0)
+    .sort((a, b) => b.revenue - a.revenue);
+  const tiers = new Map<string, "top" | "active">();
+  if (withRevenue.length < MIN_CLIENTS_FOR_TIERS) return tiers;
+  const topCount = Math.max(1, Math.round(withRevenue.length * 0.1));
+  const activeCount = Math.max(topCount, Math.round(withRevenue.length * 0.35));
+  withRevenue.forEach((r, idx) => {
+    if (idx < topCount) tiers.set(r.id, "top");
+    else if (idx < activeCount) tiers.set(r.id, "active");
+  });
+  return tiers;
+}
+
+const VALUE_TIER_META: Record<"top" | "active", { label: string; tone: "accent" | "info" }> = {
+  top: { label: "Топ клиент", tone: "accent" },
+  active: { label: "Активный клиент", tone: "info" },
+};
 
 function sortClientList(list: Client[], sort: ClientSort, rentals: Rental[]): Client[] {
   if (!sort.key) return list;
@@ -422,7 +604,7 @@ function exportClientsCsv(list: Client[], rentals: Rental[]) {
   const rows = list.map((c) => {
     const clientRentals = rentals.filter((r) => r.client_id === c.id);
     const overdueNow = clientRentals.filter((r) => rentalDisplayStatus(r) === "overdue").length;
-    const lifetimeRevenue = clientRentals.filter((r) => r.status === "returned").reduce((s, r) => s + r.total, 0);
+    const lifetimeRevenue = clientLifetimeRevenue(c.id, rentals);
     return [
       c.name,
       c.phone ?? "",
@@ -835,14 +1017,26 @@ export function ClientsTab({
   const [ratingFilter, setRatingFilter] = useState("all");
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [dormantOnly, setDormantOnly] = useState(false);
+  // 26-й проход, «глазами обычного пользователя», п.4: фильтр по дням
+  // рождения на этой неделе — тем же принципом, что и dormantOnly выше.
+  const [birthdayOnly, setBirthdayOnly] = useState(false);
   const [modalMode, setModalMode] = useState<"add" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [openClientId, setOpenClientId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkRating, setBulkRating] = useState("");
+  // Массовое добавление тега (26-й проход, проф. обзор, п.7) — отдельное
+  // текстовое поле от bulkRating выше, оба массовых действия применяются
+  // независимо друг от друга к одному и тому же выделению.
+  const [bulkTag, setBulkTag] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  // "Недавно просмотренные" (26-й проход, «глазами обычного пользователя»,
+  // п.7) — id последних открытых карточек, per-бизнес, тем же persisted-
+  // механизмом, что и sort выше. Храним максимум RECENT_CLIENTS_LIMIT штук,
+  // самые новые в начале.
+  const [recentIds, setRecentIds] = usePersistedState<string[]>(`client-recent:${businessId}`, []);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const { confirm: confirmBulk, dialog: bulkConfirmDialog } = useConfirm();
   const { confirm: confirmDuplicate, dialog: duplicateDialog } = useConfirm();
@@ -881,13 +1075,20 @@ export function ClientsTab({
     if (f.id === "all") continue;
     ratingCounts[f.id] = bySearch.filter((c) => c.rating === f.id).length;
   }
+  // Уровень ценности считается по ВСЕМ клиентам бизнеса (не по bySearch/
+  // byRating) — см. комментарий у computeClientValueTiers: иначе бейдж
+  // "прыгал" бы при смене поиска/фильтра.
+  const valueTiers = computeClientValueTiers(clients, rentals);
   const byRating = bySearch.filter((c) => ratingFilter === "all" || c.rating === ratingFilter);
   const overdueNowCount = byRating.filter((c) => clientHasOverdueNow(c.id, rentals)).length;
   const dormantCount = byRating.filter((c) => isDormantClient(c.id, rentals)).length;
+  const birthdayCount = byRating.filter((c) => isBirthdayThisWeek(c.birthday)).length;
   const withFilters = byRating
     .filter((c) => !overdueOnly || clientHasOverdueNow(c.id, rentals))
-    .filter((c) => !dormantOnly || isDormantClient(c.id, rentals));
+    .filter((c) => !dormantOnly || isDormantClient(c.id, rentals))
+    .filter((c) => !birthdayOnly || isBirthdayThisWeek(c.birthday));
   const list = sortClientList(withFilters, sort, rentals);
+  const recentClients = recentIds.map((id) => clients.find((c) => c.id === id)).filter((c): c is Client => !!c);
 
   // Сброс выделения при смене фильтров/поиска — тот же принцип, что и в
   // EquipmentTab.tsx: иначе массовое действие могло бы применяться к
@@ -895,7 +1096,13 @@ export function ClientsTab({
   useEffect(() => {
     setSelectedIds(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ratingFilter, overdueOnly, dormantOnly, search]);
+  }, [ratingFilter, overdueOnly, dormantOnly, birthdayOnly, search]);
+
+  const RECENT_CLIENTS_LIMIT = 8;
+  function openClient(id: string) {
+    setOpenClientId(id);
+    setRecentIds((prev) => [id, ...prev.filter((x) => x !== id)].slice(0, RECENT_CLIENTS_LIMIT));
+  }
 
   function toggleSort(key: string) {
     setSort((prev) => {
@@ -1017,6 +1224,47 @@ export function ClientsTab({
     }
   }
 
+  /** Массовое добавление тега (26-й проход, проф. обзор, п.7) — тег
+   * ДОБАВЛЯЕТСЯ к уже имеющимся у каждого клиента, а не заменяет их (в
+   * отличие от bulkRating выше, где "заменить" — единственный разумный
+   * смысл для одиночного значения; у тегов, в отличие от рейтинга, у
+   * клиента их обычно уже несколько, и массовое действие явно про
+   * "добавить ещё один", а не "оставить только этот"). Дубли не создаются —
+   * если тег уже есть у клиента, пропускается без отдельного запроса. */
+  async function handleBulkTag() {
+    const tag = bulkTag.trim();
+    if (!tag || selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const ids = [...selectedIds];
+      const targets = ids
+        .map((id) => clients.find((c) => c.id === id))
+        .filter((c): c is Client => !!c)
+        .filter((c) => !(c.tags ?? "").split(",").map((t) => t.trim()).includes(tag));
+      const results = await Promise.allSettled(
+        targets.map((c) => {
+          const nextTags = [...(c.tags ?? "").split(",").map((t) => t.trim()).filter(Boolean), tag].join(",");
+          return api.patch(`/businesses/${businessId}/clients/${c.id}`, { tags: nextTags });
+        })
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      await reloadClients();
+      setBulkTag("");
+      setSelectedIds(new Set());
+      const skipped = ids.length - targets.length;
+      if (failed > 0 || skipped > 0) {
+        notify(
+          `Тег добавлен у ${targets.length - failed} из ${ids.length}.` +
+            (skipped > 0 ? ` Уже был у ${skipped}.` : "") +
+            (failed > 0 ? ` Ошибок: ${failed}.` : ""),
+          "info"
+        );
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   /** Массовое удаление — клиенты с ЛЮБОЙ историей аренд (открытой или
    * закрытой) пропускаются без попытки удаления, тот же принцип, что и
    * handleBulkDelete в EquipmentTab.tsx. Раньше здесь проверялась только
@@ -1092,6 +1340,14 @@ export function ClientsTab({
           >
             Не арендовали {DORMANT_DAYS_THRESHOLD}+ дней ({dormantCount})
           </button>
+          <button
+            type="button"
+            className={"btn" + (birthdayOnly ? " btn-primary" : "")}
+            onClick={() => setBirthdayOnly((v) => !v)}
+            title="Клиенты, у которых день рождения в ближайшие 7 дней — повод поздравить/предложить скидку"
+          >
+            <IconGift width={14} height={14} /> Дни рождения ({birthdayCount})
+          </button>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
           <button className="btn" onClick={() => setShowImport(true)}>
@@ -1105,6 +1361,26 @@ export function ClientsTab({
           </button>
         </div>
       </div>
+
+      {/* "Недавно просмотренные" (26-й проход, «глазами обычного
+          пользователя», п.7) — быстрый доступ к последним открытым
+          карточкам, для сотрудника, который весь день переключается между
+          несколькими постоянными клиентами. Не показывается, пока ничего ещё
+          не открывали, и не зависит от текущего поиска/фильтра — это ярлыки,
+          а не ещё один список. */}
+      {recentClients.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginBottom: "10px" }}>
+          <span style={{ color: "var(--muted)", fontSize: "12.5px" }}>Недавние:</span>
+          {recentClients.map((c) => (
+            <button key={c.id} type="button" className="btn btn-sm" onClick={() => openClient(c.id)}>
+              <span className="avatar" style={{ background: colorFromId(c.id), width: 18, height: 18, fontSize: "9px", marginRight: "6px" }}>
+                {initials(c.name)}
+              </span>
+              {c.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       {selectedIds.size > 0 && (
         <div className="panel" style={{ marginBottom: "10px" }}>
@@ -1124,6 +1400,19 @@ export function ClientsTab({
             />
             <button className="btn btn-sm" disabled={!bulkRating || bulkBusy} onClick={() => void handleBulkRating()}>
               Применить
+            </button>
+            {/* Массовое добавление тега (26-й проход) — отдельное поле от
+                смены рейтинга выше, оба действия независимы. */}
+            <input
+              className="table-input"
+              style={{ maxWidth: "160px" }}
+              value={bulkTag}
+              onChange={(e) => setBulkTag(e.target.value)}
+              placeholder="Добавить тег…"
+              disabled={bulkBusy}
+            />
+            <button className="btn btn-sm" disabled={!bulkTag.trim() || bulkBusy} onClick={() => void handleBulkTag()}>
+              Добавить тег
             </button>
             <button className="btn btn-sm btn-danger-ghost" disabled={bulkBusy} onClick={() => void handleBulkDelete()}>
               Удалить выбранные
@@ -1180,7 +1469,7 @@ export function ClientsTab({
                 const tagList = (c.tags ?? "").split(",").map((t) => t.trim()).filter(Boolean);
                 const waDigits = normalizePhoneDigits(c.phone);
                 return (
-                  <tr key={c.id} data-clickable="true" onClick={() => setOpenClientId(c.id)}>
+                  <tr key={c.id} data-clickable="true" onClick={() => openClient(c.id)}>
                     <td onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" checked={selectedIds.has(c.id)} onChange={() => toggleSelected(c.id)} />
                     </td>
@@ -1198,26 +1487,56 @@ export function ClientsTab({
                                 Орг.
                               </span>
                             )}
+                            {/* Уровень ценности клиента по выручке (26-й проход) —
+                                отдельная ось от рейтинга надёжности слева в
+                                своей колонке, поэтому здесь, у имени. */}
+                            {valueTiers.has(c.id) && (
+                              <span style={{ marginLeft: "6px", display: "inline-block" }}>
+                                <Badge meta={VALUE_TIER_META[valueTiers.get(c.id)!]} />
+                              </span>
+                            )}
+                            {isBirthdayThisWeek(c.birthday) && (
+                              <span title="День рождения на этой неделе" style={{ marginLeft: "6px", display: "inline-flex", verticalAlign: "middle" }}>
+                                <IconGift width={14} height={14} />
+                              </span>
+                            )}
+                            {/* "Неполный профиль" (26-й проход, проф. обзор, п.6) —
+                                нет ни телефона, ни документа: риск отдать технику
+                                клиенту, с которым потом не связаться. */}
+                            {isIncompleteProfile(c) && (
+                              <span style={{ marginLeft: "6px", display: "inline-block" }}>
+                                <Badge meta={{ label: "Неполный профиль", tone: "warning" }} />
+                              </span>
+                            )}
                           </div>
                           <div className="cell-sub" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                             <span>{c.phone ?? "—"}</span>
-                            {c.phone && (
+                            {(c.phone || c.email) && (
                               <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex", gap: "4px" }}>
-                                {/* Быстрый звонок/WhatsApp прямо из строки таблицы
-                                    (25-й проход, п.10 обзора) — без открытия
+                                {/* Быстрый звонок/WhatsApp/почта прямо из строки
+                                    таблицы (25-й/26-й проход) — без открытия
                                     карточки клиента. */}
-                                <a className="icon-btn" href={`tel:${c.phone}`} title="Позвонить">
-                                  <IconPhone />
-                                </a>
-                                <a
-                                  className="icon-btn"
-                                  href={`https://wa.me/${waDigits}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  title="Написать в WhatsApp"
-                                >
-                                  <IconSend />
-                                </a>
+                                {c.phone && (
+                                  <a className="icon-btn" href={`tel:${c.phone}`} title="Позвонить">
+                                    <IconPhone />
+                                  </a>
+                                )}
+                                {c.phone && (
+                                  <a
+                                    className="icon-btn"
+                                    href={`https://wa.me/${waDigits}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title="Написать в WhatsApp"
+                                  >
+                                    <IconSend />
+                                  </a>
+                                )}
+                                {c.email && (
+                                  <a className="icon-btn" href={`mailto:${c.email}`} title="Написать на почту">
+                                    <IconMail />
+                                  </a>
+                                )}
                               </span>
                             )}
                           </div>
@@ -1334,6 +1653,9 @@ export function ClientDetailPanel({
   const { clients, rentals, equipment, reloadClients, reloadRentals } = useData();
   const client = clients.find((c) => c.id === clientId);
   const { notify } = useToast();
+  // См. комментарий у computeClientValueTiers в ClientsTab выше — считается
+  // по всем клиентам бизнеса, не зависит от того, как открыта эта карточка.
+  const valueTier = computeClientValueTiers(clients, rentals).get(clientId);
   // Смена рейтинга на "чёрный список" — по весу последствий сопоставима с
   // удалением (это сигнал всей команде "не работать с этим клиентом"), но
   // раньше применялась одним кликом без подтверждения (24-й проход, п.6
@@ -1346,6 +1668,13 @@ export function ClientDetailPanel({
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [docModal, setDocModal] = useState<{ title: string; node: ReactNode } | null>(null);
   const [showMerge, setShowMerge] = useState(false);
+  // 26-й проход: карточка разрослась (журнал, документы, доп. контакты,
+  // график активности…) настолько, что один длинный скролл стал неудобен
+  // для клиентов с большой историей/журналом — разбито на вкладки, тем же
+  // простым idiom "кнопка + активное состояние", что и сегментированные
+  // переключатели в остальном проекте (RATING_FILTERS и т.п.), без
+  // отдельной библиотеки вкладок.
+  const [panelTab, setPanelTab] = useState<"overview" | "history" | "journal">("overview");
 
   if (!client) return null;
 
@@ -1400,6 +1729,11 @@ export function ClientDetailPanel({
   }
 
   const tagList = (client.tags ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+  const additionalContacts = client.additional_contacts ?? [];
+  const incompleteProfile = isIncompleteProfile(client);
+  // Для кнопок "Отправить сводку" ниже (26-й проход) — берём открытую
+  // аренду, если есть, иначе последнюю завершённую (см. pickSummaryRental).
+  const summaryRental = pickSummaryRental(history);
 
   return (
     <div className="slideover">
@@ -1418,6 +1752,11 @@ export function ClientDetailPanel({
               )}
             </h3>
             <div style={{ color: "var(--muted)", fontSize: "12.5px", marginTop: "2px" }}>{client.phone ?? "—"}</div>
+            {valueTier && (
+              <div style={{ marginTop: "4px" }}>
+                <Badge meta={VALUE_TIER_META[valueTier]} />
+              </div>
+            )}
           </div>
         </div>
         <button className="icon-btn" onClick={onClose}>
@@ -1425,138 +1764,237 @@ export function ClientDetailPanel({
         </button>
       </div>
 
-      {client.phone && (
-        <div className="slideover-section" style={{ display: "flex", gap: "8px" }}>
-          <a className="btn btn-sm" href={`tel:${client.phone}`}>
-            <IconPhone /> Позвонить
-          </a>
-          <a className="btn btn-sm" href={`https://wa.me/${normalizePhoneDigits(client.phone)}`} target="_blank" rel="noreferrer">
-            <IconSend /> WhatsApp
-          </a>
+      {incompleteProfile && (
+        <div className="slideover-section">
+          <div className="form-error">
+            Неполный профиль: не указан ни телефон, ни документ — стоит дозаполнить перед выдачей техники.
+          </div>
         </div>
       )}
 
-      <div className="slideover-section">
-        <h4>Надёжность</h4>
-        <div style={{ marginBottom: "10px" }}>
-          <Badge meta={RATING_META[client.rating]} />
+      {(client.phone || client.email) && (
+        <div className="slideover-section" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          {client.phone && (
+            <a className="btn btn-sm" href={`tel:${client.phone}`}>
+              <IconPhone /> Позвонить
+            </a>
+          )}
+          {client.phone && (
+            <a className="btn btn-sm" href={`https://wa.me/${normalizePhoneDigits(client.phone)}`} target="_blank" rel="noreferrer">
+              <IconSend /> WhatsApp
+            </a>
+          )}
+          {client.email && (
+            <a className="btn btn-sm" href={`mailto:${client.email}`}>
+              <IconMail /> Почта
+            </a>
+          )}
         </div>
-        {client.rating === "blacklist" && client.blacklist_reason && (
-          <div className="field-hint" style={{ marginBottom: "10px" }}>
-            Причина: {client.blacklist_reason}
+      )}
+
+      {/* Отправить клиенту сводку по аренде (26-й проход, «глазами обычного
+          пользователя», п.5) — ТОЛЬКО текстом: ни wa.me, ни mailto: не умеют
+          вкладывать файл, это ограничение самих протоколов, не проекта.
+          Договор целиком по-прежнему открывается по клику на строку истории
+          (см. ниже) — это просто быстрый способ переслать клиенту суть.  */}
+      {summaryRental && (client.phone || client.email) && (
+        <div className="slideover-section">
+          <div className="field-hint" style={{ marginBottom: "8px" }}>
+            Отправить клиенту сводку по аренде (текстом):
           </div>
-        )}
-        <div className="rating-picker">
-          <button
-            className={"btn btn-sm" + (client.rating === "normal" ? " btn-primary" : "")}
-            onClick={() => void setRating("normal")}
-          >
-            Надёжный
-          </button>
-          <button
-            className={"btn btn-sm" + (client.rating === "watch" ? " btn-primary" : "")}
-            onClick={() => void setRating("watch")}
-          >
-            На контроле
-          </button>
-          <button
-            className={"btn btn-sm" + (client.rating === "blacklist" ? " btn-primary" : "")}
-            onClick={() => void setRating("blacklist")}
-          >
-            Чёрный список
-          </button>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            {client.phone && (
+              <a
+                className="btn btn-sm"
+                href={`https://wa.me/${normalizePhoneDigits(client.phone)}?text=${encodeURIComponent(
+                  buildRentalSummaryText(summaryRental, client, equipment)
+                )}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Сводка в WhatsApp
+              </a>
+            )}
+            {client.email && (
+              <a
+                className="btn btn-sm"
+                href={`mailto:${client.email}?subject=${encodeURIComponent("Информация по аренде")}&body=${encodeURIComponent(
+                  buildRentalSummaryText(summaryRental, client, equipment)
+                )}`}
+              >
+                Сводка на почту
+              </a>
+            )}
+          </div>
         </div>
+      )}
+
+      <div className="segmented" style={{ margin: "0 16px 4px" }}>
+        <button type="button" className={panelTab === "overview" ? "active" : ""} onClick={() => setPanelTab("overview")}>
+          Обзор
+        </button>
+        <button type="button" className={panelTab === "history" ? "active" : ""} onClick={() => setPanelTab("history")}>
+          История · {history.length}
+        </button>
+        <button type="button" className={panelTab === "journal" ? "active" : ""} onClick={() => setPanelTab("journal")}>
+          Журнал
+        </button>
       </div>
 
-      <div className="slideover-section">
-        <h4>Показатели</h4>
-        <div className="kv-grid">
-          <span className="k">Выручка за всё время</span>
-          <span className="mono">{money(lifetimeRevenue)}</span>
-          <span className="k">Просрочек за всё время</span>
-          <span className={"mono" + (totalLate > 0 ? " text-critical" : "")}>{totalLate}</span>
-          <span className="k">Депозит на удержании сейчас</span>
-          <span className="mono">{money(depositHeld)}</span>
-          <span className="k">Последняя аренда</span>
-          <span>{lastRentalDate(client.id, rentals) ? fmtDate(lastRentalDate(client.id, rentals)) : "—"}</span>
-        </div>
-      </div>
+      {panelTab === "overview" && (
+        <>
+          <div className="slideover-section">
+            <h4>Надёжность</h4>
+            <div style={{ marginBottom: "10px" }}>
+              <Badge meta={RATING_META[client.rating]} />
+            </div>
+            {client.rating === "blacklist" && client.blacklist_reason && (
+              <div className="field-hint" style={{ marginBottom: "10px" }}>
+                Причина: {client.blacklist_reason}
+              </div>
+            )}
+            <div className="rating-picker">
+              <button
+                className={"btn btn-sm" + (client.rating === "normal" ? " btn-primary" : "")}
+                onClick={() => void setRating("normal")}
+              >
+                Надёжный
+              </button>
+              <button
+                className={"btn btn-sm" + (client.rating === "watch" ? " btn-primary" : "")}
+                onClick={() => void setRating("watch")}
+              >
+                На контроле
+              </button>
+              <button
+                className={"btn btn-sm" + (client.rating === "blacklist" ? " btn-primary" : "")}
+                onClick={() => void setRating("blacklist")}
+              >
+                Чёрный список
+              </button>
+            </div>
+          </div>
 
-      <div className="slideover-section">
-        <h4>Контакты</h4>
-        <div className="kv-grid">
-          <span className="k">Email</span>
-          <span>{client.email ?? "—"}</span>
-          <span className="k">Документ</span>
-          <span>{client.doc ?? "—"}</span>
-          {client.client_type === "company" && (
+          <div className="slideover-section">
+            <h4>Показатели</h4>
+            <div className="kv-grid">
+              <span className="k">Выручка за всё время</span>
+              <span className="mono">{money(lifetimeRevenue)}</span>
+              <span className="k">Просрочек за всё время</span>
+              <span className={"mono" + (totalLate > 0 ? " text-critical" : "")}>{totalLate}</span>
+              <span className="k">Депозит на удержании сейчас</span>
+              <span className="mono">{money(depositHeld)}</span>
+              <span className="k">Последняя аренда</span>
+              <span>{lastRentalDate(client.id, rentals) ? fmtDate(lastRentalDate(client.id, rentals)) : "—"}</span>
+            </div>
+          </div>
+
+          <MiniActivityChart rentals={history} />
+
+          <div className="slideover-section">
+            <h4>Контакты</h4>
+            <div className="kv-grid">
+              <span className="k">Email</span>
+              <span>{client.email ?? "—"}</span>
+              <span className="k">Документ</span>
+              <span>{client.doc ?? "—"}</span>
+              {client.client_type === "company" && (
+                <>
+                  <span className="k">Контактное лицо</span>
+                  <span>{client.contact_person ?? "—"}</span>
+                  <span className="k">ИНН</span>
+                  <span>{client.inn ?? "—"}</span>
+                </>
+              )}
+              <span className="k">День рождения</span>
+              <span>{client.birthday ? fmtDate(client.birthday) : "—"}</span>
+              <span className="k">Скидка по умолчанию</span>
+              <span>{client.default_discount_percent != null ? `${client.default_discount_percent}%` : "—"}</span>
+              <span className="k">В базе с</span>
+              <span>{fmtDate(client.created_at.slice(0, 10))}</span>
+            </div>
+            {tagList.length > 0 && (
+              <div style={{ marginTop: "10px", display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                {tagList.map((t) => (
+                  <span key={t} className="badge-tag">
+                    {t}
+                  </span>
+                ))}
+              </div>
+            )}
+            {/* Доп. контакты организации (26-й проход) — только чтение здесь,
+                редактируются в форме (ClientFormModal). */}
+            {additionalContacts.length > 0 && (
+              <div style={{ marginTop: "10px" }}>
+                <div className="k" style={{ marginBottom: "4px" }}>
+                  Другие контакты
+                </div>
+                {additionalContacts.map((c, idx) => (
+                  <div key={idx} className="mini-item">
+                    <span>
+                      {c.name}
+                      {c.role ? ` · ${c.role}` : ""}
+                    </span>
+                    {c.phone && (
+                      <a className="icon-btn" href={`tel:${c.phone}`} title="Позвонить">
+                        <IconPhone />
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {client.notes && (
+            <div className="slideover-section">
+              <h4>Заметки</h4>
+              <div style={{ fontSize: "13.5px" }}>{client.notes}</div>
+            </div>
+          )}
+
+          <ClientDocumentsSection businessId={businessId} clientId={clientId} />
+        </>
+      )}
+
+      {panelTab === "history" && (
+        <div className="slideover-section">
+          {history.length === 0 ? (
+            <div className="empty-note">Ещё не сдавалось в аренду</div>
+          ) : (
             <>
-              <span className="k">Контактное лицо</span>
-              <span>{client.contact_person ?? "—"}</span>
-              <span className="k">ИНН</span>
-              <span>{client.inn ?? "—"}</span>
+              {visibleHistory.map((r) => (
+                // Клик открывает договор аренды (24-й проход, п.5 обзора: раньше
+                // история была статичным текстом, ни одна строка никуда не вела).
+                <div
+                  className="mini-item clickable"
+                  key={r.id}
+                  title="Открыть договор аренды"
+                  onClick={() => setDocModal({ title: "Договор аренды", node: buildContractDoc(r, client, equipment) })}
+                >
+                  <span>
+                    {r.items.map((it) => equipment.find((eq) => eq.id === it.equipment_id)?.name ?? "—").join(", ")} ·{" "}
+                    {fmtDate(r.start_date)}—{fmtDate(r.end_date)}
+                  </span>
+                  <Badge meta={RENTAL_META[rentalDisplayStatus(r)]} />
+                </div>
+              ))}
+              {history.length > HISTORY_PAGE && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ marginTop: "8px" }}
+                  onClick={() => setShowAllHistory((v) => !v)}
+                >
+                  {showAllHistory ? "Свернуть" : `Показать ещё ${history.length - HISTORY_PAGE}`}
+                </button>
+              )}
             </>
           )}
-          <span className="k">Скидка по умолчанию</span>
-          <span>{client.default_discount_percent != null ? `${client.default_discount_percent}%` : "—"}</span>
-          <span className="k">В базе с</span>
-          <span>{fmtDate(client.created_at.slice(0, 10))}</span>
-        </div>
-        {tagList.length > 0 && (
-          <div style={{ marginTop: "10px", display: "flex", gap: "4px", flexWrap: "wrap" }}>
-            {tagList.map((t) => (
-              <span key={t} className="badge-tag">
-                {t}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {client.notes && (
-        <div className="slideover-section">
-          <h4>Заметки</h4>
-          <div style={{ fontSize: "13.5px" }}>{client.notes}</div>
         </div>
       )}
 
-      <ClientNotesJournal businessId={businessId} clientId={clientId} />
-
-      <div className="slideover-section">
-        <h4>История аренд · {history.length}</h4>
-        {history.length === 0 ? (
-          <div className="empty-note">Ещё не сдавалось в аренду</div>
-        ) : (
-          <>
-            {visibleHistory.map((r) => (
-              // Клик открывает договор аренды (24-й проход, п.5 обзора: раньше
-              // история была статичным текстом, ни одна строка никуда не вела).
-              <div
-                className="mini-item clickable"
-                key={r.id}
-                title="Открыть договор аренды"
-                onClick={() => setDocModal({ title: "Договор аренды", node: buildContractDoc(r, client, equipment) })}
-              >
-                <span>
-                  {r.items.map((it) => equipment.find((eq) => eq.id === it.equipment_id)?.name ?? "—").join(", ")} ·{" "}
-                  {fmtDate(r.start_date)}—{fmtDate(r.end_date)}
-                </span>
-                <Badge meta={RENTAL_META[rentalDisplayStatus(r)]} />
-              </div>
-            ))}
-            {history.length > HISTORY_PAGE && (
-              <button
-                type="button"
-                className="btn btn-sm"
-                style={{ marginTop: "8px" }}
-                onClick={() => setShowAllHistory((v) => !v)}
-              >
-                {showAllHistory ? "Свернуть" : `Показать ещё ${history.length - HISTORY_PAGE}`}
-              </button>
-            )}
-          </>
-        )}
-      </div>
+      {panelTab === "journal" && <ClientNotesJournal businessId={businessId} clientId={clientId} />}
 
       <div className="slideover-section" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
         {/* "+ Новая аренда" прямо из карточки (25-й проход, п.1 обзора) —
@@ -1884,6 +2322,198 @@ function ClientNotesJournal({ businessId, clientId }: { businessId: string; clie
           </div>
         ))
       )}
+    </div>
+  );
+}
+
+/* ============================================================
+   26-й проход (обзор вкладки «Клиенты» и карточки клиента — проф. взгляд +
+   «глазами обычного пользователя», согласовано целиком: "Согласен со всем,
+   делаем всё") — оставшиеся куски: сводка по аренде для WhatsApp/почты,
+   мини-график активности, вложения-документы клиента.
+   ============================================================ */
+
+/** Аренда для кнопок "Отправить сводку" — открытая (в работе/забронирована),
+ * если есть, иначе последняя завершённая. Открытая аренда важнее показать
+ * клиенту (что и когда вернуть), чем произвольную из прошлого. */
+function pickSummaryRental(history: Rental[]): Rental | null {
+  const open = history.filter((r) => r.status === "active" || r.status === "booked");
+  if (open.length > 0) return open[0]; // history уже отсортирована новые→старые
+  const closed = history.filter((r) => r.status === "returned");
+  return closed[0] ?? null;
+}
+
+/** Текстовая сводка по аренде — для wa.me/mailto (см. комментарий у кнопок
+ * "Отправить сводку" в ClientDetailPanel: ни один из двух протоколов не
+ * умеет вкладывать файл, это не ограничение проекта, а самих ссылок
+ * wa.me/mailto:, поэтому сводка — только текст, не PDF/документ). */
+function buildRentalSummaryText(rental: Rental, client: Client, equipment: Equipment[]): string {
+  const items = rental.items.map((it) => equipment.find((eq) => eq.id === it.equipment_id)?.name ?? "—").join(", ");
+  const statusLabel = RENTAL_META[rentalDisplayStatus(rental)].label;
+  return [
+    `Здравствуйте, ${client.name}!`,
+    `Оборудование: ${items}`,
+    `Период: ${fmtDate(rental.start_date)}—${fmtDate(rental.end_date)}`,
+    `Статус: ${statusLabel}`,
+    `Сумма: ${money(rental.total)}`,
+  ].join("\n");
+}
+
+/** Последние 6 календарных месяцев (включая текущий), от старого к новому —
+ * подпись месяца по-русски в родительном не нужна, короткого именительного
+ * достаточно для оси графика. */
+function lastMonths(n: number): { key: string; label: string }[] {
+  const out: { key: string; label: string }[] = [];
+  const now = new Date();
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    out.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+      label: d.toLocaleDateString("ru", { month: "short" }).replace(".", ""),
+    });
+  }
+  return out;
+}
+
+/** Мини-график активности клиента — сколько аренд НАЧАТО в каждом из
+ * последних 6 месяцев (26-й проход, «глазами обычного пользователя»,
+ * п.4): раньше про динамику клиента (затихает/разгоняется) можно было
+ * судить только по одной цифре "выручка за всё время" и построчной истории.
+ * Простой SVG-бар-чарт без сторонних библиотек — тот же принцип "минимум
+ * зависимостей", что и весь остальной проект (см. Dropdown.tsx и т.п.). */
+function MiniActivityChart({ rentals }: { rentals: Rental[] }) {
+  if (rentals.length === 0) return null;
+  const months = lastMonths(6);
+  const counts = months.map((m) => rentals.filter((r) => r.start_date.startsWith(m.key)).length);
+  const max = Math.max(1, ...counts);
+  const barSlot = 180 / months.length;
+  const barWidth = barSlot - 6;
+  return (
+    <div className="slideover-section">
+      <h4>Активность по месяцам</h4>
+      <svg width="100%" height="60" viewBox="0 0 180 60" preserveAspectRatio="none" style={{ display: "block" }}>
+        {months.map((m, i) => {
+          const x = i * barSlot + 3;
+          const h = (counts[i] / max) * 38;
+          return (
+            <g key={m.key}>
+              <title>{`${m.label}: ${counts[i]}`}</title>
+              <rect x={x} y={44 - h} width={Math.max(barWidth, 1)} height={Math.max(h, 1)} rx="2" fill="var(--accent)" />
+              <text x={x + barWidth / 2} y="56" fontSize="7.5" textAnchor="middle" fill="var(--muted)">
+                {m.label}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// Лимит размера файла документа клиента — держим в синхроне с backend'ом
+// (MAX_CLIENT_DOCUMENT_BYTES в app/api/routes/clients.py): нет смысла
+// заставлять пользователя ждать загрузку и кодирование файла, который
+// backend всё равно отклонит.
+const MAX_CLIENT_DOCUMENT_BYTES = 5 * 1024 * 1024;
+
+/** Прикреплённые сканы/фото документов клиента (26-й проход, проф. обзор,
+ * п.4: "Документ" в карточке — это раньше был только текст, а не сама
+ * фотография паспорта/доверенности). Тот же структурный idiom, что и
+ * ClientNotesJournal выше (загрузка списка по clientId, локальный state,
+ * append/remove на успехе запроса), но с загрузкой файла через
+ * api.postForm — тем же способом, что и CSV-импорт (ClientImportModal). */
+function ClientDocumentsSection({ businessId, clientId }: { businessId: string; clientId: string }) {
+  const [docs, setDocs] = useState<ClientDocument[] | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
+
+  useEffect(() => {
+    let cancelled = false;
+    setDocs(null);
+    api
+      .get<ClientDocument[]>(`/businesses/${businessId}/clients/${clientId}/documents`)
+      .then((res) => {
+        if (!cancelled) setDocs(res);
+      })
+      .catch(() => {
+        if (!cancelled) setDocs([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId, clientId]);
+
+  async function handleFile(file: File | null) {
+    if (!file) return;
+    setError(null);
+    if (file.size > MAX_CLIENT_DOCUMENT_BYTES) {
+      setError("Файл слишком большой (максимум 5 МБ)");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const created = await api.postForm<ClientDocument>(`/businesses/${businessId}/clients/${clientId}/documents`, form);
+      setDocs((prev) => [created, ...(prev ?? [])]);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Не удалось загрузить файл");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function handleDelete(doc: ClientDocument) {
+    if (!(await confirm(`Удалить файл «${doc.filename}»?`, { danger: true }))) return;
+    try {
+      await api.delete(`/businesses/${businessId}/clients/${clientId}/documents/${doc.id}`);
+      setDocs((prev) => (prev ?? []).filter((d) => d.id !== doc.id));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Не удалось удалить файл");
+    }
+  }
+
+  return (
+    <div className="slideover-section">
+      <h4>Документы{docs ? ` · ${docs.length}` : ""}</h4>
+      <div className="field-hint" style={{ marginBottom: "8px" }}>
+        Сканы/фото документов клиента (паспорт, доверенность и т.п.) — до 5 МБ на файл.
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*,application/pdf"
+        onChange={(e) => void handleFile(e.target.files?.[0] ?? null)}
+        disabled={uploading}
+        style={{ marginBottom: "8px" }}
+      />
+      {error && <div className="form-error">{error}</div>}
+      {docs === null ? (
+        <div className="empty-note">Загрузка…</div>
+      ) : docs.length === 0 ? (
+        <div className="empty-note">Файлов пока нет</div>
+      ) : (
+        docs.map((d) => (
+          <div className="mini-item" key={d.id}>
+            <a href={`data:${d.content_type};base64,${d.data_base64}`} target="_blank" rel="noreferrer">
+              <IconFile /> {d.filename}
+            </a>
+            <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ color: "var(--muted)", fontSize: "11.5px", whiteSpace: "nowrap" }}>
+                {fmtDate(d.created_at.slice(0, 10))}
+              </span>
+              <button type="button" className="icon-btn" title="Удалить" onClick={() => void handleDelete(d)}>
+                <IconTrash />
+              </button>
+            </span>
+          </div>
+        ))
+      )}
+      {confirmDialog}
     </div>
   );
 }

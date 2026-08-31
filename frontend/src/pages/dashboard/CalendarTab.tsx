@@ -823,6 +823,18 @@ function QuickBookModal({
                 placeholder="Выберите клиента"
                 options={clients.map((c) => ({ value: c.id, label: c.name + (c.phone ? ` · ${c.phone}` : "") }))}
               />
+              {/* 26-й проход — тот же баннер, что и в CreateRentalModal
+                  (RentalsTab.tsx): предупреждение о чёрном списке должно
+                  всплывать везде, где можно создать новую аренду, а не
+                  только в одном из двух мест. */}
+              {clients.find((c) => c.id === clientId)?.rating === "blacklist" && (
+                <div className="form-error" style={{ marginTop: "6px" }}>
+                  Клиент в чёрном списке
+                  {clients.find((c) => c.id === clientId)?.blacklist_reason
+                    ? `: ${clients.find((c) => c.id === clientId)?.blacklist_reason}`
+                    : ""}
+                </div>
+              )}
             </div>
           )}
           <div className="field-row">

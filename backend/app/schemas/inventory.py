@@ -224,6 +224,16 @@ class EquipmentImportResult(BaseModel):
     results: list[EquipmentImportRowResult]
 
 
+class ClientContact(BaseModel):
+    """Один доп. контакт клиента-организации (26-й проход) — см.
+    Client.additional_contacts в app/models/inventory.py. Список таких
+    объектов целиком перезаписывается при сохранении формы."""
+
+    name: str = Field(min_length=1, max_length=255)
+    role: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+
+
 class ClientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     phone: str | None = None
@@ -238,6 +248,9 @@ class ClientCreate(BaseModel):
     default_discount_percent: float | None = Field(default=None, ge=0, le=100)
     tags: str | None = None
     blacklist_reason: str | None = None
+    # ---- 26-й проход ----
+    birthday: date | None = None
+    additional_contacts: list[ClientContact] | None = None
 
 
 class ClientUpdate(BaseModel):
@@ -261,6 +274,9 @@ class ClientUpdate(BaseModel):
     default_discount_percent: float | None = Field(default=None, ge=0, le=100)
     tags: str | None = None
     blacklist_reason: str | None = None
+    # ---- 26-й проход ----
+    birthday: date | None = None
+    additional_contacts: list[ClientContact] | None = None
 
 
 class ClientOut(BaseModel):
@@ -279,6 +295,29 @@ class ClientOut(BaseModel):
     default_discount_percent: float | None
     tags: str | None
     blacklist_reason: str | None
+    # ---- 26-й проход ----
+    birthday: date | None
+    additional_contacts: list[ClientContact] | None
+
+    model_config = {"from_attributes": True}
+
+
+class ClientDocumentOut(BaseModel):
+    """Прикреплённый скан/фото документа клиента (26-й проход) — см.
+    ClientDocument в app/models/inventory.py. data_base64 включён в ответ
+    напрямую (тот же принцип простоты, что и у остальных небольших вложений
+    в проекте — отдельного эндпоинта на скачивание не заводим, лимит размера
+    файла (5 МБ) держит объём ответа разумным)."""
+
+    id: uuid.UUID
+    client_id: uuid.UUID
+    employee_id: uuid.UUID | None
+    employee_name: str | None = None
+    filename: str
+    content_type: str
+    size_bytes: int
+    data_base64: str
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 

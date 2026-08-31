@@ -70,3 +70,25 @@ export function initials(name: string): string {
   if (parts.length === 1) return parts[0][0].toUpperCase();
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
+
+/** Маска ввода российского телефона — "+7 900 123-45-67" по мере набора
+ * (26-й проход, «глазами обычного пользователя»: раньше поле телефона было
+ * простым текстом, легко ввести номер в разном формате, что потом мешает и
+ * поиску, и wa.me-ссылке — та берёт только цифры, опечатка молча уводит не
+ * туда). Ведущая "8" — частый способ набора российского номера — приводится
+ * к тому же коду страны "7". Не блокирует ввод произвольного текста жёстко
+ * (это не regex-валидатор, а форматтер по мере печати), просто причёсывает
+ * то, что уже выглядит как российский номер. */
+export function formatPhoneInput(value: string): string {
+  let digits = value.replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits[0] === "8") digits = "7" + digits.slice(1);
+  if (digits[0] !== "7") digits = "7" + digits;
+  digits = digits.slice(0, 11);
+  let out = "+7";
+  if (digits.length > 1) out += " " + digits.slice(1, 4);
+  if (digits.length > 4) out += " " + digits.slice(4, 7);
+  if (digits.length > 7) out += "-" + digits.slice(7, 9);
+  if (digits.length > 9) out += "-" + digits.slice(9, 11);
+  return out;
+}

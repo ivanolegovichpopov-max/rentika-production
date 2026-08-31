@@ -120,6 +120,28 @@ export interface Client {
   default_discount_percent: number | null;
   tags: string | null;
   blacklist_reason: string | null;
+  // ---- 26-й проход (проф. взгляд + «глазами обычного пользователя» на
+  // вкладку «Клиенты» и карточку клиента, согласовано целиком) ----
+  birthday: string | null; // "YYYY-MM-DD"
+  additional_contacts: ClientContact[] | null;
+}
+
+export interface ClientContact {
+  name: string;
+  role: string | null;
+  phone: string | null;
+}
+
+export interface ClientDocument {
+  id: string;
+  client_id: string;
+  employee_id: string | null;
+  employee_name: string | null;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  data_base64: string;
+  created_at: string;
 }
 
 export interface ClientNote {

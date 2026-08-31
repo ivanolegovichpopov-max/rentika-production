@@ -1,3 +1,4 @@
+import base64
 import csv
 import io
 import uuid
@@ -11,9 +12,10 @@ from app.core.audit import log_action
 from app.core.deps import BusinessContext, require_permission
 from app.database import get_db
 from app.models.business import Employee, PermissionLevel, ResourceType
-from app.models.inventory import Client, ClientNote, ClientRating, Rental
+from app.models.inventory import Client, ClientDocument, ClientNote, ClientRating, Rental
 from app.schemas.inventory import (
     ClientCreate,
+    ClientDocumentOut,
     ClientImportResult,
     ClientImportRowResult,
     ClientMerge,
@@ -22,6 +24,14 @@ from app.schemas.inventory import (
     ClientOut,
     ClientUpdate,
 )
+
+# Лимит размера файла документа клиента (26-й проход) — 5 МБ ДО base64,
+# проверяется и здесь (истина), и на фронте (чтобы не тратить время
+# пользователя на загрузку/кодирование заведомо слишком большого файла).
+# В базе base64 занимает ~33% больше — учтено в комментарии к data_base64
+# в app/models/inventory.py, но лимит считается от исходного размера файла,
+# который пользователю понятнее любых пересчётов.
+MAX_CLIENT_DOCUMENT_BYTES = 5 * 1024 * 1024
 
 router = APIRouter(prefix="/businesses/{business_id}/clients", tags=["clients"])
 
@@ -308,3 +318,75 @@ async def create_client_note(
     db.commit()
     db.refresh(note)
     return _note_out(note, ctx.employee.name if ctx.employee is not None else None)
+
+
+def _document_out(doc: ClientDocument, employee_name: str | None) -> ClientDocumentOut:
+    out = ClientDocumentOut.model_validate(doc)
+    out.employee_name = employee_name
+    return out
+
+
+@router.get("/{client_id}/documents", response_model=list[ClientDocumentOut])
+async def list_client_documents(
+    client_id: uuid.UUID, ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)
+):
+    """Сканы/фото документов клиента (26-й проход) — см. ClientDocument в
+    app/models/inventory.py. Порядок — от новых к старым, тем же принципом,
+    что и журнал заметок (list_client_notes выше)."""
+    client = db.get(Client, client_id)
+    if client is None or client.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+
+    rows = db.execute(
+        select(ClientDocument, Employee.name)
+        .join(Employee, Employee.id == ClientDocument.employee_id, isouter=True)
+        .where(ClientDocument.client_id == client_id, ClientDocument.business_id == ctx.business_id)
+        .order_by(ClientDocument.created_at.desc())
+    ).all()
+    return [_document_out(doc, employee_name) for doc, employee_name in rows]
+
+
+@router.post("/{client_id}/documents", response_model=ClientDocumentOut, status_code=status.HTTP_201_CREATED)
+async def upload_client_document(
+    client_id: uuid.UUID, file: UploadFile, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
+):
+    client = db.get(Client, client_id)
+    if client is None or client.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+
+    raw = await file.read()
+    if len(raw) == 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Пустой файл")
+    if len(raw) > MAX_CLIENT_DOCUMENT_BYTES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Файл слишком большой (максимум 5 МБ)")
+
+    doc = ClientDocument(
+        business_id=ctx.business_id,
+        client_id=client_id,
+        employee_id=ctx.employee.id if ctx.employee is not None else None,
+        filename=file.filename or "документ",
+        content_type=file.content_type or "application/octet-stream",
+        size_bytes=len(raw),
+        data_base64=base64.b64encode(raw).decode("ascii"),
+    )
+    db.add(doc)
+    log_action(
+        db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="client_document", resource_id=str(client_id)
+    )
+    db.commit()
+    db.refresh(doc)
+    return _document_out(doc, ctx.employee.name if ctx.employee is not None else None)
+
+
+@router.delete("/{client_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_client_document(
+    client_id: uuid.UUID, document_id: uuid.UUID, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
+):
+    doc = db.get(ClientDocument, document_id)
+    if doc is None or doc.business_id != ctx.business_id or doc.client_id != client_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Документ не найден")
+    db.delete(doc)
+    log_action(
+        db, business_id=ctx.business_id, user_id=ctx.user.id, action="delete", resource="client_document", resource_id=str(document_id)
+    )
+    db.commit()

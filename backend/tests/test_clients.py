@@ -308,6 +308,108 @@ def test_client_notes_journal_crud(client):
     assert listed[1]["text"] == "Звонил, спрашивал про виброплиту"
 
 
+def test_create_and_update_client_birthday_and_contacts(client):
+    """26-й проход: день рождения + доп. контакты организации (JSON-список,
+    целиком перезаписывается при сохранении формы)."""
+    owner = register_business(client, email="clients-extras@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/clients",
+        json={
+            "name": "ООО Ромашка",
+            "client_type": "company",
+            "birthday": "1990-05-14",
+            "additional_contacts": [
+                {"name": "Петров Пётр", "role": "Снабжение", "phone": "+7 900 000-00-01"},
+                {"name": "Сидорова Анна", "role": "Бухгалтерия", "phone": None},
+            ],
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["birthday"] == "1990-05-14"
+    assert len(body["additional_contacts"]) == 2
+    assert body["additional_contacts"][0]["name"] == "Петров Пётр"
+    assert body["additional_contacts"][0]["role"] == "Снабжение"
+    assert body["additional_contacts"][1]["phone"] is None
+
+    client_id = body["id"]
+    # Перезапись списка контактов — старый список целиком заменяется новым,
+    # не сливается по элементам (тот же принцип, что и у tags).
+    updated = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}",
+        json={"additional_contacts": [{"name": "Новый контакт", "role": None, "phone": None}]},
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    assert len(updated.json()["additional_contacts"]) == 1
+    assert updated.json()["additional_contacts"][0]["name"] == "Новый контакт"
+
+    # Клиент без этих полей — birthday/additional_contacts спокойно None.
+    plain = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Иванов Иван"}, headers=headers
+    ).json()
+    assert plain["birthday"] is None
+    assert plain["additional_contacts"] is None
+
+
+def test_client_documents_upload_list_delete(client):
+    """26-й проход: прикреплённые сканы/фото документов клиента —
+    загрузка/список/удаление, с проверкой лимита размера файла."""
+    owner = register_business(client, email="clients-docs@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Клиент с документами"}, headers=headers
+    ).json()["id"]
+
+    empty = client.get(f"/api/businesses/{business_id}/clients/{client_id}/documents", headers=headers)
+    assert empty.status_code == 200
+    assert empty.json() == []
+
+    files = {"file": ("passport.jpg", b"\xff\xd8\xff\xe0fake-jpeg-bytes", "image/jpeg")}
+    uploaded = client.post(
+        f"/api/businesses/{business_id}/clients/{client_id}/documents", files=files, headers=headers
+    )
+    assert uploaded.status_code == 201
+    doc = uploaded.json()
+    assert doc["filename"] == "passport.jpg"
+    assert doc["content_type"] == "image/jpeg"
+    assert doc["size_bytes"] == len(b"\xff\xd8\xff\xe0fake-jpeg-bytes")
+    assert doc["employee_name"] is not None
+    import base64 as _b64
+
+    assert _b64.b64decode(doc["data_base64"]) == b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+
+    listed = client.get(f"/api/businesses/{business_id}/clients/{client_id}/documents", headers=headers).json()
+    assert len(listed) == 1
+
+    # Пустой файл отклоняется.
+    empty_file = {"file": ("empty.jpg", b"", "image/jpeg")}
+    rejected = client.post(
+        f"/api/businesses/{business_id}/clients/{client_id}/documents", files=empty_file, headers=headers
+    )
+    assert rejected.status_code == 400
+
+    # Слишком большой файл (> 5 МБ) отклоняется.
+    too_big = {"file": ("big.jpg", b"x" * (5 * 1024 * 1024 + 1), "image/jpeg")}
+    rejected_big = client.post(
+        f"/api/businesses/{business_id}/clients/{client_id}/documents", files=too_big, headers=headers
+    )
+    assert rejected_big.status_code == 400
+    assert len(client.get(f"/api/businesses/{business_id}/clients/{client_id}/documents", headers=headers).json()) == 1
+
+    delete_resp = client.delete(
+        f"/api/businesses/{business_id}/clients/{client_id}/documents/{doc['id']}", headers=headers
+    )
+    assert delete_resp.status_code == 204
+    assert client.get(f"/api/businesses/{business_id}/clients/{client_id}/documents", headers=headers).json() == []
+
+
 def test_client_notes_reject_unknown_client(client):
     owner = register_business(client, email="clients-notes2@example.com", password="correct horse battery staple")
     headers = auth_headers(owner["access_token"])
