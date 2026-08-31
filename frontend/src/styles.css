@@ -759,17 +759,27 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .cat-filter-check svg { width: 11px; height: 11px; }
 .cat-filter-sep { height: 1px; background: var(--border); margin: 4px 2px; }
 
-/* ---------- Попап настройки столбцов таблицы оборудования (двадцатый
-   проход, п.2 обзора) — тот же контейнер .cat-filter/.cat-filter-panel, что
-   и у фильтров категории/склада выше, но строки — не чекбокс-фильтр, а
-   перетаскиваемые переключатели видимости столбца. ---------- */
-.col-settings-row {
-  display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 2px; border-radius: 6px;
+/* ---------- Настройка столбцов таблицы оборудования (двадцать первый
+   проход, п.4 обзора) — раньше был отдельный выпадающий чекбокс-список
+   (.cat-filter-panel), визуально не похожий ни на что в приложении;
+   переоформлено по образцу режима настройки Дашборда: карточки-столбцы
+   переиспользуют .dash-block-cell/.dash-handle/.dash-grip (см. блок
+   ".dash-toolbar..." выше) — тот же грип+глаз, та же подсветка
+   drag/drag-over через classList. col-edit-chip добавляет только
+   компактный вид самой карточки-пилюли. ---------- */
+.col-edit-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.col-edit-chip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-2);
 }
-.col-settings-row.row-draggable.dragging { opacity: 0.4; }
-.col-settings-row.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background: var(--accent-soft); }
-.col-settings-grip { flex: none; color: var(--muted); cursor: grab; display: flex; align-items: center; }
-.col-settings-grip:active { cursor: grabbing; }
+.col-edit-chip[draggable="true"] { cursor: grab; }
+.col-edit-chip .dash-handle {
+  position: static; background: none; border: none; box-shadow: none; padding: 0;
+}
+.col-edit-chip-label { font-size: 13px; }
+.dash-block-hidden .col-edit-chip-label { opacity: 0.5; }
+.col-edit-chip.dash-block-hidden { border-style: dashed; }
 
 /* ---------- Автодополнение категории (CategoryAutocomplete в EquipmentTab.tsx) ----------
    16-й проход (обзор по скриншотам, п.6): замена нативного <input list>+

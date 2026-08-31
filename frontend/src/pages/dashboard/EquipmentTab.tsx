@@ -5,7 +5,7 @@ import { useData } from "../../context/DataContext";
 import type { Equipment, EquipmentCategory, EquipmentImportResult, EquipmentWarehouse, Rental } from "../../api/types";
 import { EQ_META, RENTAL_META, Badge, equipmentDisplayStatus, nextFreeDate, rentalDisplayStatus } from "../../lib/statusMeta";
 import { money, fmtDate, isoAddDays, todayISO } from "../../lib/format";
-import { IconClose, IconCopy, IconEdit, IconTrash, IconChevronDown, IconCheck, IconGrip } from "../../lib/icons";
+import { IconClose, IconCopy, IconEdit, IconTrash, IconChevronDown, IconCheck, IconGrip, IconSliders, IconEye, IconEyeOff } from "../../lib/icons";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { parseCsv, csvRowsToObjects, toCsv } from "../../lib/csv";
@@ -1655,10 +1655,20 @@ function EquipmentCategoriesModal({
                           ? (e) => {
                               e.preventDefault();
                               e.dataTransfer.dropEffect = "move";
+                              e.currentTarget.classList.add("drag-over");
                             }
                           : undefined
                       }
-                      onDrop={draggableRow ? (e) => { e.preventDefault(); handleCatDrop(c.id); } : undefined}
+                      onDragLeave={draggableRow ? (e) => e.currentTarget.classList.remove("drag-over") : undefined}
+                      onDrop={
+                        draggableRow
+                          ? (e) => {
+                              e.preventDefault();
+                              e.currentTarget.classList.remove("drag-over");
+                              handleCatDrop(c.id);
+                            }
+                          : undefined
+                      }
                     >
                       <td
                         className={"drag-handle-cell" + (draggableRow ? "" : " disabled")}
@@ -2020,10 +2030,20 @@ function EquipmentWarehousesModal({
                           ? (e) => {
                               e.preventDefault();
                               e.dataTransfer.dropEffect = "move";
+                              e.currentTarget.classList.add("drag-over");
                             }
                           : undefined
                       }
-                      onDrop={draggableRow ? (e) => { e.preventDefault(); handleWhDrop(w.id); } : undefined}
+                      onDragLeave={draggableRow ? (e) => e.currentTarget.classList.remove("drag-over") : undefined}
+                      onDrop={
+                        draggableRow
+                          ? (e) => {
+                              e.preventDefault();
+                              e.currentTarget.classList.remove("drag-over");
+                              handleWhDrop(w.id);
+                            }
+                          : undefined
+                      }
                     >
                       <td
                         className={"drag-handle-cell" + (draggableRow ? "" : " disabled")}
@@ -2438,9 +2458,14 @@ export function EquipmentTab({
     "equipment-columns-v1",
     DEFAULT_EQUIPMENT_COLUMNS_PREFS
   );
-  const [columnsPopoverOpen, setColumnsPopoverOpen] = useState(false);
-  const [dragColumnKey, setDragColumnKey] = useState<string | null>(null);
-  const columnsPopoverRef = useRef<HTMLDivElement>(null);
+  // Режим редактирования столбцов — двадцать первый проход, п.4 обзора:
+  // раньше это был выпадающий список-чекбокс (в духе .cat-filter-panel), не
+  // похожий по стилю ни на что другое в приложении; теперь — та же механика
+  // "режим настройки" (кнопка со IconSliders, "Готово" вместо неё, грип+глаз
+  // на каждой карточке, подсветка места вставки через classList), что уже
+  // есть на Дашборде (см. DashboardTab.tsx: editMode/DraggableBlock). Ряд
+  // карточек-столбцов появляется прямо над таблицей, а не в попапе.
+  const [columnsEditMode, setColumnsEditMode] = useState(false);
   const equipmentColumns = visibleEquipmentColumns(columnsPrefs);
 
   function toggleColumnHidden(key: string) {
@@ -2465,18 +2490,6 @@ export function EquipmentTab({
     });
   }
 
-  // Клик вне попапа настройки столбцов закрывает его — тот же idiom, что у
-  // catFilterRef/whFilterRef ниже.
-  useEffect(() => {
-    if (!columnsPopoverOpen) return;
-    function onDocClick(e: MouseEvent) {
-      if (columnsPopoverRef.current && !columnsPopoverRef.current.contains(e.target as Node)) {
-        setColumnsPopoverOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [columnsPopoverOpen]);
 
   // Массив вместо одиночного значения — 16-й проход, п.11 обзора:
   // мультивыбор категорий в фильтре. Пустой массив = "Все категории" (тот же
@@ -2929,67 +2942,19 @@ export function EquipmentTab({
               Склады
             </button>
           )}
-          {/* Настройка столбцов таблицы (двадцатый проход, п.2 обзора:
-              скрыть/переставить — растягивание пока не делаем). Тот же
-              контейнер .cat-filter, что у фильтров выше, но не привязан к
-              businessId (personal display preference — см.
-              DEFAULT_EQUIPMENT_COLUMNS_PREFS). */}
-          <div className="cat-filter" ref={columnsPopoverRef}>
-            <button type="button" className="btn cat-filter-btn" onClick={() => setColumnsPopoverOpen((v) => !v)}>
-              Столбцы
-              <IconChevronDown />
-            </button>
-            {columnsPopoverOpen && (
-              <div className="cat-filter-panel" style={{ minWidth: "240px" }}>
-                <div className="field-hint" style={{ padding: "2px 6px 6px" }}>
-                  Перетащите за ⠿, чтобы изменить порядок. Столбец «Оборудование» всегда виден и всегда первый.
-                </div>
-                {visibleEquipmentColumns({ ...columnsPrefs, hidden: [] })
-                  .map((c) => c.key)
-                  .map((key) => {
-                    const col = EQUIPMENT_SORT_COLUMNS.find((c) => c.key === key)!;
-                    const visible = !columnsPrefs.hidden.includes(key);
-                    return (
-                      <div
-                        key={key}
-                        className={"col-settings-row row-draggable" + (dragColumnKey === key ? " dragging" : "")}
-                        draggable
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData("text/plain", key);
-                          e.dataTransfer.effectAllowed = "move";
-                          setDragColumnKey(key);
-                        }}
-                        onDragEnd={() => setDragColumnKey(null)}
-                        onDragOver={(e) => {
-                          e.preventDefault();
-                          e.dataTransfer.dropEffect = "move";
-                        }}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          const dragged = dragColumnKey;
-                          setDragColumnKey(null);
-                          if (dragged) moveColumn(dragged, key);
-                        }}
-                      >
-                        <span className="col-settings-grip" title="Перетащите, чтобы изменить порядок">
-                          <IconGrip />
-                        </span>
-                        <label className={"cat-filter-option" + (visible ? " checked" : "")} style={{ flex: 1, padding: "5px 6px" }}>
-                          <input
-                            type="checkbox"
-                            className="sr-only"
-                            checked={visible}
-                            onChange={() => toggleColumnHidden(key)}
-                          />
-                          <span className="cat-filter-check">{visible && <IconCheck />}</span>
-                          <span className="cat-filter-name">{col.label}</span>
-                        </label>
-                      </div>
-                    );
-                  })}
-              </div>
-            )}
-          </div>
+          {/* Настройка столбцов таблицы — двадцать первый проход, п.4 обзора:
+              переоформлено по образцу режима настройки Дашборда (кнопка со
+              IconSliders, переключается на "Готово", карточки-столбцы с
+              грипом+глазом появляются рядом, а не в выпадающем списке —
+              см. columnsEditMode ниже и ряд карточек над таблицей). */}
+          <button
+            type="button"
+            className={"btn" + (columnsEditMode ? " btn-primary" : "")}
+            onClick={() => setColumnsEditMode((v) => !v)}
+            title="Скрыть ненужные столбцы таблицы или перетащить их в другом порядке"
+          >
+            <IconSliders /> {columnsEditMode ? "Готово" : "Настроить столбцы"}
+          </button>
           <button className="btn" onClick={() => exportEquipmentCsv(list, rentals, today)} disabled={list.length === 0}>
             Экспорт CSV
           </button>
@@ -3001,6 +2966,61 @@ export function EquipmentTab({
           </button>
         </div>
       </div>
+
+      {columnsEditMode && (
+        <div className="panel" style={{ marginBottom: "10px" }}>
+          <div className="panel-body">
+            <div className="field-hint" style={{ marginBottom: "8px" }}>
+              Перетащите карточку, чтобы изменить порядок столбцов, или нажмите на глаз, чтобы скрыть/показать. Столбец «Оборудование» всегда виден и всегда первый.
+            </div>
+            <div className="col-edit-row">
+              {visibleEquipmentColumns({ ...columnsPrefs, hidden: [] }).map((col) => {
+                const hiddenCol = columnsPrefs.hidden.includes(col.key);
+                return (
+                  <div
+                    key={col.key}
+                    className={"dash-block-cell col-edit-chip" + (hiddenCol ? " dash-block-hidden" : "")}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData("text/plain", col.key);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.currentTarget.classList.add("dragging");
+                    }}
+                    onDragEnd={(e) => e.currentTarget.classList.remove("dragging")}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      e.currentTarget.classList.add("drag-over");
+                    }}
+                    onDragLeave={(e) => e.currentTarget.classList.remove("drag-over")}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.currentTarget.classList.remove("drag-over");
+                      const dragged = e.dataTransfer.getData("text/plain");
+                      if (dragged) moveColumn(dragged, col.key);
+                    }}
+                  >
+                    <div className="dash-handle">
+                      <span className="dash-grip" title="Перетащите, чтобы изменить порядок">
+                        <IconGrip />
+                      </span>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        onClick={() => toggleColumnHidden(col.key)}
+                        title={hiddenCol ? "Показать столбец" : "Скрыть столбец"}
+                      >
+                        {hiddenCol ? <IconEyeOff /> : <IconEye />}
+                      </button>
+                    </div>
+                    <span className="col-edit-chip-label">{col.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {selectedIds.size > 0 && (
         <div className="panel" style={{ marginBottom: "10px" }}>
