@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.models.inventory import ClientRating, EquipmentStatus, RentalStatus
+from app.models.inventory import ClientRating, ClientType, EquipmentStatus, RentalStatus
 
 
 def _strip_or_raise(value: str) -> str:
@@ -231,6 +231,13 @@ class ClientCreate(BaseModel):
     doc: str | None = None
     rating: ClientRating = ClientRating.normal
     notes: str | None = None
+    # ---- 25-й проход ----
+    client_type: ClientType = ClientType.individual
+    contact_person: str | None = None
+    inn: str | None = None
+    default_discount_percent: float | None = Field(default=None, ge=0, le=100)
+    tags: str | None = None
+    blacklist_reason: str | None = None
 
 
 class ClientUpdate(BaseModel):
@@ -247,6 +254,13 @@ class ClientUpdate(BaseModel):
     doc: str | None = None
     rating: ClientRating | None = None
     notes: str | None = None
+    # ---- 25-й проход ----
+    client_type: ClientType | None = None
+    contact_person: str | None = None
+    inn: str | None = None
+    default_discount_percent: float | None = Field(default=None, ge=0, le=100)
+    tags: str | None = None
+    blacklist_reason: str | None = None
 
 
 class ClientOut(BaseModel):
@@ -257,6 +271,33 @@ class ClientOut(BaseModel):
     doc: str | None
     rating: ClientRating
     notes: str | None
+    created_at: datetime
+    # ---- 25-й проход ----
+    client_type: ClientType
+    contact_person: str | None
+    inn: str | None
+    default_discount_percent: float | None
+    tags: str | None
+    blacklist_reason: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class ClientNoteCreate(BaseModel):
+    """Новая запись в журнале клиента (25-й проход, п.4) — см.
+    ClientNote в app/models/inventory.py. employee_id проставляется на
+    сервере из текущего аутентифицированного сотрудника, а не приходит
+    от клиента запроса."""
+
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class ClientNoteOut(BaseModel):
+    id: uuid.UUID
+    client_id: uuid.UUID
+    employee_id: uuid.UUID | None
+    employee_name: str | None = None
+    text: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -302,6 +343,11 @@ class RentalCreate(BaseModel):
     equipment_ids: list[uuid.UUID] = Field(min_length=1)
     start_date: date
     end_date: date
+    # 25-й проход, п.7: если не передана явно — сервер подставит фиксированную
+    # рублёвую скидку сам, рассчитав её из Client.default_discount_percent (см.
+    # app/api/routes/rentals.py:create_rental). Явно переданное значение (в том
+    # числе 0) всегда имеет приоритет над клиентской умолчательной скидкой.
+    discount: float | None = Field(default=None, ge=0)
 
 
 class RentalItemOut(BaseModel):

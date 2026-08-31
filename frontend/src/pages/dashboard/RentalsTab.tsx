@@ -357,6 +357,7 @@ export function CreateRentalModal({
   clients,
   equipment,
   rentals,
+  initialClientId,
   onClose,
   onCreated,
 }: {
@@ -364,15 +365,24 @@ export function CreateRentalModal({
   clients: Client[];
   equipment: Equipment[];
   rentals: Rental[];
+  // Предзаполненный клиент (25-й проход, п.1 обзора: "+ Новая аренда" прямо
+  // из карточки клиента) — необязательный, при обычном открытии кнопкой в
+  // шапке/вкладке "Аренды" его нет, и клиента выбирают вручную как раньше.
+  // Поле выбора клиента при этом остаётся редактируемым (не блокируется) —
+  // предзаполнение не должно мешать передумать прямо в форме.
+  initialClientId?: string;
   onClose: () => void;
   onCreated: () => Promise<void>;
 }) {
-  const [clientId, setClientId] = useState("");
+  const [clientId, setClientId] = useState(initialClientId ?? "");
   const [startDate, setStartDate] = useState(todayISO());
   const [endDate, setEndDate] = useState(isoAddDays(todayISO(), 2));
   const [checkedIds, setCheckedIds] = useState<string[]>([]);
+  const [discount, setDiscount] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const selectedClient = clients.find((c) => c.id === clientId);
 
   function toggle(id: string) {
     setCheckedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -400,11 +410,12 @@ export function CreateRentalModal({
         equipment_ids: checkedIds,
         start_date: startDate,
         end_date: endDate,
-        // Скидку при создании аренды сознательно не отправляем: RentalCreate
-        // (backend/app/schemas/inventory.py) принимает только client_id/
-        // equipment_ids/start_date/end_date — поля discount там нет, в
-        // отличие от demo's addRentalForm. Задать скидку можно сразу после
-        // создания через "Изменить" (PATCH .../rentals/{id}, RentalEdit.discount).
+        // 25-й проход, п.7: если поле оставлено пустым — backend сам
+        // подставит скидку из Client.default_discount_percent выбранного
+        // клиента (см. app/api/routes/rentals.py:create_rental), фронту не
+        // нужно повторять расчёт по ступенчатому тарифу. Явное значение (в
+        // том числе 0) отправляется как есть и имеет приоритет.
+        discount: discount.trim() === "" ? undefined : Number(discount),
       });
       await onCreated();
       onClose();
@@ -460,6 +471,18 @@ export function CreateRentalModal({
           onToggle={toggle}
         />
         <div className="field-hint">Занятые на выбранные даты позиции недоступны для выбора.</div>
+      </div>
+      <div className="field">
+        <label>Скидка, ₽ (необязательно)</label>
+        <input type="number" min={0} value={discount} onChange={(e) => setDiscount(e.target.value)} placeholder="0" />
+        {selectedClient?.default_discount_percent ? (
+          <div className="field-hint">
+            У клиента скидка по умолчанию {selectedClient.default_discount_percent}% — если оставить поле пустым, она
+            применится автоматически.
+          </div>
+        ) : (
+          <div className="field-hint">Если не указать — скидки не будет (если у клиента не задана скидка по умолчанию).</div>
+        )}
       </div>
     </FormModal>
   );

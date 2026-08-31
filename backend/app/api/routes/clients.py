@@ -10,13 +10,15 @@ from sqlalchemy.orm import Session
 from app.core.audit import log_action
 from app.core.deps import BusinessContext, require_permission
 from app.database import get_db
-from app.models.business import PermissionLevel, ResourceType
-from app.models.inventory import Client, ClientRating, Rental
+from app.models.business import Employee, PermissionLevel, ResourceType
+from app.models.inventory import Client, ClientNote, ClientRating, Rental
 from app.schemas.inventory import (
     ClientCreate,
     ClientImportResult,
     ClientImportRowResult,
     ClientMerge,
+    ClientNoteCreate,
+    ClientNoteOut,
     ClientOut,
     ClientUpdate,
 )
@@ -189,6 +191,11 @@ async def import_clients(file: UploadFile, ctx: BusinessContext = Depends(edit_d
                 doc=row.get("doc") or None,
                 rating=rating,
                 notes=row.get("notes") or None,
+                # tags — единственное новое поле 25-го прохода, добавленное в
+                # CSV (см. docstring миграции 0012): реквизиты организации и
+                # умолчательная скидка сознательно НЕ включены в импорт — B2B
+                # заводится вручную по карточке, без риска раздувания парсера.
+                tags=row.get("tags") or None,
             )
             db.add(client)
             db.flush()
@@ -255,3 +262,49 @@ async def merge_client(
     db.commit()
     db.refresh(target)
     return target
+
+
+def _note_out(note: ClientNote, employee_name: str | None) -> ClientNoteOut:
+    out = ClientNoteOut.model_validate(note)
+    out.employee_name = employee_name
+    return out
+
+
+@router.get("/{client_id}/notes", response_model=list[ClientNoteOut])
+async def list_client_notes(client_id: uuid.UUID, ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)):
+    """Журнал датированных записей по клиенту (25-й проход, п.4) — в
+    отличие от Client.notes (одна затираемая памятка), это append-only
+    лента; см. ClientNote в app/models/inventory.py. Порядок — от новых
+    к старым, тем же принципом, что и история аренд в ClientDetailPanel."""
+    client = db.get(Client, client_id)
+    if client is None or client.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+
+    rows = db.execute(
+        select(ClientNote, Employee.name)
+        .join(Employee, Employee.id == ClientNote.employee_id, isouter=True)
+        .where(ClientNote.client_id == client_id, ClientNote.business_id == ctx.business_id)
+        .order_by(ClientNote.created_at.desc())
+    ).all()
+    return [_note_out(note, employee_name) for note, employee_name in rows]
+
+
+@router.post("/{client_id}/notes", response_model=ClientNoteOut, status_code=status.HTTP_201_CREATED)
+async def create_client_note(
+    client_id: uuid.UUID, body: ClientNoteCreate, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
+):
+    client = db.get(Client, client_id)
+    if client is None or client.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+
+    note = ClientNote(
+        business_id=ctx.business_id,
+        client_id=client_id,
+        employee_id=ctx.employee.id if ctx.employee is not None else None,
+        text=body.text,
+    )
+    db.add(note)
+    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="client_note", resource_id=str(client_id))
+    db.commit()
+    db.refresh(note)
+    return _note_out(note, ctx.employee.name if ctx.employee is not None else None)

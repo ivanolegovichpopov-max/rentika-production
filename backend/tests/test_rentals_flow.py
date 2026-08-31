@@ -505,3 +505,71 @@ def test_edit_adds_removes_items_updates_discount_and_keeps_existing_snapshot(cl
     eq_list = client.get(f"/api/businesses/{business_id}/equipment", headers=headers).json()
     kept_eq_after = next(e for e in eq_list if e["id"] == eq_kept["id"])
     assert kept_eq_after["status"] == "available"
+
+
+def test_rental_create_uses_client_default_discount_percent(client):
+    """25-й проход, п.7: если discount не передан явно — сервер сам считает
+    его из Client.default_discount_percent (см. rentals.py:create_rental).
+    daily_rate=100, 5 дней (1-5 сентября включительно) → база 500 ₽,
+    default_discount_percent=10 → скидка 50 ₽."""
+    owner = register_business(client, email="rentals-discount@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_resp = client.post(
+        f"/api/businesses/{business_id}/clients",
+        json={"name": "Скидочный клиент", "default_discount_percent": 10},
+        headers=headers,
+    )
+    client_id = client_resp.json()["id"]
+
+    eq_id = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Дрель", "category": "Инструмент", "daily_rate": 100, "deposit": 500},
+        headers=headers,
+    ).json()["id"]
+
+    rental_resp = client.post(
+        f"/api/businesses/{business_id}/rentals",
+        json={"client_id": client_id, "equipment_ids": [eq_id], "start_date": "2026-09-01", "end_date": "2026-09-05"},
+        headers=headers,
+    )
+    assert rental_resp.status_code == 201
+    rental = rental_resp.json()
+    assert rental["base"] == 500
+    assert rental["discount"] == 50
+    assert rental["amount"] == 450
+
+
+def test_rental_create_explicit_discount_overrides_client_default(client):
+    """Явно переданный discount (в том числе 0) всегда важнее умолчательной
+    скидки клиента — клиентское поле лишь подсказка при создании."""
+    owner = register_business(client, email="rentals-discount2@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id = client.post(
+        f"/api/businesses/{business_id}/clients",
+        json={"name": "Клиент с 10%", "default_discount_percent": 10},
+        headers=headers,
+    ).json()["id"]
+
+    eq_id = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Дрель", "category": "Инструмент", "daily_rate": 100, "deposit": 500},
+        headers=headers,
+    ).json()["id"]
+
+    rental_resp = client.post(
+        f"/api/businesses/{business_id}/rentals",
+        json={
+            "client_id": client_id,
+            "equipment_ids": [eq_id],
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-05",
+            "discount": 0,
+        },
+        headers=headers,
+    )
+    assert rental_resp.status_code == 201
+    assert rental_resp.json()["discount"] == 0

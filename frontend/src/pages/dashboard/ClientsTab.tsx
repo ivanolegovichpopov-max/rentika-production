@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "../../api/client";
 import { useData } from "../../context/DataContext";
-import type { Client, ClientImportResult, Rental } from "../../api/types";
+import type { Client, ClientImportResult, ClientNote, Rental } from "../../api/types";
 import { RATING_META, RENTAL_META, Badge, rentalDisplayStatus } from "../../lib/statusMeta";
-import { money, fmtDate } from "../../lib/format";
-import { IconClose, IconEdit, IconTrash } from "../../lib/icons";
+import { money, fmtDate, colorFromId, initials } from "../../lib/format";
+import { IconClose, IconEdit, IconTrash, IconPhone, IconSend } from "../../lib/icons";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
@@ -24,12 +24,40 @@ interface ClientFormState {
   email: string;
   doc: string;
   notes: string;
+  // ---- 25-й проход (обзор «глазами обычного пользователя») ----
+  clientType: "individual" | "company";
+  contactPerson: string;
+  inn: string;
+  defaultDiscountPercent: string; // строкой, как остальные числовые поля форм в проекте (см. daily_rate у оборудования)
+  tags: string;
 }
 
-const EMPTY_CLIENT_FORM: ClientFormState = { name: "", phone: "", email: "", doc: "", notes: "" };
+const EMPTY_CLIENT_FORM: ClientFormState = {
+  name: "",
+  phone: "",
+  email: "",
+  doc: "",
+  notes: "",
+  clientType: "individual",
+  contactPerson: "",
+  inn: "",
+  defaultDiscountPercent: "",
+  tags: "",
+};
 
 function formFromClient(c: Client): ClientFormState {
-  return { name: c.name, phone: c.phone ?? "", email: c.email ?? "", doc: c.doc ?? "", notes: c.notes ?? "" };
+  return {
+    name: c.name,
+    phone: c.phone ?? "",
+    email: c.email ?? "",
+    doc: c.doc ?? "",
+    notes: c.notes ?? "",
+    clientType: c.client_type,
+    contactPerson: c.contact_person ?? "",
+    inn: c.inn ?? "",
+    defaultDiscountPercent: c.default_discount_percent != null ? String(c.default_discount_percent) : "",
+    tags: c.tags ?? "",
+  };
 }
 
 function clientFormToPayload(f: ClientFormState) {
@@ -39,6 +67,14 @@ function clientFormToPayload(f: ClientFormState) {
     email: f.email.trim() || null,
     doc: f.doc.trim() || null,
     notes: f.notes.trim() || null,
+    client_type: f.clientType,
+    // Реквизиты организации сохраняются, только когда действительно указан
+    // тип "Организация" — если сотрудник заполнил поле, а потом переключил
+    // тип обратно на "Физлицо", реквизиты не должны молча остаться в базе.
+    contact_person: f.clientType === "company" ? f.contactPerson.trim() || null : null,
+    inn: f.clientType === "company" ? f.inn.trim() || null : null,
+    default_discount_percent: f.defaultDiscountPercent.trim() === "" ? null : Number(f.defaultDiscountPercent),
+    tags: f.tags.trim() || null,
   };
 }
 
@@ -144,6 +180,25 @@ function ClientFormModal({
         </div>
         <div className="modal-body">
           <div className="field">
+            <label>Тип клиента</label>
+            <div className="segmented">
+              <button
+                type="button"
+                className={form.clientType === "individual" ? "active" : ""}
+                onClick={() => setForm({ ...form, clientType: "individual" })}
+              >
+                Физлицо
+              </button>
+              <button
+                type="button"
+                className={form.clientType === "company" ? "active" : ""}
+                onClick={() => setForm({ ...form, clientType: "company" })}
+              >
+                Организация
+              </button>
+            </div>
+          </div>
+          <div className="field">
             <label>Имя / название</label>
             <input
               required
@@ -164,8 +219,47 @@ function ClientFormModal({
             </div>
           </div>
           <div className="field">
-            <label>Документ (паспорт)</label>
+            <label>{form.clientType === "company" ? "Документ / реквизиты" : "Документ (паспорт)"}</label>
             <input value={form.doc} onChange={(e) => setForm({ ...form, doc: e.target.value })} />
+          </div>
+          {form.clientType === "company" && (
+            <div className="field-row">
+              <div className="field">
+                <label>Контактное лицо</label>
+                <input
+                  value={form.contactPerson}
+                  onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
+                  placeholder="Кто по факту забирает/сдаёт технику"
+                />
+              </div>
+              <div className="field">
+                <label>ИНН</label>
+                <input value={form.inn} onChange={(e) => setForm({ ...form, inn: e.target.value })} />
+              </div>
+            </div>
+          )}
+          <div className="field-row">
+            <div className="field">
+              <label>Скидка по умолчанию, % (необязательно)</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step="0.01"
+                value={form.defaultDiscountPercent}
+                onChange={(e) => setForm({ ...form, defaultDiscountPercent: e.target.value })}
+                placeholder="0"
+              />
+              <div className="field-hint">Подсказка при создании новой аренды этому клиенту — можно поменять на месте.</div>
+            </div>
+            <div className="field">
+              <label>Метки, через запятую (необязательно)</label>
+              <input
+                value={form.tags}
+                onChange={(e) => setForm({ ...form, tags: e.target.value })}
+                placeholder="постоянный, оптовик"
+              />
+            </div>
           </div>
           <div className="field">
             <label>Заметка</label>
@@ -211,6 +305,7 @@ const CLIENT_SORT_COLUMNS: { key: string; label: string }[] = [
   { key: "doc", label: "Документ" },
   { key: "rating", label: "Рейтинг" },
   { key: "rentals", label: "Аренды" },
+  { key: "lastRental", label: "Последняя аренда" },
 ];
 
 // Приоритет при сортировке по рейтингу — проблемные клиенты первые, тем же
@@ -222,11 +317,39 @@ interface ClientSort {
   dir: "asc" | "desc";
 }
 
+/** Дата начала самой свежей аренды клиента (по всей истории, не только
+ * активной) — "" для клиента, который ни разу не арендовал, что при
+ * сортировке по возрастанию корректно ставит его первым, рядом с самыми
+ * "спящими" (25-й проход, п.6 обзора: сортировка/фильтр для возврата
+ * клиентов, которые давно не арендовали). */
+function lastRentalDate(clientId: string, rentals: Rental[]): string {
+  let latest = "";
+  for (const r of rentals) {
+    if (r.client_id === clientId && r.start_date > latest) latest = r.start_date;
+  }
+  return latest;
+}
+
+const DORMANT_DAYS_THRESHOLD = 90;
+
+/** "Спящий" клиент — арендовал хотя бы раз, но не в последние
+ * DORMANT_DAYS_THRESHOLD дней (25-й проход, п.6): клиентов, которые ни разу
+ * не арендовали, в этот фильтр намеренно не включаем — это отдельная
+ * категория "новый, ещё не сдавали", возврат интересен именно для тех, кто
+ * уже был активен и затих. */
+function isDormantClient(clientId: string, rentals: Rental[]): boolean {
+  const last = lastRentalDate(clientId, rentals);
+  if (!last) return false;
+  const daysSince = (Date.now() - new Date(last).getTime()) / (1000 * 60 * 60 * 24);
+  return daysSince >= DORMANT_DAYS_THRESHOLD;
+}
+
 function clientSortValue(c: Client, key: string, rentals: Rental[]): string | number {
   if (key === "name") return c.name.toLowerCase();
   if (key === "doc") return (c.doc ?? "").toLowerCase();
   if (key === "rating") return CLIENT_RATING_PRIORITY[c.rating] ?? 99;
   if (key === "rentals") return rentals.filter((r) => r.client_id === c.id).length;
+  if (key === "lastRental") return lastRentalDate(c.id, rentals);
   return 0;
 }
 
@@ -287,6 +410,7 @@ const CLIENT_EXPORT_HEADER = [
   "doc",
   "rating",
   "notes",
+  "tags",
   "rentals_total",
   "overdue_now",
   "lifetime_revenue",
@@ -305,6 +429,7 @@ function exportClientsCsv(list: Client[], rentals: Rental[]) {
       c.doc ?? "",
       RATING_META[c.rating].label,
       c.notes ?? "",
+      c.tags ?? "",
       clientRentals.length,
       overdueNow,
       Math.round(lifetimeRevenue),
@@ -336,16 +461,66 @@ function normalizePhoneDigits(phone: string | null | undefined): string {
   return (phone ?? "").replace(/\D/g, "");
 }
 
-function findPossibleDuplicate(form: ClientFormState, clients: Client[]): Client | null {
+/** Расстояние Левенштейна — стандартный алгоритм редакционного расстояния
+ * (число вставок/удалений/замен символов, чтобы превратить одну строку в
+ * другую), используется ниже для нечёткого сравнения имён (25-й проход,
+ * п.9 обзора: точное совпадение из 24-го прохода не ловит опечатки —
+ * "Иванов Иван" и "Иваннов Иван" считались разными клиентами). Классическая
+ * динамика с одной "текущей" строкой вместо полной O(n·m) матрицы —
+ * достаточно быстро для сравнения с базой в несколько сотен клиентов на
+ * каждое нажатие клавиши, не нужна отдельная библиотека ради одной функции. */
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const curr = [i];
+    for (let j = 1; j <= b.length; j++) {
+      curr[j] =
+        a[i - 1] === b[j - 1]
+          ? prev[j - 1]
+          : 1 + Math.min(prev[j - 1], prev[j], curr[j - 1]);
+    }
+    prev = curr;
+  }
+  return prev[b.length];
+}
+
+/** Похожи ли два имени с учётом опечаток — расстояние Левенштейна,
+ * нормализованное по длине более длинной строки (порог 0.2, т.е. до ~20%
+ * символов может отличаться), плюс отдельный порог для совсем коротких
+ * имён (1-2 отличающихся символа на коротком имени — уже, скорее всего,
+ * другой человек, не опечатка). */
+function namesLookSimilar(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen < 4) return false; // слишком короткие имена — риск ложных срабатываний выше пользы
+  const distance = levenshteinDistance(a, b);
+  return distance <= Math.max(1, Math.floor(maxLen * 0.2));
+}
+
+interface DuplicateMatch {
+  client: Client;
+  reason: "phone" | "name" | "fuzzy_name";
+}
+
+function findPossibleDuplicate(form: ClientFormState, clients: Client[]): DuplicateMatch | null {
   const phone = normalizePhoneDigits(form.phone);
   const name = form.name.trim().toLowerCase();
-  return (
-    clients.find((c) => {
-      if (phone && normalizePhoneDigits(c.phone) === phone) return true;
-      if (name && c.name.trim().toLowerCase() === name) return true;
-      return false;
-    }) ?? null
-  );
+  for (const c of clients) {
+    if (phone && normalizePhoneDigits(c.phone) === phone) return { client: c, reason: "phone" };
+  }
+  for (const c of clients) {
+    if (name && c.name.trim().toLowerCase() === name) return { client: c, reason: "name" };
+  }
+  // Нечёткое сравнение — вторым проходом, ПОСЛЕ точных совпадений (точное
+  // совпадение всегда более уверенный сигнал, чем похожесть по опечатке).
+  for (const c of clients) {
+    if (name && namesLookSimilar(name, c.name.trim().toLowerCase())) return { client: c, reason: "fuzzy_name" };
+  }
+  return null;
 }
 
 /* ============================================================
@@ -356,8 +531,8 @@ function findPossibleDuplicate(form: ClientFormState, clients: Client[]): Client
    Найдено при обзоре вкладки «Клиенты» (24-й проход, п.2): экспорт уже был
    реализован, импорта не было, хотя у Оборудования есть оба.
    ============================================================ */
-const CLIENT_IMPORT_TEMPLATE_HEADER = ["name", "phone", "email", "doc", "rating", "notes"];
-const CLIENT_IMPORT_TEMPLATE_EXAMPLE = ["Иванов Иван", "+7 900 000-00-00", "ivan@example.com", "", "normal", ""];
+const CLIENT_IMPORT_TEMPLATE_HEADER = ["name", "phone", "email", "doc", "rating", "notes", "tags"];
+const CLIENT_IMPORT_TEMPLATE_EXAMPLE = ["Иванов Иван", "+7 900 000-00-00", "ivan@example.com", "", "normal", "", ""];
 
 function downloadClientImportTemplate() {
   const csv = toCsv(CLIENT_IMPORT_TEMPLATE_HEADER, [CLIENT_IMPORT_TEMPLATE_EXAMPLE]);
@@ -507,8 +682,10 @@ function ClientImportModal({
             <div className="field-hint" style={{ marginBottom: "10px" }}>
               Файл CSV с заголовком в первой строке. Обязательная колонка: <code>name</code>. Необязательные:{" "}
               <code>phone</code>, <code>email</code>, <code>doc</code>, <code>rating</code> (
-              <code>normal</code>/<code>watch</code>/<code>blacklist</code>, по умолчанию — «Надёжный»), <code>notes</code>.
-              Файл, выгруженный отсюда же кнопкой «Экспорт CSV», подходит для импорта без правок.
+              <code>normal</code>/<code>watch</code>/<code>blacklist</code>, по умолчанию — «Надёжный»), <code>notes</code>,{" "}
+              <code>tags</code> (через запятую). Реквизиты организации и скидка по умолчанию через импорт не заводятся —
+              для клиентов-организаций удобнее заполнить карточку вручную. Файл, выгруженный отсюда же кнопкой «Экспорт
+              CSV», подходит для импорта без правок.
             </div>
             <button type="button" className="btn btn-sm" onClick={downloadClientImportTemplate}>
               Скачать шаблон CSV
@@ -640,11 +817,23 @@ function ClientImportModal({
   );
 }
 
-export function ClientsTab({ businessId, search }: { businessId: string; search: string }) {
+export function ClientsTab({
+  businessId,
+  search,
+  onCreateRental,
+}: {
+  businessId: string;
+  search: string;
+  // Необязательный — прокидывается с уровня DashboardShell (см. Dashboard.tsx),
+  // где живёт общая глобальная модалка "Новая аренда" (25-й проход, п.1
+  // обзора: кнопка из карточки клиента, без перехода на вкладку "Аренды").
+  onCreateRental?: (clientId: string) => void;
+}) {
   const { clients, rentals, reloadClients } = useData();
   const [sort, setSort] = usePersistedState<ClientSort>(`client-sort:${businessId}`, { key: null, dir: "asc" });
   const [ratingFilter, setRatingFilter] = useState("all");
   const [overdueOnly, setOverdueOnly] = useState(false);
+  const [dormantOnly, setDormantOnly] = useState(false);
   const [modalMode, setModalMode] = useState<"add" | "edit" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -665,7 +854,21 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
   const bySearch = clients.filter(
     (c) =>
       !q ||
-      (c.name + " " + (c.phone ?? "") + " " + (c.email ?? "") + " " + (c.doc ?? "") + " " + (c.notes ?? ""))
+      (
+        c.name +
+        " " +
+        (c.phone ?? "") +
+        " " +
+        (c.email ?? "") +
+        " " +
+        (c.doc ?? "") +
+        " " +
+        (c.notes ?? "") +
+        " " +
+        (c.tags ?? "") +
+        " " +
+        (c.contact_person ?? "")
+      )
         .toLowerCase()
         .includes(q)
   );
@@ -679,8 +882,11 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
   }
   const byRating = bySearch.filter((c) => ratingFilter === "all" || c.rating === ratingFilter);
   const overdueNowCount = byRating.filter((c) => clientHasOverdueNow(c.id, rentals)).length;
-  const filtered = overdueOnly ? byRating.filter((c) => clientHasOverdueNow(c.id, rentals)) : byRating;
-  const list = sortClientList(filtered, sort, rentals);
+  const dormantCount = byRating.filter((c) => isDormantClient(c.id, rentals)).length;
+  const withFilters = byRating
+    .filter((c) => !overdueOnly || clientHasOverdueNow(c.id, rentals))
+    .filter((c) => !dormantOnly || isDormantClient(c.id, rentals));
+  const list = sortClientList(withFilters, sort, rentals);
 
   // Сброс выделения при смене фильтров/поиска — тот же принцип, что и в
   // EquipmentTab.tsx: иначе массовое действие могло бы применяться к
@@ -688,7 +894,7 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
   useEffect(() => {
     setSelectedIds(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ratingFilter, overdueOnly, search]);
+  }, [ratingFilter, overdueOnly, dormantOnly, search]);
 
   function toggleSort(key: string) {
     setSort((prev) => {
@@ -727,8 +933,14 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
         // не блокирует, просто просит подтвердить осознанно.
         const dup = findPossibleDuplicate(form, clients);
         if (dup) {
+          const reasonLabel =
+            dup.reason === "phone"
+              ? "совпадает телефон"
+              : dup.reason === "name"
+              ? "совпадает имя"
+              : "похожее имя, возможно опечатка";
           const proceed = await confirmDuplicate(
-            `Похожий клиент уже есть в базе: «${dup.name}»${dup.phone ? ` · ${dup.phone}` : ""}. Всё равно добавить нового?`,
+            `Похожий клиент уже есть в базе: «${dup.client.name}»${dup.client.phone ? ` · ${dup.client.phone}` : ""} (${reasonLabel}). Всё равно добавить нового?`,
             { confirmLabel: "Добавить всё равно" }
           );
           if (!proceed) return;
@@ -871,6 +1083,14 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
           >
             Просрочка сейчас ({overdueNowCount})
           </button>
+          <button
+            type="button"
+            className={"btn" + (dormantOnly ? " btn-primary" : "")}
+            onClick={() => setDormantOnly((v) => !v)}
+            title={`Клиенты, у которых была хотя бы одна аренда, но не за последние ${DORMANT_DAYS_THRESHOLD} дней — повод напомнить о себе`}
+          >
+            Не арендовали {DORMANT_DAYS_THRESHOLD}+ дней ({dormantCount})
+          </button>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
           <button className="btn" onClick={() => setShowImport(true)}>
@@ -949,14 +1169,62 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
                   return s === "active" || s === "overdue";
                 }).length;
                 const overdueNow = clientRentals.filter((r) => rentalDisplayStatus(r) === "overdue").length;
+                const lastRental = lastRentalDate(c.id, rentals);
+                const tagList = (c.tags ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+                const waDigits = normalizePhoneDigits(c.phone);
                 return (
                   <tr key={c.id} data-clickable="true" onClick={() => setOpenClientId(c.id)}>
                     <td onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" checked={selectedIds.has(c.id)} onChange={() => toggleSelected(c.id)} />
                     </td>
                     <td>
-                      <div className="cell-name">{c.name}</div>
-                      <div className="cell-sub">{c.phone ?? "—"}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        {/* Цветной аватар из инициалов — тот же приём, что и у
+                            сотрудников в сайдбаре (colorFromId/initials из
+                            lib/format.ts), 25-й проход, п.3 обзора. */}
+                        <span className="avatar" style={{ background: colorFromId(c.id) }}>{initials(c.name)}</span>
+                        <div>
+                          <div className="cell-name">
+                            {c.name}
+                            {c.client_type === "company" && (
+                              <span className="badge-tag" title="Организация" style={{ marginLeft: "6px" }}>
+                                Орг.
+                              </span>
+                            )}
+                          </div>
+                          <div className="cell-sub" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                            <span>{c.phone ?? "—"}</span>
+                            {c.phone && (
+                              <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex", gap: "4px" }}>
+                                {/* Быстрый звонок/WhatsApp прямо из строки таблицы
+                                    (25-й проход, п.10 обзора) — без открытия
+                                    карточки клиента. */}
+                                <a className="icon-btn" href={`tel:${c.phone}`} title="Позвонить">
+                                  <IconPhone />
+                                </a>
+                                <a
+                                  className="icon-btn"
+                                  href={`https://wa.me/${waDigits}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title="Написать в WhatsApp"
+                                >
+                                  <IconSend />
+                                </a>
+                              </span>
+                            )}
+                          </div>
+                          {tagList.length > 0 && (
+                            <div style={{ marginTop: "4px", display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                              {tagList.map((t) => (
+                                <span key={t} className="badge-tag">
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </td>
                     <td>{c.doc ?? "—"}</td>
                     <td>
@@ -970,6 +1238,7 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
                         </div>
                       )}
                     </td>
+                    <td>{lastRental ? fmtDate(lastRental) : "—"}</td>
                     <td onClick={(e) => e.stopPropagation()} style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       <button type="button" className="icon-btn" title="Изменить" onClick={() => openEditModal(c.id)}>
                         <IconEdit />
@@ -1013,6 +1282,14 @@ export function ClientsTab({ businessId, search }: { businessId: string; search:
             openEditModal(id);
           }}
           onDelete={handleDelete}
+          onCreateRental={
+            onCreateRental
+              ? (id) => {
+                  setOpenClientId(null);
+                  onCreateRental(id);
+                }
+              : undefined
+          }
         />
       )}
 
@@ -1029,6 +1306,7 @@ export function ClientDetailPanel({
   onClose,
   onEdit,
   onDelete,
+  onCreateRental,
 }: {
   businessId: string;
   clientId: string;
@@ -1039,6 +1317,12 @@ export function ClientDetailPanel({
   // «Клиенты», где и живёт сама форма/модалка).
   onEdit?: (id: string) => void;
   onDelete: (id: string) => void;
+  // "+ Новая аренда" прямо из карточки (25-й проход, п.1 обзора) —
+  // необязательный по тому же принципу, что и onEdit: открывает ГЛОБАЛЬНУЮ
+  // модалку "Новая аренда", которая живёт на уровне DashboardShell (см.
+  // Dashboard.tsx), а не здесь — панель клиента сама модалку не рендерит,
+  // только сообщает наверх, для кого её открыть.
+  onCreateRental?: (clientId: string) => void;
 }) {
   const { clients, rentals, equipment, reloadClients, reloadRentals } = useData();
   const client = clients.find((c) => c.id === clientId);
@@ -1046,9 +1330,12 @@ export function ClientDetailPanel({
   // Смена рейтинга на "чёрный список" — по весу последствий сопоставима с
   // удалением (это сигнал всей команде "не работать с этим клиентом"), но
   // раньше применялась одним кликом без подтверждения (24-й проход, п.6
-  // обзора). Понижение из чёрного списка обратно и переход в "На контроле"
-  // подтверждения не требуют — необратимого в них ничего нет.
-  const { confirm: confirmBlacklist, dialog: blacklistDialog } = useConfirm();
+  // обзора). Начиная с 25-го прохода (п.5) подтверждение заменено на
+  // BlacklistReasonModal — не просто "да/нет", а обязательный ввод причины,
+  // чтобы через полгода кто-то другой из команды видел, ПОЧЕМУ клиент
+  // проблемный. Понижение из чёрного списка обратно и переход в "На
+  // контроле" подтверждения не требуют — необратимого в них ничего нет.
+  const [showBlacklistReason, setShowBlacklistReason] = useState(false);
   const [showAllHistory, setShowAllHistory] = useState(false);
   const [docModal, setDocModal] = useState<{ title: string; node: ReactNode } | null>(null);
   const [showMerge, setShowMerge] = useState(false);
@@ -1075,45 +1362,83 @@ export function ClientDetailPanel({
     })
     .reduce((s, r) => s + r.deposit_total, 0);
 
-  async function setRating(rating: Client["rating"]) {
-    // Ненулевое утверждение: TS не протягивает сужение "client всегда
-    // определён" (см. `if (!client) return null;` выше по компоненту) через
-    // вложенное ОБЪЯВЛЕНИЕ функции (в отличие от стрелочной функции) — а
-    // setRating вызывается уже после того, как ранний return null отработал.
-    if (rating === "blacklist" && client!.rating !== "blacklist") {
-      if (
-        !(await confirmBlacklist(`Внести «${client!.name}» в чёрный список? Об этом стоит знать всей команде.`, {
-          danger: true,
-          confirmLabel: "В чёрный список",
-        }))
-      )
-        return;
-    }
+  async function applyRating(rating: Client["rating"], blacklistReason: string | null) {
     try {
-      await api.patch(`/businesses/${businessId}/clients/${clientId}`, { rating });
+      await api.patch(`/businesses/${businessId}/clients/${clientId}`, {
+        rating,
+        // Причина чёрного списка очищается фронтом при снятии статуса (см.
+        // комментарий у Client.blacklist_reason в app/models/inventory.py) —
+        // не тащим за собой старую причину, если клиент потом реабилитирован
+        // и снова туда же попал по новой причине.
+        blacklist_reason: blacklistReason,
+      });
       await reloadClients();
     } catch (err) {
       notify(err instanceof ApiError ? err.message : "Не удалось изменить рейтинг");
     }
   }
 
+  async function setRating(rating: Client["rating"]) {
+    // Ненулевое утверждение: TS не протягивает сужение "client всегда
+    // определён" (см. `if (!client) return null;` выше по компоненту) через
+    // вложенное ОБЪЯВЛЕНИЕ функции (в отличие от стрелочной функции) — а
+    // setRating вызывается уже после того, как ранний return null отработал.
+    if (rating === "blacklist" && client!.rating !== "blacklist") {
+      // Причина вводится в отдельной модалке (см. BlacklistReasonModal ниже)
+      // — сама смена рейтинга откладывается до её отправки.
+      setShowBlacklistReason(true);
+      return;
+    }
+    await applyRating(rating, rating === "blacklist" ? client!.blacklist_reason : null);
+  }
+
+  const tagList = (client.tags ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+
   return (
     <div className="slideover">
       <div className="slideover-head">
-        <div>
-          <h3>{client.name}</h3>
-          <div style={{ color: "var(--muted)", fontSize: "12.5px", marginTop: "2px" }}>{client.phone ?? "—"}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span className="avatar" style={{ background: colorFromId(client.id), width: 36, height: 36, fontSize: "14px" }}>
+            {initials(client.name)}
+          </span>
+          <div>
+            <h3>
+              {client.name}
+              {client.client_type === "company" && (
+                <span className="badge-tag" title="Организация">
+                  Орг.
+                </span>
+              )}
+            </h3>
+            <div style={{ color: "var(--muted)", fontSize: "12.5px", marginTop: "2px" }}>{client.phone ?? "—"}</div>
+          </div>
         </div>
         <button className="icon-btn" onClick={onClose}>
           <IconClose />
         </button>
       </div>
 
+      {client.phone && (
+        <div className="slideover-section" style={{ display: "flex", gap: "8px" }}>
+          <a className="btn btn-sm" href={`tel:${client.phone}`}>
+            <IconPhone /> Позвонить
+          </a>
+          <a className="btn btn-sm" href={`https://wa.me/${normalizePhoneDigits(client.phone)}`} target="_blank" rel="noreferrer">
+            <IconSend /> WhatsApp
+          </a>
+        </div>
+      )}
+
       <div className="slideover-section">
         <h4>Надёжность</h4>
         <div style={{ marginBottom: "10px" }}>
           <Badge meta={RATING_META[client.rating]} />
         </div>
+        {client.rating === "blacklist" && client.blacklist_reason && (
+          <div className="field-hint" style={{ marginBottom: "10px" }}>
+            Причина: {client.blacklist_reason}
+          </div>
+        )}
         <div className="rating-picker">
           <button
             className={"btn btn-sm" + (client.rating === "normal" ? " btn-primary" : "")}
@@ -1145,6 +1470,8 @@ export function ClientDetailPanel({
           <span className={"mono" + (totalLate > 0 ? " text-critical" : "")}>{totalLate}</span>
           <span className="k">Депозит на удержании сейчас</span>
           <span className="mono">{money(depositHeld)}</span>
+          <span className="k">Последняя аренда</span>
+          <span>{lastRentalDate(client.id, rentals) ? fmtDate(lastRentalDate(client.id, rentals)) : "—"}</span>
         </div>
       </div>
 
@@ -1155,9 +1482,28 @@ export function ClientDetailPanel({
           <span>{client.email ?? "—"}</span>
           <span className="k">Документ</span>
           <span>{client.doc ?? "—"}</span>
+          {client.client_type === "company" && (
+            <>
+              <span className="k">Контактное лицо</span>
+              <span>{client.contact_person ?? "—"}</span>
+              <span className="k">ИНН</span>
+              <span>{client.inn ?? "—"}</span>
+            </>
+          )}
+          <span className="k">Скидка по умолчанию</span>
+          <span>{client.default_discount_percent != null ? `${client.default_discount_percent}%` : "—"}</span>
           <span className="k">В базе с</span>
           <span>{fmtDate(client.created_at.slice(0, 10))}</span>
         </div>
+        {tagList.length > 0 && (
+          <div style={{ marginTop: "10px", display: "flex", gap: "4px", flexWrap: "wrap" }}>
+            {tagList.map((t) => (
+              <span key={t} className="badge-tag">
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {client.notes && (
@@ -1166,6 +1512,8 @@ export function ClientDetailPanel({
           <div style={{ fontSize: "13.5px" }}>{client.notes}</div>
         </div>
       )}
+
+      <ClientNotesJournal businessId={businessId} clientId={clientId} />
 
       <div className="slideover-section">
         <h4>История аренд · {history.length}</h4>
@@ -1204,6 +1552,15 @@ export function ClientDetailPanel({
       </div>
 
       <div className="slideover-section" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+        {/* "+ Новая аренда" прямо из карточки (25-й проход, п.1 обзора) —
+            открывает глобальную модалку выше по дереву (см. комментарий у
+            onCreateRental в сигнатуре компонента), доступна везде, где
+            открыта карточка (и во вкладке "Клиенты", и с дашборда). */}
+        {onCreateRental && (
+          <button className="btn btn-primary" onClick={() => onCreateRental(clientId)}>
+            + Новая аренда
+          </button>
+        )}
         {onEdit && (
           <button className="btn" onClick={() => onEdit(clientId)}>
             Изменить
@@ -1245,7 +1602,16 @@ export function ClientDetailPanel({
         />
       )}
 
-      {blacklistDialog}
+      {showBlacklistReason && (
+        <BlacklistReasonModal
+          clientName={client.name}
+          onClose={() => setShowBlacklistReason(false)}
+          onConfirm={async (reason) => {
+            setShowBlacklistReason(false);
+            await applyRating("blacklist", reason);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1357,5 +1723,165 @@ function MergeClientModal({
       </form>
       {confirmDialog}
     </dialog>
+  );
+}
+
+/** Причина занесения в чёрный список (25-й проход, п.5 обзора) — простой
+ * `<dialog>` со свободным текстовым полем, тем же идиомом, что и остальные
+ * модалки в файле. Отдельная модалка, а не общий useConfirm() (тот умеет
+ * только да/нет, свободный текст не собирает) — см. Client.blacklist_reason
+ * в app/models/inventory.py. */
+function BlacklistReasonModal({
+  clientName,
+  onClose,
+  onConfirm,
+}: {
+  clientName: string;
+  onClose: () => void;
+  onConfirm: (reason: string) => Promise<void> | void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [reason, setReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+  }, []);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      await onConfirm(reason.trim());
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <dialog
+      id="modal"
+      ref={ref}
+      onClose={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <form onSubmit={(e) => void handleSubmit(e)}>
+        <div className="modal-head">
+          <h3>В чёрный список — «{clientName}»</h3>
+          <button type="button" className="icon-btn" onClick={onClose} disabled={submitting}>
+            <IconClose />
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="field-hint" style={{ marginBottom: "10px" }}>
+            Об этом стоит знать всей команде — укажите, что случилось, чтобы через полгода коллеге не пришлось
+            разбираться заново.
+          </div>
+          <div className="field">
+            <label>Причина</label>
+            <textarea
+              autoFocus
+              rows={3}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Например: не вернул технику вовремя дважды подряд"
+            />
+          </div>
+        </div>
+        <div className="modal-foot">
+          <button type="button" className="btn" onClick={onClose} disabled={submitting}>
+            Отмена
+          </button>
+          <button type="submit" className="btn btn-danger" disabled={submitting}>
+            {submitting ? "Сохраняем…" : "В чёрный список"}
+          </button>
+        </div>
+      </form>
+    </dialog>
+  );
+}
+
+/** Журнал датированных записей по клиенту (25-й проход, п.4 обзора) — в
+ * отличие от Client.notes (одна затираемая памятка выше), append-only
+ * лента с автором и временем каждой записи (см. ClientNote в
+ * app/models/inventory.py). Загружается отдельным запросом при открытии
+ * карточки — та же причина, что и у остального содержимого слайдовера
+ * (история аренд, показатели): не тащить это в общий список клиентов,
+ * который и так может быть большим. */
+function ClientNotesJournal({ businessId, clientId }: { businessId: string; clientId: string }) {
+  const [notes, setNotes] = useState<ClientNote[] | null>(null);
+  const [text, setText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setNotes(null);
+    api
+      .get<ClientNote[]>(`/businesses/${businessId}/clients/${clientId}/notes`)
+      .then((res) => {
+        if (!cancelled) setNotes(res);
+      })
+      .catch(() => {
+        if (!cancelled) setNotes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId, clientId]);
+
+  async function handleAdd(e: React.FormEvent) {
+    e.preventDefault();
+    if (!text.trim()) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      const created = await api.post<ClientNote>(`/businesses/${businessId}/clients/${clientId}/notes`, {
+        text: text.trim(),
+      });
+      setNotes((prev) => [created, ...(prev ?? [])]);
+      setText("");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Не удалось сохранить запись");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="slideover-section">
+      <h4>Журнал{notes ? ` · ${notes.length}` : ""}</h4>
+      <form onSubmit={(e) => void handleAdd(e)} style={{ display: "flex", gap: "6px", marginBottom: "10px" }}>
+        <input
+          style={{ flex: 1 }}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Например: звонил, спрашивал про виброплиту"
+          disabled={submitting}
+        />
+        <button type="submit" className="btn btn-sm" disabled={submitting || !text.trim()}>
+          Добавить
+        </button>
+      </form>
+      {error && <div className="form-error">{error}</div>}
+      {notes === null ? (
+        <div className="empty-note">Загрузка…</div>
+      ) : notes.length === 0 ? (
+        <div className="empty-note">Записей пока нет</div>
+      ) : (
+        notes.map((n) => (
+          <div className="mini-item" key={n.id} style={{ alignItems: "flex-start" }}>
+            <span>{n.text}</span>
+            <span style={{ color: "var(--muted)", fontSize: "11.5px", whiteSpace: "nowrap", marginLeft: "8px" }}>
+              {n.employee_name ?? "—"} · {fmtDate(n.created_at.slice(0, 10))}
+            </span>
+          </div>
+        ))
+      )}
+    </div>
   );
 }

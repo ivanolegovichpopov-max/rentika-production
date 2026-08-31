@@ -191,3 +191,131 @@ def test_import_clients_csv_requires_name_column(client):
     files = {"file": ("clients.csv", csv_text.encode("utf-8"), "text/csv")}
     resp = client.post(f"/api/businesses/{business_id}/clients/import", files=files, headers=headers)
     assert resp.status_code == 400
+
+
+def test_import_clients_csv_tags_column(client):
+    """25-й проход, п.8: tags — единственное новое поле 25-го прохода,
+    добавленное в CSV-импорт (реквизиты организации/скидка — сознательно
+    нет, см. docstring import_clients)."""
+    owner = register_business(client, email="clients-import-tags@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    csv_text = 'name,tags\nОптовик,"постоянный,оптовик"\n'
+    files = {"file": ("clients.csv", csv_text.encode("utf-8"), "text/csv")}
+    resp = client.post(f"/api/businesses/{business_id}/clients/import", files=files, headers=headers)
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["created"] == 1
+    assert result["results"][0]["client"]["tags"] == "постоянный,оптовик"
+
+
+def test_create_client_with_org_fields_and_tags(client):
+    """25-й проход, п.2/8: client_type=company + реквизиты, plus tags."""
+    owner = register_business(client, email="clients-org@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/clients",
+        json={
+            "name": "ООО Ромашка",
+            "client_type": "company",
+            "contact_person": "Петров Пётр",
+            "inn": "7701234567",
+            "default_discount_percent": 10,
+            "tags": "постоянный,оптовик",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["client_type"] == "company"
+    assert body["contact_person"] == "Петров Пётр"
+    assert body["inn"] == "7701234567"
+    assert body["default_discount_percent"] == 10
+    assert body["tags"] == "постоянный,оптовик"
+
+    # По умолчанию — физлицо, без реквизитов.
+    default_resp = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Иванов Иван"}, headers=headers
+    )
+    assert default_resp.json()["client_type"] == "individual"
+    assert default_resp.json()["default_discount_percent"] is None
+
+
+def test_set_and_clear_blacklist_reason(client):
+    """25-й проход, п.5: причина чёрного списка — задаётся и очищается через
+    обычный PATCH (см. ClientUpdate), эндпоинт не проверяет, что рейтинг
+    и причина меняются вместе — это ответственность фронта."""
+    owner = register_business(client, email="clients-blacklist@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Проблемный клиент"}, headers=headers
+    ).json()["id"]
+
+    resp = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}",
+        json={"rating": "blacklist", "blacklist_reason": "Не вернул технику вовремя дважды"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["rating"] == "blacklist"
+    assert resp.json()["blacklist_reason"] == "Не вернул технику вовремя дважды"
+
+    cleared = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}",
+        json={"rating": "normal", "blacklist_reason": None},
+        headers=headers,
+    )
+    assert cleared.json()["rating"] == "normal"
+    assert cleared.json()["blacklist_reason"] is None
+
+
+def test_client_notes_journal_crud(client):
+    """25-й проход, п.4: журнал заметок — append-only лента, отдельная от
+    Client.notes, с автором и порядком от новых к старым."""
+    owner = register_business(client, email="clients-notes@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Клиент с журналом"}, headers=headers
+    ).json()["id"]
+
+    empty = client.get(f"/api/businesses/{business_id}/clients/{client_id}/notes", headers=headers)
+    assert empty.status_code == 200
+    assert empty.json() == []
+
+    first = client.post(
+        f"/api/businesses/{business_id}/clients/{client_id}/notes", json={"text": "Звонил, спрашивал про виброплиту"}, headers=headers
+    )
+    assert first.status_code == 201
+    assert first.json()["text"] == "Звонил, спрашивал про виброплиту"
+    assert first.json()["employee_name"] is not None  # владелец бизнеса — тоже сотрудник (см. deps.py)
+
+    second = client.post(
+        f"/api/businesses/{business_id}/clients/{client_id}/notes", json={"text": "Приходил, забрал перфоратор"}, headers=headers
+    )
+    assert second.status_code == 201
+
+    listed = client.get(f"/api/businesses/{business_id}/clients/{client_id}/notes", headers=headers).json()
+    assert len(listed) == 2
+    # От новых к старым.
+    assert listed[0]["text"] == "Приходил, забрал перфоратор"
+    assert listed[1]["text"] == "Звонил, спрашивал про виброплиту"
+
+
+def test_client_notes_reject_unknown_client(client):
+    owner = register_business(client, email="clients-notes2@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/clients/00000000-0000-0000-0000-000000000000/notes",
+        json={"text": "Заметка"},
+        headers=headers,
+    )
+    assert resp.status_code == 404

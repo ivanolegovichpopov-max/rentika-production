@@ -113,6 +113,22 @@ export interface Client {
   rating: "normal" | "watch" | "blacklist";
   notes: string | null;
   created_at: string;
+  // ---- 25-й проход (обзор «глазами обычного пользователя») ----
+  client_type: "individual" | "company";
+  contact_person: string | null;
+  inn: string | null;
+  default_discount_percent: number | null;
+  tags: string | null;
+  blacklist_reason: string | null;
+}
+
+export interface ClientNote {
+  id: string;
+  client_id: string;
+  employee_id: string | null;
+  employee_name: string | null;
+  text: string;
+  created_at: string;
 }
 
 export interface ClientImportRowResult {

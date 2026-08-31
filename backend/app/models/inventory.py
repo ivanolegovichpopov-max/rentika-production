@@ -7,7 +7,7 @@ app/services/pricing.py при портировании эндпоинтов (с
 """
 import enum
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -35,6 +35,17 @@ class ClientRating(str, enum.Enum):
     normal = "normal"
     watch = "watch"          # «на контроле»
     blacklist = "blacklist"  # «чёрный список»
+
+
+class ClientType(str, enum.Enum):
+    """Физлицо или организация (25-й проход, обзор «глазами обычного
+    пользователя», п.2) — у организации другой набор реквизитов для
+    договора (контактное лицо, ИНН вместо паспорта). Client.name используется
+    для ОБОИХ типов как есть — для организации это название компании, второе
+    поле для имени не заводилось."""
+
+    individual = "individual"
+    company = "company"
 
 
 class EquipmentCategory(Base):
@@ -168,7 +179,73 @@ class Client(Base):
         Enum(ClientRating, name="client_rating"), default=ClientRating.normal, nullable=False
     )
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # ---- 25-й проход (обзор «глазами обычного пользователя») ----
+    client_type: Mapped[ClientType] = mapped_column(
+        Enum(ClientType, name="client_type"), default=ClientType.individual, nullable=False
+    )
+    # Контактное лицо и ИНН имеют смысл только для client_type=company — на
+    # уровне БД/схемы это НЕ проверяется (та же снисходительность, что и у
+    # "всё или ничего" в ступенчатом тарифе оборудования — см. EquipmentCreate),
+    # проверка чисто визуальная на фронте (форма показывает эти поля только
+    # для организации).
+    contact_person: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    inn: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Скидка по умолчанию для этого клиента, В ПРОЦЕНТАХ (0-100) — в отличие
+    # от Rental.discount, который фиксированная сумма в рублях за конкретную
+    # аренду: клиентский умолчательный размер скидки логичнее держать в
+    # процентах, потому что сумма аренды каждый раз разная, а скидка "всегда
+    # 10%" — нет. Применяется как ПОДСКАЗКА при создании новой аренды (см.
+    # app/api/routes/rentals.py:create_rental) — переводится в фиксированную
+    # рублёвую Rental.discount один раз в момент создания, дальше живёт как
+    # обычная скидка конкретной аренды (её по-прежнему можно поменять вручную).
+    default_discount_percent: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    # Свободные метки через запятую ("постоянный,оптовик") — сознательно НЕ
+    # отдельная таблица-справочник (как категории оборудования): теги здесь
+    # произвольные, без нужды в переименовании/подсчёте использований на
+    # уровне бизнеса, поэтому простое текстовое поле дешевле и достаточно.
+    tags: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Причина занесения в чёрный список — чтобы через полгода кто-то другой
+    # из команды видел, ПОЧЕМУ клиент проблемный, а не только сам факт.
+    # Очищается фронтом при снятии статуса "чёрный список" (см. ClientsTab.tsx).
+    blacklist_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ClientNote(Base):
+    """Журнал записей по клиенту (25-й проход, п.4 обзора) — в отличие от
+    Client.notes (одно затираемое поле, "текущая памятка"), это лента
+    отдельных датированных записей ("14 авг: звонил, спрашивал про
+    виброплиту") с указанием, кто из сотрудников её оставил — append-only,
+    без редактирования/удаления отдельных записей (тот же принцип, что и у
+    AuditLog — история не переписывается)."""
+
+    __tablename__ = "client_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("clients.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # SET NULL, а не RESTRICT/CASCADE — увольнение/удаление сотрудника не
+    # должно ни блокироваться его старыми записями в журнале, ни утаскивать
+    # их за собой; текст записи сам по себе остаётся ценным без автора.
+    employee_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
+    )
+    text: Mapped[str] = mapped_column(String(2000), nullable=False)
+    # Журнал сортируется от новых к старым (см. list_client_notes) — в
+    # отличие от остальных created_at в проекте (server_default=func.now()),
+    # здесь ВАЖНА сортировка внутри одной секунды (несколько записей подряд —
+    # обычное дело), а секундного разрешения server_default на SQLite (в
+    # тестах) и теоретически близких по времени запросов на Postgres может не
+    # хватить. Поэтому клиентский default с микросекундной точностью — он
+    # приоритетнее server_default при обычной вставке через ORM (тот остаётся
+    # подстраховкой на случай прямой SQL-вставки в обход ORM).
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now()
+    )
 
 
 class Rental(Base):

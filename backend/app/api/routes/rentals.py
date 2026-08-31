@@ -11,7 +11,7 @@ from app.database import get_db
 from app.models.business import PermissionLevel, ResourceType
 from app.models.inventory import Client, Equipment, EquipmentStatus, Rental, RentalItem, RentalStatus
 from app.schemas.inventory import RentalCreate, RentalEdit, RentalIssue, RentalOut, RentalReturn
-from app.services.pricing import compute_rental_breakdown
+from app.services.pricing import compute_rental_breakdown, item_cost_for_days, span_days
 
 router = APIRouter(prefix="/businesses/{business_id}/rentals", tags=["rentals"])
 
@@ -106,6 +106,30 @@ async def create_rental(body: RentalCreate, ctx: BusinessContext = Depends(edit_
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"«{equipment.name}» сейчас недоступно (статус: {equipment.status.value})")
         items_data.append(equipment)
 
+    # 25-й проход, п.7: если скидка не передана явно телом запроса — подставляем
+    # её сами из клиентской умолчательной default_discount_percent (ПОДСКАЗКА,
+    # не жёсткая привязка — дальше это обычная Rental.discount в рублях,
+    # которую можно менять как любую другую, скидка клиента при этом не
+    # трогается). Явно переданное значение (в том числе 0) всегда в приоритете.
+    if body.discount is not None:
+        discount = body.discount
+    elif client.default_discount_percent:
+        planned_days = span_days(body.start_date, body.end_date)
+        base_cost = sum(
+            item_cost_for_days(
+                daily_rate=float(eq.daily_rate),
+                days=planned_days,
+                period_days=eq.period_days,
+                period_price=float(eq.period_price) if eq.period_price is not None else None,
+                period_price_after=float(eq.period_price_after) if eq.period_price_after is not None else None,
+                after_period_days=eq.after_period_days,
+            )
+            for eq in items_data
+        )
+        discount = round(base_cost * float(client.default_discount_percent) / 100)
+    else:
+        discount = 0
+
     rental = Rental(
         business_id=ctx.business_id,
         client_id=body.client_id,
@@ -113,6 +137,7 @@ async def create_rental(body: RentalCreate, ctx: BusinessContext = Depends(edit_
         end_date=body.end_date,
         status=RentalStatus.booked if body.start_date > date.today() else RentalStatus.active,
         created_by_employee_id=ctx.employee.id if ctx.employee else None,
+        discount=discount,
     )
     db.add(rental)
     db.flush()

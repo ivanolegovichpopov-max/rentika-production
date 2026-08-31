@@ -200,6 +200,18 @@ function DashboardShell({
   // по итогам обзора это лучше, чем прыгать на другую вкладку ради формы,
   // которая и так открывается поверх всего интерфейса.
   const [showCreateRental, setShowCreateRental] = useState(false);
+  // Клиент, для которого открыта "Новая аренда" из его же карточки (25-й
+  // проход, п.1 обзора) — null означает обычное открытие кнопкой в шапке
+  // (без предзаполненного клиента), см. openCreateRentalForClient ниже.
+  const [createRentalClientId, setCreateRentalClientId] = useState<string | null>(null);
+  function openCreateRentalForClient(clientId: string) {
+    // Закрываем карточку клиента перед открытием формы — та же логика, что
+    // и при переходе "Изменить" (см. onEdit у ClientsTab): поверх слайдовера
+    // модалка технически рендерится нормально, но так чище.
+    setDashClientId(null);
+    setCreateRentalClientId(clientId);
+    setShowCreateRental(true);
+  }
   // Сотрудник, на строку которого нужно проскроллить и подсветить при
   // переходе на вкладку "Сотрудники" по клику из блока "Команда" в сайдбаре —
   // тем же счётчиковым паттерном, чтобы повторный клик по уже подсвеченной
@@ -419,7 +431,9 @@ function DashboardShell({
                   isOwner={isOwner}
                 />
               )}
-              {view === "clients" && <ClientsTab businessId={businessId} search={search} />}
+              {view === "clients" && (
+                <ClientsTab businessId={businessId} search={search} onCreateRental={openCreateRentalForClient} />
+              )}
               {view === "rentals" && (
                 <RentalsTab
                   businessId={businessId}
@@ -467,6 +481,7 @@ function DashboardShell({
           clientId={dashClientId}
           onClose={() => setDashClientId(null)}
           onDelete={(id) => void handleDashClientDelete(id)}
+          onCreateRental={openCreateRentalForClient}
         />
       )}
       {dashEquipmentId && <div className="slideover-backdrop" onClick={() => setDashEquipmentId(null)} />}
@@ -501,7 +516,11 @@ function DashboardShell({
           clients={clients}
           equipment={equipment}
           rentals={rentals}
-          onClose={() => setShowCreateRental(false)}
+          initialClientId={createRentalClientId ?? undefined}
+          onClose={() => {
+            setShowCreateRental(false);
+            setCreateRentalClientId(null);
+          }}
           onCreated={async () => {
             await Promise.all([reloadRentals(), reloadEquipment()]);
           }}
