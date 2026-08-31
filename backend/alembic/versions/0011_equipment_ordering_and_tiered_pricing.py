@@ -36,7 +36,17 @@
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0011_equipment_ordering_and_tiered_pricing"
+# revision короче имени файла НАМЕРЕННО — alembic_version.version_num в
+# стандартной схеме Alembic это VARCHAR(32), а исходный id этой миграции
+# ("0011_equipment_ordering_and_tiered_pricing", как и имя файла, 42 символа)
+# на реальном Postgres валился на последнем шаге апгрейда ("value too long
+# for type character varying(32)"), откатывая всю миграцию целиком (Alembic
+# оборачивает каждую миграцию в одну транзакцию). На SQLite в тестах это не
+# ловится — там строки не усекаются по длине колонки, поэтому баг не всплыл
+# в pytest (137/137 проходили). Имя файла оставлено как есть для читаемости
+# истории миграций; коротким должен быть только сам revision-id. Держать id
+# новых миграций ≤32 символов.
+revision = "0011_ordering_tiered_pricing"
 down_revision = "0010_equipment_warehouses"
 branch_labels = None
 depends_on = None
