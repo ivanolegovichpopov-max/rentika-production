@@ -115,6 +115,27 @@ export interface Client {
   created_at: string;
 }
 
+export interface ClientImportRowResult {
+  row: number;
+  ok: boolean;
+  name: string;
+  error: string | null;
+  client: Client | null;
+  // Телефон строки совпал с уже существующим клиентом (либо с уже
+  // импортированной ранее в этом же файле строкой) — строка всё равно
+  // создаётся, это только сигнал сотруднику проверить и, возможно,
+  // объединить карточки вручную после импорта (см. "Объединить с другим
+  // клиентом" в ClientDetailPanel).
+  duplicate_warning: boolean;
+}
+
+export interface ClientImportResult {
+  total: number;
+  created: number;
+  failed: number;
+  results: ClientImportRowResult[];
+}
+
 export interface RentalItem {
   equipment_id: string;
   daily_rate_snapshot: number;

@@ -262,6 +262,41 @@ class ClientOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ClientImportRowResult(BaseModel):
+    """Одна строка CSV-импорта клиентов — тот же принцип отчёта построчно,
+    что и EquipmentImportRowResult (см. app/api/routes/clients.py:import_clients):
+    невалидные строки не роняют весь запрос, каждая получает свой статус.
+    duplicate_warning — True, если телефон строки совпал с уже существующим
+    клиентом (либо с уже импортированной в этом же файле строкой) — сама
+    строка при этом ВСЁ РАВНО создаётся (совпадающий телефон — не всегда
+    один и тот же человек, например у членов семьи), но сотрудник видит
+    предупреждение в отчёте и может решить объединить карточки вручную
+    (см. ClientMerge)."""
+
+    row: int
+    ok: bool
+    name: str
+    error: str | None = None
+    client: ClientOut | None = None
+    duplicate_warning: bool = False
+
+
+class ClientImportResult(BaseModel):
+    total: int
+    created: int
+    failed: int
+    results: list[ClientImportRowResult]
+
+
+class ClientMerge(BaseModel):
+    """Слияние дублей клиента (24-й проход, п.7 обзора «Клиенты») — см.
+    app/api/routes/clients.py:merge_client. into_client_id — карточка-ЦЕЛЬ,
+    которая остаётся; клиент из пути запроса — источник, будет удалён после
+    переноса на него всей истории аренд."""
+
+    into_client_id: uuid.UUID
+
+
 class RentalCreate(BaseModel):
     client_id: uuid.UUID
     equipment_ids: list[uuid.UUID] = Field(min_length=1)
