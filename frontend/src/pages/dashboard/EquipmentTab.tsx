@@ -25,6 +25,7 @@ import { EquipmentImportModal } from "./equipment/EquipmentImportModal";
 import { EquipmentCategoriesModal } from "./equipment/EquipmentCategoriesModal";
 import { EquipmentWarehousesModal } from "./equipment/EquipmentWarehousesModal";
 import { EquipmentDetailPanel } from "./equipment/EquipmentDetailPanel";
+import { Dropdown } from "../../components/Dropdown";
 
 export { EquipmentDetailPanel };
 
@@ -797,23 +798,29 @@ export function EquipmentTab({
         <div className="panel" style={{ marginBottom: "10px" }}>
           <div className="panel-body" style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
             <strong>Выбрано: {selectedIds.size}</strong>
-            <select value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)} style={{ maxWidth: "200px" }} disabled={bulkBusy}>
-              <option value="">Изменить категорию…</option>
-              {categoryNames.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
+            <Dropdown
+              value={bulkCategory}
+              onChange={setBulkCategory}
+              placeholder="Изменить категорию…"
+              disabled={bulkBusy}
+              style={{ maxWidth: "200px" }}
+              options={categoryNames.map((name) => ({ value: name, label: name }))}
+            />
             <button className="btn btn-sm" disabled={!bulkCategory || bulkBusy} onClick={() => void handleBulkCategory()}>
               Применить
             </button>
-            <select value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)} style={{ maxWidth: "180px" }} disabled={bulkBusy}>
-              <option value="">Изменить статус…</option>
-              <option value="available">Свободно</option>
-              <option value="maintenance">На обслуживании</option>
-              <option value="retired">Списано</option>
-            </select>
+            <Dropdown
+              value={bulkStatus}
+              onChange={setBulkStatus}
+              placeholder="Изменить статус…"
+              disabled={bulkBusy}
+              style={{ maxWidth: "180px" }}
+              options={[
+                { value: "available", label: "Свободно" },
+                { value: "maintenance", label: "На обслуживании" },
+                { value: "retired", label: "Списано" },
+              ]}
+            />
             <button className="btn btn-sm" disabled={!bulkStatus || bulkBusy} onClick={() => void handleBulkStatus()}>
               Применить
             </button>

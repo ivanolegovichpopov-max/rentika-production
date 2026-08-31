@@ -30,6 +30,7 @@ import type { Client, Equipment, Rental } from "../../api/types";
 import { todayISO, isoAddDays, dayDiff, ymd, fmtDate, money, spanDays } from "../../lib/format";
 import { IconChevronDown, IconGrip, IconClose } from "../../lib/icons";
 import { useToast } from "../../components/Toast";
+import { Dropdown } from "../../components/Dropdown";
 
 const CAL_RANGE_OPTIONS: (number | "month")[] = [7, 14, 30, "month"];
 
@@ -816,15 +817,12 @@ function QuickBookModal({
           ) : (
             <div className="field">
               <label>Клиент</label>
-              <select required value={clientId} onChange={(e) => setClientId(e.target.value)}>
-                <option value="" disabled>Выберите клиента</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                    {c.phone ? ` · ${c.phone}` : ""}
-                  </option>
-                ))}
-              </select>
+              <Dropdown
+                value={clientId}
+                onChange={setClientId}
+                placeholder="Выберите клиента"
+                options={clients.map((c) => ({ value: c.id, label: c.name + (c.phone ? ` · ${c.phone}` : "") }))}
+              />
             </div>
           )}
           <div className="field-row">

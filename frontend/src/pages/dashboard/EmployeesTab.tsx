@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import type { Employee, Position, PermissionLevel, ResourceType } from "../../api/types";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { Dropdown } from "../../components/Dropdown";
 
 const RESOURCES: { key: ResourceType; label: string }[] = [
   { key: "equipment", label: "Оборудование" },
@@ -136,12 +137,15 @@ export function EmployeesTab({
           </label>
           <label>
             Должность
-            <select value={inviteForm.position_id} onChange={(e) => setInviteForm({ ...inviteForm, position_id: e.target.value })}>
-              <option value="">Без должности (нет доступа к данным)</option>
-              {positions.map((p) => (
-                <option key={p.id} value={p.id}>{p.title}</option>
-              ))}
-            </select>
+            <Dropdown
+              value={inviteForm.position_id}
+              onChange={(v) => setInviteForm({ ...inviteForm, position_id: v })}
+              placeholder="Без должности (нет доступа к данным)"
+              options={[
+                { value: "", label: "Без должности (нет доступа к данным)" },
+                ...positions.map((p) => ({ value: p.id, label: p.title })),
+              ]}
+            />
           </label>
           <label>
             Временный пароль
@@ -205,11 +209,15 @@ export function EmployeesTab({
                   <tr key={key}>
                     <td>{label}</td>
                     <td>
-                      <select value={current} onChange={(e) => handlePermissionChange(p.id, key, e.target.value as PermissionLevel)}>
-                        {(Object.keys(LEVEL_LABEL) as PermissionLevel[]).map((lvl) => (
-                          <option key={lvl} value={lvl}>{LEVEL_LABEL[lvl]}</option>
-                        ))}
-                      </select>
+                      <Dropdown
+                        value={current}
+                        onChange={(v) => handlePermissionChange(p.id, key, v as PermissionLevel)}
+                        placeholder={LEVEL_LABEL[current]}
+                        options={(Object.keys(LEVEL_LABEL) as PermissionLevel[]).map((lvl) => ({
+                          value: lvl,
+                          label: LEVEL_LABEL[lvl],
+                        }))}
+                      />
                     </td>
                   </tr>
                 );

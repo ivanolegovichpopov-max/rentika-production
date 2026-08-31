@@ -761,6 +761,17 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
   display: flex; flex-direction: row; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 6px; font-size: 13px;
   cursor: pointer; user-select: none;
 }
+/* 26-й проход: тот же .cat-filter-option теперь используется и на <label>
+   (мультивыбор категорий/складов — checkbox, без изменений), и на <button>
+   (одиночный выбор — см. components/Dropdown.tsx, единая замена всех
+   нативных <select> в приложении). <label> у браузера по умолчанию без
+   рамки/фона, а вот <button> — с ними (плюс не наследует шрифт страницы),
+   отсюда и разница: без явного сброса опции в Dropdown рисовались с
+   уродливой чёрной рамкой кнопки и системным шрифтом вместо шрифта
+   приложения — та же "нативная" проблема, ради решения которой весь этот
+   компонент и делался. Сброс сузен до button.cat-filter-option, чтобы не
+   трогать существующий <label>-вариант.  */
+button.cat-filter-option { border: none; background: none; width: 100%; text-align: left; font: inherit; color: inherit; }
 .cat-filter-option:hover { background: var(--surface-2); }
 .cat-filter-option.checked { background: var(--accent-soft); }
 .cat-filter-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -9,6 +9,7 @@ import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc } from "./doc
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
+import { Dropdown } from "../../components/Dropdown";
 
 /**
  * Порт renderRentals()/addRentalForm()/editRentalForm()/issueRentalForm()/
@@ -438,17 +439,12 @@ export function CreateRentalModal({
     >
       <div className="field">
         <label>Клиент</label>
-        <select required value={clientId} onChange={(e) => setClientId(e.target.value)}>
-          <option value="" disabled>
-            Выберите клиента
-          </option>
-          {clients.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-              {c.phone ? ` · ${c.phone}` : ""}
-            </option>
-          ))}
-        </select>
+        <Dropdown
+          value={clientId}
+          onChange={setClientId}
+          placeholder="Выберите клиента"
+          options={clients.map((c) => ({ value: c.id, label: c.name + (c.phone ? ` · ${c.phone}` : "") }))}
+        />
       </div>
       <div className="field-row">
         <div className="field">
@@ -822,13 +818,12 @@ export function RentalsTab({
           ))}
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <select value={sort} onChange={(e) => setSort(e.target.value)}>
-            {SORTS.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
+          <Dropdown
+            value={sort}
+            onChange={setSort}
+            placeholder={SORTS[0]?.label ?? ""}
+            options={SORTS.map((s) => ({ value: s.id, label: s.label }))}
+          />
           <button
             type="button"
             className={"btn btn-sm" + (riskOnly ? " btn-primary" : "")}

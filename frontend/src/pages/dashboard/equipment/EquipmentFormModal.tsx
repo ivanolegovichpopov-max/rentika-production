@@ -9,6 +9,7 @@ import { IconClose } from "../../../lib/icons";
 import { useConfirm } from "../../../components/ConfirmDialog";
 import { itemCostForDays } from "../../../lib/financeCalc";
 import { CategoryAutocomplete } from "./CategoryAutocomplete";
+import { Dropdown } from "../../../components/Dropdown";
 import { type EquipmentFormState, hasTieredValues, isFormDirty, parseDecimalField } from "./formHelpers";
 
 /** Модалка добавления/изменения оборудования — тот же идиом `<dialog>`
@@ -292,16 +293,12 @@ export function EquipmentFormModal({
               // отклонён backend'ом (400), выпадающий список честнее
               // показывает границы прав, чем текстовое поле, которое
               // потом откажется сохраняться.
-              <select required value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                <option value="" disabled>
-                  Выберите категорию…
-                </option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.name}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+              <Dropdown
+                value={form.category}
+                onChange={(v) => setForm({ ...form, category: v })}
+                placeholder="Выберите категорию…"
+                options={categories.map((c) => ({ value: c.name, label: c.name }))}
+              />
             )}
             {categories.length === 0 && !isOwner && (
               <div className="field-hint">Справочник категорий пуст — попросите владельца бизнеса добавить категории.</div>
@@ -338,14 +335,15 @@ export function EquipmentFormModal({
                 placeholder="Необязательно — если несколько точек хранения"
               />
             ) : (
-              <select value={form.warehouse} onChange={(e) => setForm({ ...form, warehouse: e.target.value })}>
-                <option value="">Не указан</option>
-                {warehouses.map((w) => (
-                  <option key={w.id} value={w.name}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
+              <Dropdown
+                value={form.warehouse}
+                onChange={(v) => setForm({ ...form, warehouse: v })}
+                placeholder="Не указан"
+                options={[
+                  { value: "", label: "Не указан" },
+                  ...warehouses.map((w) => ({ value: w.name, label: w.name })),
+                ]}
+              />
             )}
             {isNewWarehouse && (
               <div className="field-hint">Такого склада пока нет — он будет создан автоматически при сохранении.</div>

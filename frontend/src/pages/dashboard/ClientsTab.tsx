@@ -10,6 +10,7 @@ import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
 import { parseCsv, csvRowsToObjects, toCsv } from "../../lib/csv";
 import { DocModal, buildContractDoc } from "./documents";
+import { Dropdown } from "../../components/Dropdown";
 
 /* ============================================================
    Форма добавления/изменения клиента — двадцать четвёртый проход (обзор
@@ -1109,12 +1110,18 @@ export function ClientsTab({
         <div className="panel" style={{ marginBottom: "10px" }}>
           <div className="panel-body" style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
             <strong>Выбрано: {selectedIds.size}</strong>
-            <select value={bulkRating} onChange={(e) => setBulkRating(e.target.value)} style={{ maxWidth: "200px" }} disabled={bulkBusy}>
-              <option value="">Изменить рейтинг…</option>
-              <option value="normal">Надёжный</option>
-              <option value="watch">На контроле</option>
-              <option value="blacklist">Чёрный список</option>
-            </select>
+            <Dropdown
+              value={bulkRating}
+              onChange={setBulkRating}
+              placeholder="Изменить рейтинг…"
+              disabled={bulkBusy}
+              style={{ maxWidth: "200px" }}
+              options={[
+                { value: "normal", label: "Надёжный" },
+                { value: "watch", label: "На контроле" },
+                { value: "blacklist", label: "Чёрный список" },
+              ]}
+            />
             <button className="btn btn-sm" disabled={!bulkRating || bulkBusy} onClick={() => void handleBulkRating()}>
               Применить
             </button>
@@ -1698,17 +1705,12 @@ function MergeClientModal({
           </div>
           <div className="field">
             <label>Перенести историю в</label>
-            <select required value={targetId} onChange={(e) => setTargetId(e.target.value)}>
-              <option value="" disabled>
-                Выберите клиента
-              </option>
-              {candidates.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                  {c.phone ? ` · ${c.phone}` : ""}
-                </option>
-              ))}
-            </select>
+            <Dropdown
+              value={targetId}
+              onChange={setTargetId}
+              placeholder="Выберите клиента"
+              options={candidates.map((c) => ({ value: c.id, label: c.name + (c.phone ? ` · ${c.phone}` : "") }))}
+            />
           </div>
           {error && <div className="form-error">{error}</div>}
         </div>

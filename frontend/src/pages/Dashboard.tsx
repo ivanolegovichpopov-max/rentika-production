@@ -19,6 +19,7 @@ import { colorFromId, initials } from "../lib/format";
 import { periodFor, type FinancePeriod } from "../lib/financeCalc";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
+import { Dropdown } from "../components/Dropdown";
 import {
   IconSearch,
   IconPlus,
@@ -314,11 +315,13 @@ function DashboardShell({
         </button>
 
         {businesses.length > 1 && (
-          <select value={businessId} onChange={(e) => setCurrentBusinessId(e.target.value)}>
-            {businesses.map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
-            ))}
-          </select>
+          <Dropdown
+            value={businessId}
+            onChange={setCurrentBusinessId}
+            placeholder={currentBusiness?.name ?? ""}
+            style={{ width: "100%" }}
+            options={businesses.map((b) => ({ value: b.id, label: b.name }))}
+          />
         )}
 
         <nav className="nav">
