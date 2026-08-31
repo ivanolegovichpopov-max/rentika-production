@@ -10,6 +10,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { parseCsv, csvRowsToObjects, toCsv } from "../../lib/csv";
 import { itemCostForDays } from "../../lib/financeCalc";
+import { usePersistedState } from "../../lib/persist";
 
 const FILTERS: { id: string; label: string }[] = [
   { id: "all", label: "Все" },
@@ -458,11 +459,16 @@ function EquipmentFormModal({
   // формы, НЕ закрывая её (родитель не сбрасывает modalMode), чтобы, заметив
   // опечатку в справочнике прямо во время добавления позиции, не пришлось
   // отменять уже введённые данные. Необязательная — форма работает и без
-  // неё, если родитель её не передал.
-  onManageCategories?: () => void;
+  // неё, если родитель её не передал. Принимает колбэк onPicked — родитель
+  // прокидывает его в EquipmentCategoriesModal как onSelect: клик по строке
+  // справочника подставит имя сюда, в поле формы (19-й проход, п.2 обзора —
+  // "сделать все значения кликабельными"). Открытая тем же кликом из тулбара
+  // (без onManageCategories) модалка select-режим не показывает — там onSelect
+  // не передаётся вовсе, см. рендер модалки у родителя.
+  onManageCategories?: (onPicked: (name: string) => void) => void;
   // Ссылка "Управление складами" — тот же смысл, что и onManageCategories
   // выше (восемнадцатый проход).
-  onManageWarehouses?: () => void;
+  onManageWarehouses?: (onPicked: (name: string) => void) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
@@ -691,7 +697,11 @@ function EquipmentFormModal({
             )}
             {isOwner && onManageCategories && (
               <div className="field-hint">
-                <button type="button" className="link-btn" onClick={onManageCategories}>
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => onManageCategories((name) => setForm((f) => ({ ...f, category: name })))}
+                >
                   Управление категориями
                 </button>
               </div>
@@ -728,7 +738,11 @@ function EquipmentFormModal({
             )}
             {isOwner && onManageWarehouses && (
               <div className="field-hint">
-                <button type="button" className="link-btn" onClick={onManageWarehouses}>
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => onManageWarehouses((name) => setForm((f) => ({ ...f, warehouse: name })))}
+                >
                   Управление складами
                 </button>
               </div>
@@ -958,8 +972,8 @@ export function EquipmentDetailPanel({
         <div>
           <h3>{item.name}</h3>
           <div style={{ color: "var(--muted)", fontSize: "12.5px", marginTop: "2px" }}>
-            № {item.code ?? "—"} · {item.category}
-            {item.warehouse ? ` · ${item.warehouse}` : ""}
+            № {item.code ?? "—"} · {item.category} ·{" "}
+            {item.warehouse ? item.warehouse : <span style={{ opacity: 0.6 }}>склад не указан</span>}
           </div>
         </div>
         <button className="icon-btn" onClick={onClose}>
@@ -1187,12 +1201,20 @@ function EquipmentCategoriesModal({
   categories,
   onClose,
   onChanged,
+  onSelect,
 }: {
   open: boolean;
   businessId: string;
   categories: EquipmentCategory[];
   onClose: () => void;
   onChanged: () => void;
+  // Присутствует только когда модалка открыта из формы добавления/изменения
+  // оборудования (ссылка "Управление категориями") — тогда строки становятся
+  // кликабельными: клик подставляет имя в поле формы и закрывает модалку.
+  // Открытая из тулбара ("Категории"), где onSelect не передан, строки не
+  // кликабельны — там это чисто экран управления справочником, выбирать
+  // здесь нечего (19-й проход, п.2 обзора).
+  onSelect?: (name: string) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -1352,6 +1374,11 @@ function EquipmentCategoriesModal({
           </button>
         </div>
         {addError && <div className="form-error" style={{ marginBottom: "10px" }}>{addError}</div>}
+        {onSelect && categories.length > 0 && (
+          <div className="field-hint" style={{ marginBottom: "10px" }}>
+            Нажмите на категорию в списке, чтобы подставить её в форму.
+          </div>
+        )}
         {categories.length === 0 ? (
           <div className="empty-note">Справочник пуст — добавьте первую категорию выше.</div>
         ) : (
@@ -1375,68 +1402,81 @@ function EquipmentCategoriesModal({
                 </tr>
               </thead>
               <tbody>
-                {sortedCategories.map((c) => (
-                  <tr key={c.id}>
-                    <td>
-                      {renamingId === c.id ? (
-                        <>
-                          <input
-                            autoFocus
-                            value={renameValue}
-                            onChange={(e) => setRenameValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") void submitRename(c);
-                              if (e.key === "Escape") setRenamingId(null);
-                            }}
-                            style={{ maxWidth: "220px" }}
-                          />
-                          {rowError[c.id] && <div className="form-error">{rowError[c.id]}</div>}
-                        </>
-                      ) : (
-                        c.name
-                      )}
-                    </td>
-                    <td className="mono">{c.equipment_count}</td>
-                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                      {renamingId === c.id ? (
-                        <>
-                          <button type="button" className="btn btn-sm" onClick={() => setRenamingId(null)} disabled={busyId === c.id}>
-                            Отмена
-                          </button>{" "}
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-primary"
-                            onClick={() => void submitRename(c)}
-                            disabled={busyId === c.id}
-                          >
-                            Сохранить
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            title="Переименовать"
-                            onClick={() => startRename(c)}
-                            disabled={busyId !== null}
-                          >
-                            <IconEdit />
-                          </button>{" "}
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            title={c.equipment_count > 0 ? "Нельзя удалить: категория используется" : "Удалить"}
-                            onClick={() => void handleDelete(c)}
-                            disabled={busyId !== null}
-                          >
-                            <IconTrash />
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {sortedCategories.map((c) => {
+                  // Клик по строке выбирает категорию — только в select-режиме
+                  // (onSelect передан) и только когда строка не в процессе
+                  // переименования (иначе клик по полю ввода/кнопкам конфликтовал
+                  // бы с выбором — 19-й проход, п.2 обзора).
+                  const selectable = !!onSelect && renamingId !== c.id;
+                  return (
+                    <tr
+                      key={c.id}
+                      className={selectable ? "row-selectable" : undefined}
+                      style={selectable ? { cursor: "pointer" } : undefined}
+                      title={selectable ? "Выбрать эту категорию для формы" : undefined}
+                      onClick={selectable ? () => { onSelect(c.name); onClose(); } : undefined}
+                    >
+                      <td>
+                        {renamingId === c.id ? (
+                          <>
+                            <input
+                              autoFocus
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") void submitRename(c);
+                                if (e.key === "Escape") setRenamingId(null);
+                              }}
+                              style={{ maxWidth: "220px" }}
+                            />
+                            {rowError[c.id] && <div className="form-error">{rowError[c.id]}</div>}
+                          </>
+                        ) : (
+                          c.name
+                        )}
+                      </td>
+                      <td className="mono">{c.equipment_count}</td>
+                      <td style={{ textAlign: "right", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+                        {renamingId === c.id ? (
+                          <>
+                            <button type="button" className="btn btn-sm" onClick={() => setRenamingId(null)} disabled={busyId === c.id}>
+                              Отмена
+                            </button>{" "}
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-primary"
+                              onClick={() => void submitRename(c)}
+                              disabled={busyId === c.id}
+                            >
+                              Сохранить
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title="Переименовать"
+                              onClick={() => startRename(c)}
+                              disabled={busyId !== null}
+                            >
+                              <IconEdit />
+                            </button>{" "}
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title={c.equipment_count > 0 ? "Нельзя удалить: категория используется" : "Удалить"}
+                              onClick={() => void handleDelete(c)}
+                              disabled={busyId !== null}
+                            >
+                              <IconTrash />
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1468,12 +1508,15 @@ function EquipmentWarehousesModal({
   warehouses,
   onClose,
   onChanged,
+  onSelect,
 }: {
   open: boolean;
   businessId: string;
   warehouses: EquipmentWarehouse[];
   onClose: () => void;
   onChanged: () => void;
+  // См. onSelect у EquipmentCategoriesModal выше — тот же смысл.
+  onSelect?: (name: string) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -1622,6 +1665,11 @@ function EquipmentWarehousesModal({
           </button>
         </div>
         {addError && <div className="form-error" style={{ marginBottom: "10px" }}>{addError}</div>}
+        {onSelect && warehouses.length > 0 && (
+          <div className="field-hint" style={{ marginBottom: "10px" }}>
+            Нажмите на склад в списке, чтобы подставить его в форму.
+          </div>
+        )}
         {warehouses.length === 0 ? (
           <div className="empty-note">Справочник пуст — добавьте первый склад выше (нужно только если у бизнеса несколько точек хранения).</div>
         ) : (
@@ -1645,68 +1693,77 @@ function EquipmentWarehousesModal({
                 </tr>
               </thead>
               <tbody>
-                {sortedWarehouses.map((w) => (
-                  <tr key={w.id}>
-                    <td>
-                      {renamingId === w.id ? (
-                        <>
-                          <input
-                            autoFocus
-                            value={renameValue}
-                            onChange={(e) => setRenameValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") void submitRename(w);
-                              if (e.key === "Escape") setRenamingId(null);
-                            }}
-                            style={{ maxWidth: "220px" }}
-                          />
-                          {rowError[w.id] && <div className="form-error">{rowError[w.id]}</div>}
-                        </>
-                      ) : (
-                        w.name
-                      )}
-                    </td>
-                    <td className="mono">{w.equipment_count}</td>
-                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                      {renamingId === w.id ? (
-                        <>
-                          <button type="button" className="btn btn-sm" onClick={() => setRenamingId(null)} disabled={busyId === w.id}>
-                            Отмена
-                          </button>{" "}
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-primary"
-                            onClick={() => void submitRename(w)}
-                            disabled={busyId === w.id}
-                          >
-                            Сохранить
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            title="Переименовать"
-                            onClick={() => startRename(w)}
-                            disabled={busyId !== null}
-                          >
-                            <IconEdit />
-                          </button>{" "}
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            title={w.equipment_count > 0 ? "Нельзя удалить: склад используется" : "Удалить"}
-                            onClick={() => void handleDelete(w)}
-                            disabled={busyId !== null}
-                          >
-                            <IconTrash />
-                          </button>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {sortedWarehouses.map((w) => {
+                  const selectable = !!onSelect && renamingId !== w.id;
+                  return (
+                    <tr
+                      key={w.id}
+                      className={selectable ? "row-selectable" : undefined}
+                      style={selectable ? { cursor: "pointer" } : undefined}
+                      title={selectable ? "Выбрать этот склад для формы" : undefined}
+                      onClick={selectable ? () => { onSelect(w.name); onClose(); } : undefined}
+                    >
+                      <td>
+                        {renamingId === w.id ? (
+                          <>
+                            <input
+                              autoFocus
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") void submitRename(w);
+                                if (e.key === "Escape") setRenamingId(null);
+                              }}
+                              style={{ maxWidth: "220px" }}
+                            />
+                            {rowError[w.id] && <div className="form-error">{rowError[w.id]}</div>}
+                          </>
+                        ) : (
+                          w.name
+                        )}
+                      </td>
+                      <td className="mono">{w.equipment_count}</td>
+                      <td style={{ textAlign: "right", whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
+                        {renamingId === w.id ? (
+                          <>
+                            <button type="button" className="btn btn-sm" onClick={() => setRenamingId(null)} disabled={busyId === w.id}>
+                              Отмена
+                            </button>{" "}
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-primary"
+                              onClick={() => void submitRename(w)}
+                              disabled={busyId === w.id}
+                            >
+                              Сохранить
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title="Переименовать"
+                              onClick={() => startRename(w)}
+                              disabled={busyId !== null}
+                            >
+                              <IconEdit />
+                            </button>{" "}
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              title={w.equipment_count > 0 ? "Нельзя удалить: склад используется" : "Удалить"}
+                              onClick={() => void handleDelete(w)}
+                              disabled={busyId !== null}
+                            >
+                              <IconTrash />
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -2031,7 +2088,10 @@ export function EquipmentTab({
 }) {
   const { equipment, equipmentCategories, equipmentWarehouses, rentals, reloadEquipment, reloadEquipmentCategories, reloadEquipmentWarehouses } =
     useData();
-  const [sort, setSort] = useState<EquipmentSort>({ key: null, dir: "asc" });
+  // usePersistedState вместо обычного useState — девятнадцатый проход, п.4
+  // обзора: сортировка переживает обновление страницы (хранится отдельно на
+  // каждый businessId).
+  const [sort, setSort] = usePersistedState<EquipmentSort>(`equipment-sort:${businessId}`, { key: null, dir: "asc" });
   // Массив вместо одиночного значения — 16-й проход, п.11 обзора:
   // мультивыбор категорий в фильтре. Пустой массив = "Все категории" (тот же
   // смысл, что раньше был у "all"), непустой = показывать позиции ЛЮБОЙ из
@@ -2056,8 +2116,13 @@ export function EquipmentTab({
   const [formResetSignal, setFormResetSignal] = useState(0);
   // Пятнадцатый проход (обзор вкладки, пункты 1/3/4): справочник категорий,
   // массовые действия над выбранными строками.
-  const [categoriesModalOpen, setCategoriesModalOpen] = useState(false);
-  const [warehousesModalOpen, setWarehousesModalOpen] = useState(false);
+  // null — закрыта; {} — открыта из тулбара (просто управление справочником);
+  // {onSelect} — открыта из формы добавления/изменения оборудования (ссылка
+  // "Управление категориями/складами") — тогда строки в модалке кликабельны и
+  // выбор подставляется обратно в поле формы через этот колбэк (19-й проход,
+  // п.2 обзора: "сделать все значения кликабельными").
+  const [categoriesModal, setCategoriesModal] = useState<{ onSelect?: (name: string) => void } | null>(null);
+  const [warehousesModal, setWarehousesModal] = useState<{ onSelect?: (name: string) => void } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkCategory, setBulkCategory] = useState("");
   const [bulkStatus, setBulkStatus] = useState("");
@@ -2429,12 +2494,12 @@ export function EquipmentTab({
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
           {isOwner && (
-            <button className="btn" onClick={() => setCategoriesModalOpen(true)}>
+            <button className="btn" onClick={() => setCategoriesModal({})}>
               Категории
             </button>
           )}
           {isOwner && (
-            <button className="btn" onClick={() => setWarehousesModalOpen(true)}>
+            <button className="btn" onClick={() => setWarehousesModal({})}>
               Склады
             </button>
           )}
@@ -2590,8 +2655,8 @@ export function EquipmentTab({
         resetSignal={formResetSignal}
         onClose={closeFormModal}
         onSubmit={(form, addAnother) => handleSubmitForm(form, addAnother)}
-        onManageCategories={isOwner ? () => setCategoriesModalOpen(true) : undefined}
-        onManageWarehouses={isOwner ? () => setWarehousesModalOpen(true) : undefined}
+        onManageCategories={isOwner ? (onPicked) => setCategoriesModal({ onSelect: onPicked }) : undefined}
+        onManageWarehouses={isOwner ? (onPicked) => setWarehousesModal({ onSelect: onPicked }) : undefined}
       />
 
       <EquipmentImportModal
@@ -2603,19 +2668,21 @@ export function EquipmentTab({
       />
 
       <EquipmentCategoriesModal
-        open={categoriesModalOpen}
+        open={categoriesModal !== null}
         businessId={businessId}
         categories={equipmentCategories}
-        onClose={() => setCategoriesModalOpen(false)}
+        onClose={() => setCategoriesModal(null)}
         onChanged={() => void Promise.all([reloadEquipment(), reloadEquipmentCategories()])}
+        onSelect={categoriesModal?.onSelect}
       />
 
       <EquipmentWarehousesModal
-        open={warehousesModalOpen}
+        open={warehousesModal !== null}
         businessId={businessId}
         warehouses={equipmentWarehouses}
-        onClose={() => setWarehousesModalOpen(false)}
+        onClose={() => setWarehousesModal(null)}
         onChanged={() => void Promise.all([reloadEquipment(), reloadEquipmentWarehouses()])}
+        onSelect={warehousesModal?.onSelect}
       />
       {bulkConfirmDialog}
 

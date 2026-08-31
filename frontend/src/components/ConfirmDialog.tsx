@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { IconAlert } from "../lib/icons";
 
 /**
@@ -60,7 +61,24 @@ export function useConfirm() {
     setState(null);
   }
 
-  const dialog = (
+  // 19-й проход, разбор бага "Отмена всё равно закрывает форму": вызывающие
+  // компоненты (EquipmentFormModal, EquipmentCategoriesModal и т.д.) кладут
+  // {dialog} ВНУТРЬ своего собственного <dialog id="modal"> — этот
+  // confirm-modal физически вложен в DOM родительского диалога. showModal()
+  // всё равно красит его поверх (top layer не зависит от DOM-позиции — см.
+  // комментарий про портал автокомплита категорий, 17-й проход), так что
+  // визуально вложенность не мешала. Но клик по кнопке confirm-modal'а
+  // (например "Отмена") — это событие, которое всплывает по РЕАЛЬНОМУ DOM
+  // до родительского <dialog>, а не только до confirm-modal: конкретный
+  // сценарий бага не подтверждён живьём однозначно (нестабильность рендерера
+  // при тестировании), но сама вложенность — ненужный и рискованный источник
+  // побочных эффектов (всплытие кликов, возврат фокуса при закрытии на
+  // соседний топ-левел диалог и т.п.). Портал в document.body убирает
+  // confirm-modal из DOM-поддерева родителя целиком, оставляя только
+  // top-layer-позиционирование (которое и обеспечивает нужный внешний вид) —
+  // так же, как и должен быть устроен любой глобальный/переиспользуемый
+  // диалог, не завязанный на конкретное место вызова.
+  const dialog = createPortal(
     <dialog
       id="confirm-modal"
       ref={ref}
@@ -98,7 +116,8 @@ export function useConfirm() {
           </div>
         </>
       )}
-    </dialog>
+    </dialog>,
+    document.body
   );
 
   return { confirm, dialog };

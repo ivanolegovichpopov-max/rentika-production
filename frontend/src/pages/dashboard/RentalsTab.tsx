@@ -8,6 +8,7 @@ import { IconPrinter, IconEdit, IconClose, IconAlert } from "../../lib/icons";
 import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc } from "./documents";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
+import { usePersistedState } from "../../lib/persist";
 
 /**
  * Порт renderRentals()/addRentalForm()/editRentalForm()/issueRentalForm()/
@@ -719,7 +720,10 @@ export function RentalsTab({
   setFilter: (f: string) => void;
 }) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
-  const [sort, setSort] = useState("date");
+  // usePersistedState — девятнадцатый проход, п.4 обзора «Оборудования»:
+  // сортировка переживает обновление страницы (та же механика, что и в
+  // EquipmentTab, отдельно на каждый businessId).
+  const [sort, setSort] = usePersistedState(`rentals-sort:${businessId}`, "date");
   const [riskOnly, setRiskOnly] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [editRental, setEditRental] = useState<Rental | null>(null);
