@@ -743,6 +743,13 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    из-за чего однострочный текст в невысокой плашке визуально "плавает"
    в зависимости от контекста (соседний текст/иконки со своим line-height). */
 .badge-tag { display: inline-flex; align-items: center; background: var(--accent); color: var(--accent-ink); border-radius: 6px; padding: 1px 6px; font-size: 11px; font-weight: 700; }
+/* Произвольные теги клиента (34-й проход, обзор колонки "Имя") — раньше
+   рисовались тем же .badge-tag, что и системное "Орг.", хотя по смыслу это
+   разные вещи: "Орг." — вычислено системой из client_type, тег — вписан
+   вручную менеджером в свободное поле. Контурная (не заливная) пилюля даёт
+   тот же визуальный вес, что "Орг."/Badge (тональные бейджи уровня/статуса),
+   но явно читается как "ручная пометка", а не "факт, который знает система". */
+.badge-tag-custom { display: inline-flex; align-items: center; background: transparent; color: var(--ink-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 0 5px; font-size: 11px; font-weight: 700; }
 .business-name { font-weight: 600; }
 .tab-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; }
 .tab-toolbar h2 { font-size: 19px; }

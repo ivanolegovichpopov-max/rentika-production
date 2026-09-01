@@ -2029,6 +2029,29 @@ export function ClientsTab({
                                 <Badge meta={{ label: "Неполный профиль", tone: "warning" }} />
                               </span>
                             )}
+                            {/* Произвольные теги клиента (34-й проход, обзор
+                                колонки "Имя") — раньше рендерились отдельным
+                                блоком под телефоном и появлялись только у
+                                части клиентов, из-за чего высота строки
+                                "прыгала" вниз по списку (2 строки текста у
+                                одних клиентов, 3 — у других). Перенесены сюда,
+                                в общий переносимый по ширине ряд вместе с
+                                системными бейджами — теперь дополнительная
+                                информация об имени всегда живёт в одном месте
+                                и переносится по общим правилам cell-name-wrap,
+                                а не создаёт отдельную строку. Класс
+                                .badge-tag-custom (не .badge-tag, которым
+                                рисуется "Орг." выше) — контурная, а не
+                                заливная пилюля: "Орг."/уровень
+                                ценности/"Неполный профиль" — то, что посчитала
+                                система, тег — то, что вписал вручную менеджер;
+                                разный визуальный вес отражает разную природу
+                                данных. */}
+                            {tagList.map((t) => (
+                              <span key={t} className="badge-tag-custom">
+                                {t}
+                              </span>
+                            ))}
                           </div>
                           {/* 29-й проход, п. из обзора "иконки звонок/WhatsApp/
                               email в строке" — раньше здесь рядом с телефоном
@@ -2040,19 +2063,19 @@ export function ClientsTab({
                               к контактам уже есть в карточке клиента
                               (раздел "Контакты" — кликабельные tel:/mailto:
                               ссылки). Убраны; телефон в строке остаётся
-                              обычным текстом. */}
+                              обычным текстом. Форматирование через
+                              formatPhoneInput (34-й проход) — раньше значение
+                              из базы выводилось как есть: если номер попал в
+                              систему не через маску набора в форме (импорт,
+                              API, частичное редактирование), в таблице он мог
+                              выглядеть как угодно ("122", "1" вместо
+                              "+7 900 123-45-67"). Функция чистая и уже
+                              использовалась для маски при вводе — здесь просто
+                              применяется и к отображению сохранённого
+                              значения, само значение в базе не меняется. */}
                           <div className="cell-sub">
-                            <span>{c.phone ?? "—"}</span>
+                            <span>{c.phone ? formatPhoneInput(c.phone) : "—"}</span>
                           </div>
-                          {tagList.length > 0 && (
-                            <div style={{ marginTop: "4px", display: "flex", gap: "4px", flexWrap: "wrap" }}>
-                              {tagList.map((t) => (
-                                <span key={t} className="badge-tag">
-                                  {t}
-                                </span>
-                              ))}
-                            </div>
-                          )}
                         </div>
                       </div>
                     </td>
@@ -2268,7 +2291,9 @@ export function ClientDetailPanel({
                 </span>
               )}
             </h3>
-            <div style={{ color: "var(--muted)", fontSize: "12.5px", marginTop: "2px" }}>{client.phone ?? "—"}</div>
+            <div style={{ color: "var(--muted)", fontSize: "12.5px", marginTop: "2px" }}>
+              {client.phone ? formatPhoneInput(client.phone) : "—"}
+            </div>
             {valueTier && (
               <div style={{ marginTop: "4px" }}>
                 <Badge meta={VALUE_TIER_META[valueTier]} />
@@ -2475,7 +2500,7 @@ export function ClientDetailPanel({
                   кликабельная tel:-ссылка, тем же принципом, что и кнопка
                   "Позвонить" выше. */}
               <span className="k">Телефон</span>
-              <span>{client.phone ? <a href={`tel:${client.phone}`}>{client.phone}</a> : "—"}</span>
+              <span>{client.phone ? <a href={`tel:${client.phone}`}>{formatPhoneInput(client.phone)}</a> : "—"}</span>
               <span className="k">Email</span>
               <span>{client.email ? <a href={`mailto:${client.email}`}>{client.email}</a> : "—"}</span>
               <span className="k">Документ</span>
@@ -2498,7 +2523,7 @@ export function ClientDetailPanel({
             {tagList.length > 0 && (
               <div style={{ marginTop: "10px", display: "flex", gap: "4px", flexWrap: "wrap" }}>
                 {tagList.map((t) => (
-                  <span key={t} className="badge-tag">
+                  <span key={t} className="badge-tag-custom">
                     {t}
                   </span>
                 ))}
