@@ -1675,12 +1675,24 @@ export function ClientsTab({
               что и главное действие. См. components/MoreActionsMenu.tsx. */}
           <MoreActionsMenu
             actions={[
-              {
-                key: "columns",
-                icon: <IconSliders />,
-                label: columnsEditMode ? "Готово (настройка столбцов)" : "Настроить столбцы",
-                onClick: () => setColumnsEditMode((v) => !v),
-              },
+              // "Настроить столбцы" — только точка ВХОДА в режим редактирования,
+              // пока он выключен. Пока включён, кнопка выхода из него ("Готово")
+              // намеренно вынесена из меню в открытую (см. ниже) — спрятанный
+              // выход из активного режима редактирования неочевиден (это
+              // заметил сам пользователь на живом скриншоте после первой
+              // версии меню "Ещё"), а не рядовое редкое действие вроде
+              // экспорта, поэтому исключение из общего правила "прятать всё
+              // редкое" оправдано.
+              ...(columnsEditMode
+                ? []
+                : [
+                    {
+                      key: "columns",
+                      icon: <IconSliders />,
+                      label: "Настроить столбцы",
+                      onClick: () => setColumnsEditMode(true),
+                    },
+                  ]),
               { key: "import", label: "Импорт CSV", onClick: () => setShowImport(true) },
               {
                 key: "export",
@@ -1691,6 +1703,11 @@ export function ClientsTab({
               { key: "trash", icon: <IconTrash />, label: "Корзина", onClick: () => setShowTrash(true) },
             ]}
           />
+          {columnsEditMode && (
+            <button type="button" className="btn btn-primary" onClick={() => setColumnsEditMode(false)}>
+              <IconSliders /> Готово
+            </button>
+          )}
           <button className="btn btn-primary" onClick={openAddModal}>
             + Добавить
           </button>

@@ -852,12 +852,22 @@ export function EquipmentTab({
                     { key: "warehouses", label: "Склады", onClick: () => setWarehousesModal({}) },
                   ]
                 : []),
-              {
-                key: "columns",
-                icon: <IconSliders />,
-                label: columnsEditMode ? "Готово (настройка столбцов)" : "Настроить столбцы",
-                onClick: () => setColumnsEditMode((v) => !v),
-              },
+              // "Настроить столбцы" — только точка ВХОДА в режим редактирования,
+              // пока он выключен. Пока включён, кнопка выхода ("Готово")
+              // намеренно вынесена из меню в открытую (см. ниже) — спрятанный
+              // выход из активного режима неочевиден (замечено пользователем
+              // на живом скриншоте после первой версии меню "Ещё"), а не
+              // рядовое редкое действие вроде экспорта.
+              ...(columnsEditMode
+                ? []
+                : [
+                    {
+                      key: "columns",
+                      icon: <IconSliders />,
+                      label: "Настроить столбцы",
+                      onClick: () => setColumnsEditMode(true),
+                    },
+                  ]),
               {
                 key: "export",
                 label: "Экспорт CSV",
@@ -868,6 +878,11 @@ export function EquipmentTab({
               { key: "trash", icon: <IconTrash />, label: "Корзина", onClick: () => setTrashOpen(true) },
             ]}
           />
+          {columnsEditMode && (
+            <button type="button" className="btn btn-primary" onClick={() => setColumnsEditMode(false)}>
+              <IconSliders /> Готово
+            </button>
+          )}
           <button className="btn btn-primary" onClick={openAddModal}>
             + Добавить
           </button>
