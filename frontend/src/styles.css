@@ -734,6 +734,31 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .business-name { font-weight: 600; }
 .tab-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; }
 .tab-toolbar h2 { font-size: 19px; }
+/* Вариант тулбара для вкладок с "Ещё"/"+ Добавить" (30-й проход —
+   пользователь предложил прибить эти кнопки к верхнему правому углу, а не
+   просто прижимать к правому краю ИХ СОБСТВЕННОЙ строки, как делала
+   предыдущая правка margin-left:auto — та решала асимметрию между
+   «Клиентами» и «Оборудованием», но кнопки всё ещё съезжали вниз вместе
+   с переносом фильтров, из-за чего "Недавние" оказывались то во второй,
+   то в третьей строке). CSS Grid вместо flex: левая колонка (фильтры) —
+   1fr, сама переносится на сколько угодно строк внутри своей ячейки;
+   правая колонка (кнопки) — auto, align-items: start держит её у верхнего
+   края независимо от высоты левой колонки. В отличие от position:absolute
+   это не выключает колонку кнопок из потока — grid сам резервирует под
+   auto-колонку место, поэтому фильтры физически не могут наехать на
+   кнопки при переносе (в отличие от abs-позиционирования, где потребовался
+   бы отдельный магический отступ). Не заменяет .tab-toolbar целиком —
+   тот делит разметку ещё с «Финансами»/«Календарём» (3+ детей в ряд,
+   grid-template-columns: 1fr auto их бы сломал), поэтому отдельный класс
+   применяется только там, где реально нужен (Клиенты/Оборудование/
+   Аренды — ровно 2 группы: фильтры и кнопки). */
+.tab-toolbar-grid { display: grid; grid-template-columns: 1fr auto; align-items: start; column-gap: 12px; row-gap: 10px; margin-bottom: 16px; }
+/* min-width: 0 на первой колонке — иначе flex-контейнер фильтров внутри
+   grid-ячейки по умолчанию просит себе intrinsic-ширину (min-width: auto
+   у flex-item'ов), что может вытолкнуть колонку кнопок за пределы
+   контейнера вместо переноса фильтров на новую строку — классическая
+   нестыковка grid+flex. */
+.tab-toolbar-grid > :first-child { min-width: 0; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; box-shadow: var(--shadow-sm); margin-bottom: 16px; }
 .inline-form { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
 .data-table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-sm); }

@@ -818,7 +818,7 @@ export function RentalsTab({
 
   return (
     <div>
-      <div className="tab-toolbar">
+      <div className="tab-toolbar-grid">
         <div className="segmented">
           {FILTERS.map((f) => (
             <button key={f.id} type="button" className={filter === f.id ? "active" : ""} onClick={() => setFilter(f.id)}>
@@ -826,11 +826,11 @@ export function RentalsTab({
             </button>
           ))}
         </div>
-        {/* marginLeft: "auto" — тот же фикс, что и в ClientsTab.tsx/
-            EquipmentTab.tsx (30-й проход): без него эта группа прижималась
-            бы к левому краю, если перенесётся на вторую строку из-за
-            нехватки места слева. */}
-        <div style={{ display: "flex", gap: 10, alignItems: "center", marginLeft: "auto" }}>
+        {/* Колонка кнопок в .tab-toolbar-grid — тот же фикс, что и в
+            ClientsTab.tsx/EquipmentTab.tsx (30-й проход): держит эту
+            группу у верхнего правого угла независимо от переноса строк
+            слева (см. styles.css, .tab-toolbar-grid). */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <Dropdown
             value={sort}
             onChange={setSort}
