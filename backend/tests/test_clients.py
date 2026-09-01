@@ -41,11 +41,12 @@ def _rent_and_return(client, business_id, headers, client_id, name="Тестов
     return rental["id"]
 
 
-def test_delete_client_with_closed_rental_history_is_rejected_cleanly(client):
-    """Регрессия на баг, найденный при обзоре: клиент с ЗАКРЫТОЙ (returned)
-    историей аренд раньше проходил проверку на "открытую аренду" и падал на
-    ограничении внешнего ключа необработанным исключением. Теперь должен
-    отклоняться понятным 400, а не 500."""
+def test_delete_client_with_closed_rental_history_moves_to_trash(client):
+    """29-й проход: удаление клиента теперь мягкое (корзина, см.
+    app/services/trash.py) — клиент с ЗАКРЫТОЙ (returned) историей аренд
+    больше не блокируется наглухо (как было раньше, регрессия 24-го
+    прохода — падал на ограничении внешнего ключа), а прячется из обычного
+    списка и появляется в корзине, восстановим."""
     owner = register_business(client, email="clients-delete@example.com", password="correct horse battery staple")
     headers = auth_headers(owner["access_token"])
     business_id = _get_business_id(client, owner["access_token"])
@@ -57,12 +58,20 @@ def test_delete_client_with_closed_rental_history_is_rejected_cleanly(client):
     _rent_and_return(client, business_id, headers, client_id)
 
     resp = client.delete(f"/api/businesses/{business_id}/clients/{client_id}", headers=headers)
-    assert resp.status_code == 400
-    assert "историю аренд" in resp.json()["detail"] or "историей аренд" in resp.json()["detail"]
+    assert resp.status_code == 204
 
-    # Клиент по-прежнему на месте — удаление действительно не произошло.
-    still_there = client.get(f"/api/businesses/{business_id}/clients", headers=headers).json()
-    assert any(c["id"] == client_id for c in still_there)
+    # Пропал из обычного списка...
+    active = client.get(f"/api/businesses/{business_id}/clients", headers=headers).json()
+    assert not any(c["id"] == client_id for c in active)
+
+    # ...но виден в корзине и восстановим.
+    trash = client.get(f"/api/businesses/{business_id}/clients/trash", headers=headers).json()
+    assert any(c["id"] == client_id for c in trash)
+
+    restore = client.post(f"/api/businesses/{business_id}/clients/{client_id}/restore", headers=headers)
+    assert restore.status_code == 200
+    active_again = client.get(f"/api/businesses/{business_id}/clients", headers=headers).json()
+    assert any(c["id"] == client_id for c in active_again)
 
 
 def test_delete_client_without_any_rental_still_works(client):
@@ -113,10 +122,13 @@ def test_merge_client_moves_rental_history_and_deletes_source(client):
     moved = next(r for r in rentals if r["id"] == rental_id)
     assert moved["client_id"] == target_id
 
-    # После слияния цель (уже с историей) по-прежнему нельзя удалить — тот же
-    # инвариант "нельзя терять финансовую историю", что и до слияния.
+    # После слияния цель (уже с историей) можно "удалить" — мягко, в корзину
+    # (29-й проход): финансовая история никуда не денется физически (см.
+    # app/services/trash.py), просто перестанет быть видна в обычном списке.
     delete_target = client.delete(f"/api/businesses/{business_id}/clients/{target_id}", headers=headers)
-    assert delete_target.status_code == 400
+    assert delete_target.status_code == 204
+    trash = client.get(f"/api/businesses/{business_id}/clients/trash", headers=headers).json()
+    assert any(c["id"] == target_id for c in trash)
 
 
 def test_merge_client_rejects_self_and_unknown_target(client):
@@ -320,6 +332,11 @@ def test_create_and_update_client_birthday_and_contacts(client):
         json={
             "name": "ООО Ромашка",
             "client_type": "company",
+            # contact_person/inn — 29-й проход, теперь обязательны для
+            # client_type=company (см. _require_company_fields в
+            # app/api/routes/clients.py).
+            "contact_person": "Иванов Иван",
+            "inn": "7701234567",
             "birthday": "1990-05-14",
             "additional_contacts": [
                 {"name": "Петров Пётр", "role": "Снабжение", "phone": "+7 900 000-00-01"},

@@ -7,9 +7,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.audit import log_action
+from app.core.clock import utcnow
 from app.core.deps import BusinessContext, get_business_context, require_permission
 from app.database import get_db
-from app.models.business import PermissionLevel, ResourceType
+from app.models.business import Employee, PermissionLevel, ResourceType
 from app.models.inventory import Equipment, EquipmentCategory, EquipmentStatus, EquipmentWarehouse, Rental, RentalItem, RentalStatus
 from app.schemas.inventory import (
     EquipmentBulkCreate,
@@ -21,11 +22,14 @@ from app.schemas.inventory import (
     EquipmentImportRowResult,
     EquipmentOut,
     EquipmentReorder,
+    EquipmentRestoreOut,
+    EquipmentTrashedOut,
     EquipmentUpdate,
     EquipmentWarehouseCreate,
     EquipmentWarehouseOut,
     EquipmentWarehouseRename,
 )
+from app.services.trash import purge_expired
 
 router = APIRouter(prefix="/businesses/{business_id}/equipment", tags=["equipment"])
 
@@ -447,12 +451,56 @@ async def reorder_equipment_warehouses(
 # --- Оборудование -------------------------------------------------------------
 
 
+def _get_active_equipment(db: Session, ctx: BusinessContext, equipment_id: uuid.UUID) -> Equipment:
+    """См. _get_active_client в app/api/routes/clients.py — та же идея:
+    позиция в корзине для обычных маршрутов ведёт себя как несуществующая."""
+
+    item = db.get(Equipment, equipment_id)
+    if item is None or item.business_id != ctx.business_id or item.deleted_at is not None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Оборудование не найдено")
+    return item
+
+
 @router.get("", response_model=list[EquipmentOut])
 async def list_equipment(ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)):
     # RLS уже ограничил видимые строки до ctx.business_id (см. get_business_context),
     # фильтр по business_id здесь — вторая, объектно-уровневая линия защиты,
     # а не единственная.
-    return db.scalars(select(Equipment).where(Equipment.business_id == ctx.business_id)).all()
+    return db.scalars(
+        select(Equipment).where(Equipment.business_id == ctx.business_id, Equipment.deleted_at.is_(None))
+    ).all()
+
+
+@router.get("/trash", response_model=list[EquipmentTrashedOut])
+async def list_trashed_equipment(ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)):
+    """Корзина оборудования (29-й проход, п.14 обзора) — см.
+    app/services/trash.py и ClientsTab-аналог list_trashed_clients."""
+
+    purge_expired(db, ctx.business_id)
+    rows = db.execute(
+        select(Equipment, Employee.name)
+        .join(Employee, Employee.id == Equipment.deleted_by_id, isouter=True)
+        .where(Equipment.business_id == ctx.business_id, Equipment.deleted_at.is_not(None))
+        .order_by(Equipment.deleted_at.desc())
+    ).all()
+    out = []
+    for item, deleted_by_name in rows:
+        row = EquipmentTrashedOut.model_validate(item)
+        row.deleted_by_name = deleted_by_name
+        out.append(row)
+    return out
+
+
+@router.post("/{equipment_id}/restore", response_model=EquipmentRestoreOut)
+async def restore_equipment(equipment_id: uuid.UUID, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)):
+    item = db.get(Equipment, equipment_id)
+    if item is None or item.business_id != ctx.business_id or item.deleted_at is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Оборудование не найдено в корзине")
+    item.deleted_at = None
+    item.deleted_by_id = None
+    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="restore", resource="equipment", resource_id=str(equipment_id))
+    db.commit()
+    return EquipmentRestoreOut(id=equipment_id)
 
 
 @router.post("", response_model=EquipmentOut, status_code=status.HTTP_201_CREATED)
@@ -518,9 +566,7 @@ async def update_equipment(
     (exclude_unset), в отличие от старой версии, которая требовала
     EquipmentCreate целиком и потому 422-ила на точечных PATCH-запросах
     слайдовера (смена статуса, дата окончания обслуживания)."""
-    item = db.get(Equipment, equipment_id)
-    if item is None or item.business_id != ctx.business_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Оборудование не найдено")
+    item = _get_active_equipment(db, ctx, equipment_id)
 
     changes = body.model_dump(exclude_unset=True)
 
@@ -566,22 +612,31 @@ async def update_equipment(
 async def delete_equipment(
     equipment_id: uuid.UUID, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
 ):
-    item = db.get(Equipment, equipment_id)
-    if item is None or item.business_id != ctx.business_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Оборудование не найдено")
+    """Перемещает позицию в корзину (29-й проход, п.14 обзора) — НЕ
+    физическое удаление строки (см. app/services/trash.py и докстринг
+    миграции 0014). Раньше позиция с историей аренд НЕ удалялась, а молча
+    переводилась в статус "Списано" — теперь она вместо этого просто прячется
+    в корзину (и статус, и вся история сохраняются как есть, восстановление
+    возвращает ровно то же состояние)."""
 
-    in_use = db.scalar(select(RentalItem).where(RentalItem.equipment_id == equipment_id))
-    if in_use is not None:
-        # Тот же защитный принцип, что в index-supabase.html (SPEC.md 9.4):
-        # нельзя списать позицию, у которой уже есть история аренд — иначе
-        # rental_items.equipment_id повиснет на удалённой записи, а прошлые
-        # аренды потеряют читаемое название техники.
-        item.status = EquipmentStatus.retired
-        log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="retire", resource="equipment", resource_id=str(equipment_id))
-        db.commit()
-        return
+    item = _get_active_equipment(db, ctx, equipment_id)
 
-    db.delete(item)
+    open_rental = db.scalar(
+        select(RentalItem)
+        .join(Rental, Rental.id == RentalItem.rental_id)
+        .where(
+            RentalItem.equipment_id == equipment_id,
+            Rental.status.in_([RentalStatus.booked, RentalStatus.active]),
+        )
+    )
+    if open_rental is not None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Нельзя удалить: по этой позиции есть аренда в работе или бронь. Сначала завершите её.",
+        )
+
+    item.deleted_at = utcnow()
+    item.deleted_by_id = ctx.employee.id if ctx.employee is not None else None
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="delete", resource="equipment", resource_id=str(equipment_id))
     db.commit()
 

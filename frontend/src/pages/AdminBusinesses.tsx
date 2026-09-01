@@ -22,7 +22,7 @@ export function AdminBusinesses() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand">RENTIKA <span className="badge-tag">ADMIN</span></div>
+        <div className="brand">RENTIKA <span className="badge-tag" style={{ marginLeft: "6px" }}>ADMIN</span></div>
         <div className="topbar-spacer" />
         <span className="muted">{user?.email}</span>
         <button className="btn btn-ghost" onClick={() => void logout()}>Выйти</button>

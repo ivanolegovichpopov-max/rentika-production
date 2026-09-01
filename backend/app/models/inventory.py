@@ -159,6 +159,16 @@ class Equipment(Base):
     # что угодно, что не влезает в структурированные поля). Добавлено по
     # запросу пользователя в тринадцатом проходе.
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ---- 29-й проход: мягкое удаление ("Корзина") — см. докстринг
+    # миграции 0014_soft_delete_and_client_flags. NULL = позиция активна и
+    # видна в обычных списках; заполнено = лежит в корзине (восстановима
+    # через POST .../equipment/{id}/restore, пока не будет автоматически
+    # зачищена — см. app/services/trash.py:purge_expired — или удалена
+    # окончательно вручную из UI корзины).
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -220,6 +230,15 @@ class Client(Base):
     # от client_notes у него нет своего времени/автора на запись (см.
     # комментарий в alembic/versions/0013_client_extras.py).
     additional_contacts: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
+    # ---- 29-й проход: см. докстринг миграции 0014_soft_delete_and_client_flags ----
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
+    )
+    # Постоянная пометка "когда-то был в чёрном списке" — не сбрасывается
+    # автоматически при смене рейтинга на другой (см. update_client), чтобы
+    # сотрудники видели, кто перед ними, даже после реабилитации клиента.
+    was_blacklisted: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

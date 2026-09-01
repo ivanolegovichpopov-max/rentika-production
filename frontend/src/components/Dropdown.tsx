@@ -44,6 +44,8 @@ export function Dropdown({
   placeholder,
   disabled,
   style,
+  searchable,
+  searchPlaceholder,
 }: {
   value: string;
   options: DropdownOption[];
@@ -53,9 +55,18 @@ export function Dropdown({
   placeholder: ReactNode;
   disabled?: boolean;
   style?: CSSProperties;
+  // Поле поиска вверху панели (29-й проход, п.15 обзора: пикер цели слияния
+  // клиентов — простой скролл по кнопкам не годится, когда клиентов в базе
+  // много). Фильтрует по options[].label как обычному тексту (нечувствительно
+  // к регистру) — labelText ниже нужен именно для этого, т.к. label может
+  // быть произвольным ReactNode, а не голой строкой.
+  searchable?: boolean;
+  searchPlaceholder?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const selected = options.find((o) => o.value === value);
 
   // Клик вне панели закрывает её — тот же idiom, что и у catFilterOpen в
@@ -68,6 +79,18 @@ export function Dropdown({
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [open]);
+
+  useEffect(() => {
+    if (open && searchable) {
+      setQuery("");
+      const raf = requestAnimationFrame(() => searchRef.current?.focus());
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [open, searchable]);
+
+  const q = query.trim().toLowerCase();
+  const visibleOptions =
+    searchable && q ? options.filter((o) => labelText(o.label).toLowerCase().includes(q)) : options;
 
   return (
     <div className="cat-filter" ref={ref} style={style}>
@@ -83,7 +106,19 @@ export function Dropdown({
       </button>
       {open && (
         <div className="cat-filter-panel">
-          {options.map((o) => (
+          {searchable && (
+            <input
+              ref={searchRef}
+              className="table-input"
+              style={{ margin: "2px 6px 6px", width: "calc(100% - 12px)" }}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              placeholder={searchPlaceholder ?? "Поиск…"}
+            />
+          )}
+          {visibleOptions.length === 0 && <div className="empty-note" style={{ padding: "6px 10px" }}>Ничего не найдено</div>}
+          {visibleOptions.map((o) => (
             <button
               type="button"
               key={o.value}
@@ -102,4 +137,12 @@ export function Dropdown({
       )}
     </div>
   );
+}
+
+/** Текстовое представление label для поиска — большинство мест передают
+ * голую строку, но некоторые (счётчики) — JSX; для тех просто не найдётся
+ * ничего по поиску, что безопаснее, чем пытаться "распарсить" произвольный
+ * ReactNode обратно в текст. */
+function labelText(label: ReactNode): string {
+  return typeof label === "string" || typeof label === "number" ? String(label) : "";
 }

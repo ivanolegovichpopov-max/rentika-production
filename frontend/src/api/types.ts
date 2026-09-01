@@ -124,7 +124,22 @@ export interface Client {
   // вкладку «Клиенты» и карточку клиента, согласовано целиком) ----
   birthday: string | null; // "YYYY-MM-DD"
   additional_contacts: ClientContact[] | null;
+  // ---- 29-й проход (20-пунктовый обзор живого прода, "реализовываем всё в
+  // полном объёме") ----
+  // Постоянная пометка "когда-то был в чёрном списке" — не сбрасывается
+  // автоматически при смене рейтинга на другой (см. app/models/inventory.py).
+  was_blacklisted: boolean;
 }
+
+// Клиент/позиция оборудования в корзине (29-й проход, п.14 обзора) — то же
+// самое + когда и кем удалён. См. GET .../clients/trash, GET .../equipment/trash.
+export interface Trashed {
+  deleted_at: string;
+  deleted_by_name: string | null;
+}
+
+export type TrashedClient = Client & Trashed;
+export type TrashedEquipment = Equipment & Trashed;
 
 export interface ClientContact {
   name: string;

@@ -703,7 +703,16 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 
 .app-shell { min-height: 100vh; display: flex; flex-direction: column; }
 .content { padding: 24px 28px 60px; max-width: 1100px; width: 100%; margin: 0 auto; }
-.badge-tag { background: var(--accent); color: var(--accent-ink); border-radius: 6px; padding: 1px 6px; font-size: 11px; margin-left: 6px; font-weight: 700; }
+/* margin-left убран из базового класса (29-й проход, п.7 обзора, "tag badge
+   CSS fix") — раньше он был зашит сюда в расчёте на единственный тогдашний
+   случай использования "бейдж сразу после имени", но класс с тех пор стал
+   общим и для списков МЕТОК клиента (map по tagList в ClientsTab.tsx),
+   отрисованных в свой flex-контейнер с собственным gap: там встроенный
+   margin-left вместе с gap удваивал промежуток между метками и вдобавок
+   отступал первую метку от края контейнера без причины. Места, где отступ
+   от соседнего текста всё ещё нужен ("Орг." сразу после имени клиента,
+   "ADMIN" после "RENTIKA"), задают его явно через style={{ marginLeft }}. */
+.badge-tag { background: var(--accent); color: var(--accent-ink); border-radius: 6px; padding: 1px 6px; font-size: 11px; font-weight: 700; }
 .business-name { font-weight: 600; }
 .tab-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; }
 .tab-toolbar h2 { font-size: 19px; }

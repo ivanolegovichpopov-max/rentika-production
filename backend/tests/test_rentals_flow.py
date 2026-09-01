@@ -6,11 +6,25 @@ app/services/pricing.py, как в test_pricing.py) — тот же эталон
 "в аренде" при выдаче и возвращается в "свободно" после возврата, а клиента
 с открытой арендой нельзя удалить.
 """
+from datetime import date, timedelta
+
 from tests.conftest import auth_headers, register_business
 
 
 def _get_business_id(client, token):
     return client.get("/api/businesses", headers=auth_headers(token)).json()[0]["id"]
+
+
+def _future(days: int) -> str:
+    """ISO-дата `days` дней от "сегодня" тестового окружения — вместо
+    захардкоженной календарной даты (29-й проход: старые фиксированные даты
+    вроде "2026-09-01" сломались сами по себе, когда реальный ход времени их
+    "догнал" — create_rental создаёт бронь ("booked") только пока
+    start_date > date.today(), иначе сразу "active", см. app/api/routes/
+    rentals.py). Относительные смещения от "сегодня" не ломаются со
+    временем, чем бы оно ни было на момент запуска тестов."""
+
+    return (date.today() + timedelta(days=days)).isoformat()
 
 
 def test_full_rental_cycle_matches_reference_price(client):
@@ -47,8 +61,8 @@ def test_full_rental_cycle_matches_reference_price(client):
         json={
             "client_id": client_id,
             "equipment_ids": [equipment_id],
-            "start_date": "2026-09-01",
-            "end_date": "2026-09-29",
+            "start_date": _future(30),
+            "end_date": _future(58),  # 30..58 включительно — 29 дней, тот же эталонный пример
         },
         headers=headers,
     )
@@ -56,8 +70,8 @@ def test_full_rental_cycle_matches_reference_price(client):
     rental = rental_resp.json()
     assert rental["amount"] == 1287
     rental_id = rental["id"]
-    # Дата начала (2026-09-01) в будущем относительно "сегодня" тестового
-    # окружения — аренда создаётся как бронь, а не сразу активная.
+    # Дата начала в будущем относительно "сегодня" тестового окружения —
+    # аренда создаётся как бронь, а не сразу активная.
     assert rental["status"] == "booked"
 
     issue_resp = client.post(f"/api/businesses/{business_id}/rentals/{rental_id}/issue", headers=headers)
@@ -76,8 +90,8 @@ def test_full_rental_cycle_matches_reference_price(client):
         json={
             "client_id": conflict_client["id"],
             "equipment_ids": [equipment_id],
-            "start_date": "2026-09-05",
-            "end_date": "2026-09-10",
+            "start_date": _future(34),
+            "end_date": _future(40),
         },
         headers=headers,
     )
@@ -89,7 +103,7 @@ def test_full_rental_cycle_matches_reference_price(client):
 
     return_resp = client.post(
         f"/api/businesses/{business_id}/rentals/{rental_id}/return",
-        json={"actual_return": "2026-09-29", "damage_fee": 0},
+        json={"actual_return": _future(58), "damage_fee": 0},
         headers=headers,
     )
     assert return_resp.status_code == 200
@@ -120,8 +134,8 @@ def test_return_with_damage_fee_and_discount_reflects_in_breakdown(client):
         json={
             "client_id": client_id,
             "equipment_ids": [eq["id"]],
-            "start_date": "2026-09-01",
-            "end_date": "2026-09-03",
+            "start_date": _future(10),
+            "end_date": _future(12),
         },
         headers=headers,
     ).json()
@@ -134,7 +148,7 @@ def test_return_with_damage_fee_and_discount_reflects_in_breakdown(client):
 
     return_resp = client.post(
         f"/api/businesses/{business_id}/rentals/{rental_id}/return",
-        json={"actual_return": "2026-09-03", "damage_fee": 200, "discount": 300},
+        json={"actual_return": _future(12), "damage_fee": 200, "discount": 300},
         headers=headers,
     )
     assert return_resp.status_code == 200
@@ -254,8 +268,8 @@ def test_cannot_rent_equipment_that_does_not_belong_to_business(client):
         json={
             "client_id": own_client["id"],
             "equipment_ids": [eq_b["id"]],
-            "start_date": "2026-09-01",
-            "end_date": "2026-09-05",
+            "start_date": _future(1),
+            "end_date": _future(5),
         },
         headers=auth_headers(owner_a["access_token"]),
     )
@@ -271,7 +285,9 @@ def test_cannot_rent_equipment_that_does_not_belong_to_business(client):
 # DEFAULT_RETURN_NOTES), подставляются, когда поле не передано или пустое.
 
 
-def _setup_rental(client, headers, business_id, *, daily_rate=100, start="2026-09-01", end="2026-09-03"):
+def _setup_rental(client, headers, business_id, *, daily_rate=100, start=None, end=None):
+    start = start or _future(30)
+    end = end or _future(32)
     client_id = client.post(
         f"/api/businesses/{business_id}/clients", json={"name": "Клиент заметок"}, headers=headers
     ).json()["id"]
@@ -304,7 +320,7 @@ def test_issue_and_return_notes_use_demo_defaults_when_omitted(client):
 
     return_resp = client.post(
         f"/api/businesses/{business_id}/rentals/{rental_id}/return",
-        json={"actual_return": "2026-09-03"},
+        json={"actual_return": _future(32)},
         headers=headers,
     )
     assert return_resp.status_code == 200
@@ -329,7 +345,7 @@ def test_issue_and_return_notes_persist_custom_text(client):
 
     return_resp = client.post(
         f"/api/businesses/{business_id}/rentals/{rental_id}/return",
-        json={"actual_return": "2026-09-03", "return_notes": "Вернули с трещиной на кожухе."},
+        json={"actual_return": _future(32), "return_notes": "Вернули с трещиной на кожухе."},
         headers=headers,
     )
     assert return_resp.status_code == 200
@@ -368,7 +384,7 @@ def test_edit_rejects_when_rental_returned_or_cancelled(client):
     client.post(f"/api/businesses/{business_id}/rentals/{rental2_id}/issue", headers=headers)
     client.post(
         f"/api/businesses/{business_id}/rentals/{rental2_id}/return",
-        json={"actual_return": "2026-09-03"},
+        json={"actual_return": _future(32)},
         headers=headers,
     )
     patch_resp2 = client.patch(
@@ -390,14 +406,14 @@ def test_edit_ignores_start_date_change_on_active_rental(client):
 
     patch_resp = client.patch(
         f"/api/businesses/{business_id}/rentals/{rental_id}",
-        json={"start_date": "2026-08-15", "end_date": "2026-09-05"},
+        json={"start_date": "2020-01-01", "end_date": _future(40)},
         headers=headers,
     )
     assert patch_resp.status_code == 200
     body = patch_resp.json()
     # Дата начала осталась прежней — правка молча проигнорирована, а не отклонена.
     assert body["start_date"] == original_start
-    assert body["end_date"] == "2026-09-05"
+    assert body["end_date"] == _future(40)
 
 
 def test_edit_rejects_end_date_before_start_date(client):
@@ -410,7 +426,7 @@ def test_edit_rejects_end_date_before_start_date(client):
 
     patch_resp = client.patch(
         f"/api/businesses/{business_id}/rentals/{rental_id}",
-        json={"start_date": "2026-09-10", "end_date": "2026-09-05"},
+        json={"start_date": _future(40), "end_date": _future(35)},
         headers=headers,
     )
     assert patch_resp.status_code == 400
@@ -436,8 +452,8 @@ def test_edit_rejects_overlapping_equipment(client):
         json={
             "client_id": other_client,
             "equipment_ids": [eq_conflict["id"]],
-            "start_date": "2026-09-01",
-            "end_date": "2026-09-10",
+            "start_date": _future(29),
+            "end_date": _future(35),
         },
         headers=headers,
     ).json()
@@ -531,7 +547,7 @@ def test_rental_create_uses_client_default_discount_percent(client):
 
     rental_resp = client.post(
         f"/api/businesses/{business_id}/rentals",
-        json={"client_id": client_id, "equipment_ids": [eq_id], "start_date": "2026-09-01", "end_date": "2026-09-05"},
+        json={"client_id": client_id, "equipment_ids": [eq_id], "start_date": _future(1), "end_date": _future(5)},
         headers=headers,
     )
     assert rental_resp.status_code == 201
@@ -565,8 +581,8 @@ def test_rental_create_explicit_discount_overrides_client_default(client):
         json={
             "client_id": client_id,
             "equipment_ids": [eq_id],
-            "start_date": "2026-09-01",
-            "end_date": "2026-09-05",
+            "start_date": _future(1),
+            "end_date": _future(5),
             "discount": 0,
         },
         headers=headers,

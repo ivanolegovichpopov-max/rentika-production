@@ -154,7 +154,16 @@ export function EquipmentDetailPanel({
       notify("Нельзя удалить: по этой позиции есть аренда в работе или бронь. Сначала завершите её.");
       return;
     }
-    if (!(await confirm(`«${item!.name}» будет удалено безвозвратно.`, { danger: true }))) return;
+    // 29-й проход, п.14 обзора: удаление теперь мягкое — позиция уходит в
+    // корзину (см. EquipmentTrashModal в EquipmentTab.tsx) и восстановима 30
+    // дней, а не пропадает безвозвратно, как раньше.
+    if (
+      !(await confirm(`«${item!.name}» будет перемещено в корзину. Восстановить можно в течение 30 дней.`, {
+        danger: true,
+        confirmLabel: "В корзину",
+      }))
+    )
+      return;
     try {
       await api.delete(`/businesses/${businessId}/equipment/${equipmentId}`);
       onDeleted();
@@ -176,6 +185,23 @@ export function EquipmentDetailPanel({
         </div>
         <button className="icon-btn" onClick={onClose}>
           <IconClose />
+        </button>
+      </div>
+
+      {/* Кнопки действий перенесены сразу под шапку (29-й проход, п.13
+          обзора — та же правка, что и у ClientDetailPanel в ClientsTab.tsx:
+          "Изменить"/"Удалить" не должны требовать скролла всей карточки). */}
+      <div className="slideover-section" style={{ display: "flex", gap: "8px" }}>
+        <button className="btn" onClick={() => onEdit(equipmentId)}>
+          Изменить
+        </button>
+        {onCopy && (
+          <button className="btn" onClick={() => onCopy(equipmentId)}>
+            Копировать
+          </button>
+        )}
+        <button className="btn btn-danger-ghost" onClick={() => void handleDelete()}>
+          Удалить
         </button>
       </div>
 
@@ -264,20 +290,6 @@ export function EquipmentDetailPanel({
             );
           })
         )}
-      </div>
-
-      <div className="slideover-section" style={{ display: "flex", gap: "8px" }}>
-        <button className="btn" onClick={() => onEdit(equipmentId)}>
-          Изменить
-        </button>
-        {onCopy && (
-          <button className="btn" onClick={() => onCopy(equipmentId)}>
-            Копировать
-          </button>
-        )}
-        <button className="btn btn-danger-ghost" onClick={() => void handleDelete()}>
-          Удалить
-        </button>
       </div>
 
       {confirmDialog}

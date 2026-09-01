@@ -158,3 +158,9 @@ export const IconFile = (p: SVGProps<SVGSVGElement>) => (
 export const IconGift = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}><polyline points="20 12 20 22 4 22 4 12" /><rect x="2" y="7" width="20" height="5" /><line x1="12" y1="22" x2="12" y2="7" /><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" /><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" /></Svg>
 );
+// Восстановить из корзины (29-й проход, п.14 обзора) — стрелка "назад по
+// кругу" в круге-скобке, отличается от IconReset (та — просто разворот
+// стрелкой без скобки, используется для "Сбросить настройки дашборда").
+export const IconRestore = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}><path d="M3 12a9 9 0 1 0 3-6.7" /><polyline points="3 3 3 8 8 8" /></Svg>
+);

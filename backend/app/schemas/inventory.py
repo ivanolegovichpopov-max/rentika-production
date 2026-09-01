@@ -24,6 +24,48 @@ def _strip_optional(value: str | None) -> str | None:
     return _strip_or_raise(value)
 
 
+# ---- 29-й проход: лёгкая валидация формата (п.5/19 обзора — "телефон можно
+# указать любой, ИНН вообще не ввести") — НЕ жёсткая привязка к российским
+# правилам там, где бизнес явно планирует продавать за рубежом (см. п.5),
+# только защита от заведомого мусора вроде "+70" (2 цифры). ----
+
+
+def _validate_phone_format(value: str | None) -> str | None:
+    """Если телефон указан — считаем цифры (не формат/маску, тот вопрос
+    фронта, см. formatPhoneInput в lib/format.ts) и требуем разумное
+    количество: 10-15, тот же диапазон, что и в E.164 (номер без кода
+    страны — минимум 10 цифр, полный международный номер — максимум 15).
+    Пустая строка/None — телефон необязателен, пропускаем без ошибки."""
+
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    digits = sum(ch.isdigit() for ch in stripped)
+    if digits < 10 or digits > 15:
+        raise ValueError("похоже на некорректный номер телефона — должно быть от 10 до 15 цифр")
+    return stripped
+
+
+def _validate_inn_format(value: str | None) -> str | None:
+    """ИНН — только цифры, 10 знаков у организации или 12 у ИП/физлица (та
+    же длина, что и в реальных российских правилах). Пустая строка/None —
+    поле необязательно само по себе (обязательность для client_type=company
+    проверяется отдельно, на уровне маршрута — см. _require_company_fields в
+    app/api/routes/clients.py, там уже известно окончательное, слитое с
+    базой состояние клиента, а не только то, что пришло в этом запросе)."""
+
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if not stripped.isdigit() or len(stripped) not in (10, 12):
+        raise ValueError("ИНН должен состоять из 10 цифр (организация) или 12 цифр (ИП/физлицо)")
+    return stripped
+
+
 class EquipmentCategoryCreate(BaseModel):
     """Создание записи в справочнике категорий — эндпоинт доступен только
     владельцу бизнеса (см. app/api/routes/equipment.py:create_equipment_category,
@@ -188,6 +230,19 @@ class EquipmentOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EquipmentTrashedOut(EquipmentOut):
+    """Позиция оборудования в корзине (29-й проход) — см. ClientTrashedOut,
+    та же идея."""
+
+    deleted_at: datetime
+    deleted_by_name: str | None = None
+
+
+class EquipmentRestoreOut(BaseModel):
+    id: uuid.UUID
+    restored: bool = True
+
+
 class EquipmentImportRow(BaseModel):
     """Одна строка CSV-импорта — те же поля, что и EquipmentCreate, но без
     строгой валидации на уровне схемы (пустая строка/мусор из файла не
@@ -233,6 +288,8 @@ class ClientContact(BaseModel):
     role: str | None = Field(default=None, max_length=255)
     phone: str | None = Field(default=None, max_length=32)
 
+    _validate_phone = field_validator("phone")(_validate_phone_format)
+
 
 class ClientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
@@ -251,6 +308,9 @@ class ClientCreate(BaseModel):
     # ---- 26-й проход ----
     birthday: date | None = None
     additional_contacts: list[ClientContact] | None = None
+
+    _validate_phone = field_validator("phone")(_validate_phone_format)
+    _validate_inn = field_validator("inn")(_validate_inn_format)
 
 
 class ClientUpdate(BaseModel):
@@ -278,6 +338,9 @@ class ClientUpdate(BaseModel):
     birthday: date | None = None
     additional_contacts: list[ClientContact] | None = None
 
+    _validate_phone = field_validator("phone")(_validate_phone_format)
+    _validate_inn = field_validator("inn")(_validate_inn_format)
+
 
 class ClientOut(BaseModel):
     id: uuid.UUID
@@ -298,8 +361,25 @@ class ClientOut(BaseModel):
     # ---- 26-й проход ----
     birthday: date | None
     additional_contacts: list[ClientContact] | None
+    # ---- 29-й проход ----
+    was_blacklisted: bool
 
     model_config = {"from_attributes": True}
+
+
+class ClientTrashedOut(ClientOut):
+    """Клиент в корзине (29-й проход) — то же самое, что ClientOut, плюс
+    когда и кем удалён. Отдельная схема, а не опциональные поля в ClientOut
+    — deleted_at/deleted_by у активного (не удалённого) клиента не несут
+    смысла и нигде в обычных ответах не нужны."""
+
+    deleted_at: datetime
+    deleted_by_name: str | None = None
+
+
+class ClientRestoreOut(BaseModel):
+    id: uuid.UUID
+    restored: bool = True
 
 
 class ClientDocumentOut(BaseModel):

@@ -1,10 +1,33 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "../../api/client";
 import { useData } from "../../context/DataContext";
-import type { Client, ClientContact, ClientDocument, ClientImportResult, ClientNote, Equipment, Rental } from "../../api/types";
+import type {
+  Client,
+  ClientContact,
+  ClientDocument,
+  ClientImportResult,
+  ClientNote,
+  Equipment,
+  Rental,
+  TrashedClient,
+} from "../../api/types";
 import { RATING_META, RENTAL_META, Badge, rentalDisplayStatus } from "../../lib/statusMeta";
 import { money, fmtDate, colorFromId, initials, formatPhoneInput } from "../../lib/format";
-import { IconClose, IconEdit, IconTrash, IconPhone, IconSend, IconMail, IconFile, IconGift } from "../../lib/icons";
+import {
+  IconClose,
+  IconEdit,
+  IconTrash,
+  IconRestore,
+  IconPhone,
+  IconSend,
+  IconMail,
+  IconFile,
+  IconGift,
+  IconSliders,
+  IconGrip,
+  IconEye,
+  IconEyeOff,
+} from "../../lib/icons";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
@@ -186,9 +209,19 @@ function ClientFormModal({
         e.preventDefault();
         void requestClose();
       }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) void requestClose();
-      }}
+      // Клик по затемнённому фону больше НЕ закрывает форму (29-й проход,
+      // п.16 обзора, "форма клиента с кучей полей — случайный клик мимо не
+      // должен рисковать потерянными данными"): у формы клиента полей
+      // заметно больше, чем в среднем модальном окне проекта (тип, имя,
+      // телефон, email, документ, ДР, реквизиты организации, доп. контакты,
+      // скидка, метки, заметка) — случайный клик рядом с окном на такой
+      // форме куда вероятнее, чем на короткой. Раньше клик мимо всё равно
+      // спрашивал подтверждение через requestClose() при заполненной форме,
+      // но даже нежелательное ПОЯВЛЕНИЕ этого запроса — уже риск: обычный
+      // рефлекс "закрыть диалог кликом мимо/Enter" на самом confirm мог
+      // привести к потере данных на автомате. Явное закрытие (крестик или
+      // "Отмена") по-прежнему проходит через requestClose(), Escape — тоже
+      // (см. onCancel выше).
     >
       <form onSubmit={(e) => void handleSubmit(e)}>
         <div className="modal-head">
@@ -238,6 +271,10 @@ function ClientFormModal({
                 onChange={(e) => setForm({ ...form, phone: formatPhoneInput(e.target.value) })}
                 placeholder="+7 900 000-00-00"
               />
+              {/* 29-й проход, п.5 обзора — маска больше не навязывает "+7"
+                  иностранным номерам, стоит явно сказать об этом рядом с
+                  полем, иначе не очевидно из самого интерфейса. */}
+              <div className="field-hint">Иностранный номер — начните ввод с кода страны, маска не тронет его.</div>
             </div>
             <div className="field">
               <label>Email</label>
@@ -415,6 +452,75 @@ const CLIENT_SORT_COLUMNS: { key: string; label: string }[] = [
   { key: "revenue", label: "Выручка" },
 ];
 
+/* ============================================================
+   Настройка столбцов таблицы (29-й проход, п.11 обзора: "то же самое, что у
+   Оборудования, добавить и Клиентам") — 1:1 перенесённая механика из
+   EquipmentTab.tsx (EQUIPMENT_TOGGLEABLE_COLUMN_IDS/visibleEquipmentColumns/
+   moveColumn/toggleColumnHidden). Столбец "Имя" (name) — как и "Оборудование"
+   там — всегда первый и всегда виден, настраиваются только пять оставшихся.
+   Заодно чинит найденный при этом обзоре скрытый баг: раньше заголовок
+   "Выручка" в CLIENT_SORT_COLUMNS был, а самой ячейки с данными под ним в
+   <tbody> — не было (колонка сортировалась, но всегда пустая). Теперь и
+   заголовки, и ячейки строятся из одного и того же списка. */
+const CLIENT_TOGGLEABLE_COLUMN_IDS = CLIENT_SORT_COLUMNS.filter((c) => c.key !== "name").map((c) => c.key);
+
+interface ClientColumnsPrefs {
+  order: string[];
+  hidden: string[];
+}
+
+const DEFAULT_CLIENT_COLUMNS_PREFS: ClientColumnsPrefs = {
+  order: CLIENT_TOGGLEABLE_COLUMN_IDS,
+  hidden: [],
+};
+
+function visibleClientColumns(prefs: ClientColumnsPrefs): { key: string; label: string }[] {
+  const known = prefs.order.filter((id) => CLIENT_TOGGLEABLE_COLUMN_IDS.includes(id));
+  const extra = CLIENT_TOGGLEABLE_COLUMN_IDS.filter((id) => !known.includes(id));
+  return known
+    .concat(extra)
+    .filter((id) => !prefs.hidden.includes(id))
+    .map((id) => CLIENT_SORT_COLUMNS.find((c) => c.key === id)!);
+}
+
+interface ClientCellContext {
+  clientRentals: Rental[];
+  activeCount: number;
+  overdueNow: number;
+  lastRental: string;
+  displayRating: Client["rating"];
+  revenue: number;
+}
+
+/** Содержимое ячейки одного из настраиваемых столбцов — тот же приём, что и
+ * renderEquipmentCell в EquipmentTab.tsx: порядок/видимость столбцов
+ * управляются данными, а не жёстким списком <td> в JSX. */
+function renderClientCell(key: string, c: Client, ctx: ClientCellContext) {
+  switch (key) {
+    case "doc":
+      return c.doc ?? "—";
+    case "rating":
+      return <Badge meta={RATING_META[ctx.displayRating]} />;
+    case "rentals":
+      return (
+        <>
+          {ctx.clientRentals.length} всего{ctx.activeCount > 0 ? `, ${ctx.activeCount} сейчас` : ""}
+          {ctx.overdueNow > 0 && (
+            <div style={{ marginTop: "4px" }}>
+              <Badge meta={{ label: `Просрочено × ${ctx.overdueNow}`, tone: "critical" }} />
+            </div>
+          )}
+        </>
+      );
+    case "lastRental":
+      return ctx.lastRental ? fmtDate(ctx.lastRental) : "—";
+    case "revenue":
+      return money(ctx.revenue);
+    default:
+      return null;
+  }
+}
+
 // Приоритет при сортировке по рейтингу — проблемные клиенты первые, тем же
 // принципом, что и EQUIPMENT_STATUS_PRIORITY (overdue впереди available).
 const CLIENT_RATING_PRIORITY: Record<string, number> = { blacklist: 0, watch: 1, normal: 2 };
@@ -496,7 +602,7 @@ function clientLifetimeRevenue(clientId: string, rentals: Rental[]): number {
 function clientSortValue(c: Client, key: string, rentals: Rental[]): string | number {
   if (key === "name") return c.name.toLowerCase();
   if (key === "doc") return (c.doc ?? "").toLowerCase();
-  if (key === "rating") return CLIENT_RATING_PRIORITY[c.rating] ?? 99;
+  if (key === "rating") return CLIENT_RATING_PRIORITY[clientDisplayRating(c, rentals)] ?? 99;
   if (key === "rentals") return rentals.filter((r) => r.client_id === c.id).length;
   if (key === "lastRental") return lastRentalDate(c.id, rentals);
   if (key === "revenue") return clientLifetimeRevenue(c.id, rentals);
@@ -559,24 +665,33 @@ function clientHasOpenRental(clientId: string, rentals: Rental[]): boolean {
   return rentals.some((r) => r.client_id === clientId && (r.status === "active" || r.status === "booked"));
 }
 
-/** Есть ли у клиента ЛЮБАЯ история аренд, включая уже завершённые/отменённые
- * — найдено при разборе бага удаления (24-й проход): backend теперь
- * отклоняет удаление клиента с любой историей, не только с открытой (см.
- * app/api/routes/clients.py:delete_client — Rental.client_id стоит на
- * ondelete="RESTRICT", это финансовая история). Тот же принцип "не тратим
- * клик на действие, которое backend всё равно отклонит", что и у
- * clientHasOpenRental — используется только для предупреждения ДО запроса
- * на удаление, не для чего-то ещё. */
-function clientHasAnyRental(clientId: string, rentals: Rental[]): boolean {
-  return rentals.some((r) => r.client_id === clientId);
-}
-
 /** Есть ли у клиента ПРЯМО СЕЙЧАС просроченная аренда — используется и для
  * бейджа в таблице, и для быстрого фильтра "Только с просрочкой" (24-й
  * проход, п.5 обзора: "просроченный клиент — это сигнал, который владелец
  * хочет видеть первым делом, не открывая карточку каждого"). */
 function clientHasOverdueNow(clientId: string, rentals: Rental[]): boolean {
   return rentals.some((r) => r.client_id === clientId && rentalDisplayStatus(r) === "overdue");
+}
+
+/** ОТОБРАЖАЕМЫЙ рейтинг клиента — вычисляется на фронте, тем же принципом,
+ * что и rentalDisplayStatus (см. lib/statusMeta.tsx: "overdue" тоже никогда
+ * не хранится backend'ом как есть). 29-й проход, п.6 обзора: раньше "На
+ * контроле" был третьим ручным значением рейтинга рядом с "Надёжный"/"Чёрный
+ * список" — сотрудник сам решал, когда его выставить, и по факту почти никто
+ * не снимал пометку, когда просрочка закрывалась (в поле осталось только
+ * "выставить", а "снять" не превратилось в привычку). Теперь "На контроле" —
+ * не ручное состояние, а всегда актуальный расчёт: клиент "на контроле" ровно
+ * пока у него есть просрочка ПРЯМО СЕЙЧАС (см. clientHasOverdueNow выше), без
+ * отдельного действия что-то включить или выключить. Чёрный список
+ * по-прежнему ручной — это осознанное решение команды, а не побочный эффект
+ * дат аренды. Хранимое в базе значение "watch" (могло остаться от старых
+ * записей, до этого прохода) этой функцией намеренно игнорируется — только
+ * "blacklist" читается из данных как есть, "watch"/"normal" всегда считаются
+ * заново. */
+function clientDisplayRating(c: Client, rentals: Rental[]): Client["rating"] {
+  if (c.rating === "blacklist") return "blacklist";
+  if (clientHasOverdueNow(c.id, rentals)) return "watch";
+  return "normal";
 }
 
 /* ============================================================
@@ -610,7 +725,7 @@ function exportClientsCsv(list: Client[], rentals: Rental[]) {
       c.phone ?? "",
       c.email ?? "",
       c.doc ?? "",
-      RATING_META[c.rating].label,
+      RATING_META[clientDisplayRating(c, rentals)].label,
       c.notes ?? "",
       c.tags ?? "",
       clientRentals.length,
@@ -1000,6 +1115,130 @@ function ClientImportModal({
   );
 }
 
+/* ============================================================
+   Корзина клиентов (29-й проход, п.14 обзора: "теряется история навсегда,
+   без возможности восстановить — надо сделать корзину") — список клиентов,
+   удалённых за последние 30 дней (см. TRASH_RETENTION_DAYS в
+   app/services/trash.py), с восстановлением в один клик. Тот же idiom
+   `<dialog className="wide">`, что и ClientImportModal выше: загружается
+   при каждом открытии, а не держится в общем DataContext — корзину смотрят
+   не каждый день, тащить её в общий стейт приложения смысла нет.
+   ============================================================ */
+function ClientTrashModal({
+  open,
+  businessId,
+  onClose,
+  onRestored,
+}: {
+  open: boolean;
+  businessId: string;
+  onClose: () => void;
+  onRestored: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [items, setItems] = useState<TrashedClient[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setItems(null);
+    setError(null);
+    api
+      .get<TrashedClient[]>(`/businesses/${businessId}/clients/trash`)
+      .then((res) => {
+        if (!cancelled) setItems(res);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : "Не удалось загрузить корзину");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, businessId]);
+
+  async function handleRestore(id: string) {
+    setRestoringId(id);
+    try {
+      await api.post(`/businesses/${businessId}/clients/${id}/restore`, {});
+      setItems((prev) => (prev ?? []).filter((c) => c.id !== id));
+      onRestored();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Не удалось восстановить клиента");
+    } finally {
+      setRestoringId(null);
+    }
+  }
+
+  return (
+    <dialog
+      id="modal"
+      className="wide"
+      ref={ref}
+      onClose={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="modal-head">
+        <h3>Корзина клиентов</h3>
+        <button type="button" className="icon-btn" onClick={onClose}>
+          <IconClose />
+        </button>
+      </div>
+      <div className="modal-body">
+        <div className="field-hint" style={{ marginBottom: "10px" }}>
+          Удалённые клиенты хранятся здесь 30 дней и восстанавливаются в один клик. Клиенты с историей аренд (даже
+          закрытой) остаются в корзине бессрочно — это финансовая история, физически она не удаляется.
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        {items === null ? (
+          <div className="empty-note">Загрузка…</div>
+        ) : items.length === 0 ? (
+          <div className="empty-note">Корзина пуста</div>
+        ) : (
+          items.map((c) => (
+            <div className="mini-item" key={c.id}>
+              <span>
+                <span className="avatar" style={{ background: colorFromId(c.id), width: 18, height: 18, fontSize: "9px", marginRight: "6px" }}>
+                  {initials(c.name)}
+                </span>
+                {c.name}
+                {c.phone ? ` · ${c.phone}` : ""}
+                <span style={{ color: "var(--muted)", fontSize: "11.5px", marginLeft: "8px" }}>
+                  удалён {fmtDate(c.deleted_at.slice(0, 10))}
+                  {c.deleted_by_name ? ` · ${c.deleted_by_name}` : ""}
+                </span>
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={restoringId === c.id}
+                onClick={() => void handleRestore(c.id)}
+              >
+                <IconRestore /> {restoringId === c.id ? "Восстанавливаем…" : "Восстановить"}
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="modal-foot">
+        <button type="button" className="btn btn-primary" onClick={onClose}>
+          Готово
+        </button>
+      </div>
+    </dialog>
+  );
+}
+
 export function ClientsTab({
   businessId,
   search,
@@ -1032,6 +1271,42 @@ export function ClientsTab({
   const [bulkTag, setBulkTag] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  // Корзина (29-й проход, п.14 обзора) — тем же принципом, что и showImport
+  // выше: модалка сама грузит свой список при открытии, не тащим его в
+  // общий DataContext.
+  const [showTrash, setShowTrash] = useState(false);
+  // Настройка столбцов таблицы (29-й проход, п.11 обзора) — 1:1 перенесённое
+  // из EquipmentTab.tsx состояние (columnsPrefs БЕЗ businessId в ключе — см.
+  // докстринг ClientColumnsPrefs выше, personal browser preference, а не
+  // данные бизнеса).
+  const [columnsPrefs, setColumnsPrefs] = usePersistedState<ClientColumnsPrefs>(
+    "client-columns-v1",
+    DEFAULT_CLIENT_COLUMNS_PREFS
+  );
+  const [columnsEditMode, setColumnsEditMode] = useState(false);
+  const clientColumns = visibleClientColumns(columnsPrefs);
+
+  function toggleColumnHidden(key: string) {
+    setColumnsPrefs((prev) => {
+      const hidden = prev.hidden.includes(key) ? prev.hidden.filter((k) => k !== key) : [...prev.hidden, key];
+      return { ...prev, hidden };
+    });
+  }
+
+  function moveColumn(dragged: string, target: string) {
+    if (!dragged || !target || dragged === target) return;
+    setColumnsPrefs((prev) => {
+      const known = prev.order.filter((id) => CLIENT_TOGGLEABLE_COLUMN_IDS.includes(id));
+      const extra = CLIENT_TOGGLEABLE_COLUMN_IDS.filter((id) => !known.includes(id));
+      const order = known.concat(extra);
+      const from = order.indexOf(dragged);
+      const to = order.indexOf(target);
+      if (from === -1 || to === -1) return prev;
+      order.splice(from, 1);
+      order.splice(to, 0, dragged);
+      return { ...prev, order };
+    });
+  }
   // "Недавно просмотренные" (26-й проход, «глазами обычного пользователя»,
   // п.7) — id последних открытых карточек, per-бизнес, тем же persisted-
   // механизмом, что и sort выше. Храним максимум RECENT_CLIENTS_LIMIT штук,
@@ -1073,13 +1348,13 @@ export function ClientsTab({
   const ratingCounts: Record<string, number> = { all: bySearch.length };
   for (const f of RATING_FILTERS) {
     if (f.id === "all") continue;
-    ratingCounts[f.id] = bySearch.filter((c) => c.rating === f.id).length;
+    ratingCounts[f.id] = bySearch.filter((c) => clientDisplayRating(c, rentals) === f.id).length;
   }
   // Уровень ценности считается по ВСЕМ клиентам бизнеса (не по bySearch/
   // byRating) — см. комментарий у computeClientValueTiers: иначе бейдж
   // "прыгал" бы при смене поиска/фильтра.
   const valueTiers = computeClientValueTiers(clients, rentals);
-  const byRating = bySearch.filter((c) => ratingFilter === "all" || c.rating === ratingFilter);
+  const byRating = bySearch.filter((c) => ratingFilter === "all" || clientDisplayRating(c, rentals) === ratingFilter);
   const overdueNowCount = byRating.filter((c) => clientHasOverdueNow(c.id, rentals)).length;
   const dormantCount = byRating.filter((c) => isDormantClient(c.id, rentals)).length;
   const birthdayCount = byRating.filter((c) => isBirthdayThisWeek(c.birthday)).length;
@@ -1166,24 +1441,26 @@ export function ClientsTab({
    * слайдовером (ClientDetailPanel.onDelete). Проверка открытой аренды ДО
    * подтверждения — тот же порядок, что и в EquipmentDetailPanel.handleDelete:
    * не тратим клик пользователя на подтверждение действия, которое backend
-   * всё равно отклонит. */
+   * всё равно отклонит. 29-й проход, п.14 обзора: "удаление" теперь всегда
+   * МЯГКОЕ (см. app/services/trash.py) — клиент уходит в корзину и
+   * восстановим 30 дней, поэтому старая жёсткая блокировка "нельзя удалить
+   * клиента с ЛЮБОЙ историей" (была введена в 24-м проходе именно потому,
+   * что удаление раньше было безвозвратным) снята вместе с самим backend'ом
+   * — clientHasAnyRental больше здесь не используется, блокирует только
+   * ОТКРЫТАЯ аренда/бронь, которую в корзину унести действительно нельзя. */
   async function handleDelete(id: string) {
     const client = clients.find((c) => c.id === id);
     if (clientHasOpenRental(id, rentals)) {
       notify("Нельзя удалить: у клиента есть аренда в работе или бронь. Сначала завершите её.");
       return;
     }
-    // Найдено при разборе бага удаления (24-й проход): backend теперь
-    // отклоняет удаление и с ЗАКРЫТОЙ историей аренд (см. clientHasAnyRental)
-    // — сообщаем об этом сразу и предлагаем объединение, не тратя клик
-    // пользователя на подтверждение, которое всё равно будет отклонено.
-    if (clientHasAnyRental(id, rentals)) {
-      notify(
-        "Нельзя удалить: у клиента есть история аренд (даже завершённых) — это финансовая история. Если карточка дублирует другую, объедините их из карточки клиента."
-      );
+    if (
+      !(await confirm(`Клиент «${client?.name ?? ""}» будет перемещён в корзину. Его можно восстановить в течение 30 дней.`, {
+        danger: true,
+        confirmLabel: "В корзину",
+      }))
+    )
       return;
-    }
-    if (!(await confirm(`Клиент «${client?.name ?? ""}» будет удалён безвозвратно.`, { danger: true }))) return;
     try {
       await api.delete(`/businesses/${businessId}/clients/${id}`);
       if (openClientId === id) setOpenClientId(null);
@@ -1265,26 +1542,26 @@ export function ClientsTab({
     }
   }
 
-  /** Массовое удаление — клиенты с ЛЮБОЙ историей аренд (открытой или
-   * закрытой) пропускаются без попытки удаления, тот же принцип, что и
-   * handleBulkDelete в EquipmentTab.tsx. Раньше здесь проверялась только
-   * открытая аренда — расширено вместе с исправлением бага удаления (24-й
-   * проход): клиенты с закрытой историей раньше падали бы на бэкенде и
-   * учитывались в "Ошибок", а не в "Пропущено", как остальные заблокированные. */
+  /** Массовое удаление — клиенты с ОТКРЫТОЙ арендой/бронью пропускаются без
+   * попытки удаления, тот же принцип, что и handleBulkDelete в
+   * EquipmentTab.tsx. 29-й проход, п.14 обзора: удаление теперь мягкое (см.
+   * комментарий у handleDelete выше) — клиентов с ЗАКРЫТОЙ историей аренд
+   * больше не нужно заранее отфильтровывать, backend их принимает и уводит
+   * в корзину. */
   async function handleBulkDelete() {
     if (selectedIds.size === 0) return;
     const ids = [...selectedIds];
-    const blocked = ids.filter((id) => clientHasAnyRental(id, rentals));
-    const deletable = ids.filter((id) => !clientHasAnyRental(id, rentals));
+    const blocked = ids.filter((id) => clientHasOpenRental(id, rentals));
+    const deletable = ids.filter((id) => !clientHasOpenRental(id, rentals));
     if (deletable.length === 0) {
-      notify("Ни одного из выбранных клиентов нельзя удалить: у каждого есть история аренд.");
+      notify("Ни одного из выбранных клиентов нельзя удалить: у каждого есть аренда в работе или бронь.");
       return;
     }
     const message =
       blocked.length > 0
-        ? `Будет безвозвратно удалено клиентов: ${deletable.length} из ${ids.length}. Остальные ${blocked.length} пропущены — у них есть история аренд.`
-        : `Будет безвозвратно удалено клиентов: ${deletable.length}.`;
-    if (!(await confirmBulk(message, { danger: true }))) return;
+        ? `Будет перемещено в корзину клиентов: ${deletable.length} из ${ids.length}. Остальные ${blocked.length} пропущены — у них аренда в работе или бронь. Восстановить можно в течение 30 дней.`
+        : `Будет перемещено в корзину клиентов: ${deletable.length}. Восстановить можно в течение 30 дней.`;
+    if (!(await confirmBulk(message, { danger: true, confirmLabel: "В корзину" }))) return;
     setBulkBusy(true);
     try {
       const results = await Promise.allSettled(deletable.map((id) => api.delete(`/businesses/${businessId}/clients/${id}`)));
@@ -1295,7 +1572,7 @@ export function ClientsTab({
         notify(
           `Удалено: ${deletable.length - failed}.` +
             (failed > 0 ? ` Ошибок: ${failed}.` : "") +
-            (blocked.length > 0 ? ` Пропущено (есть история аренд): ${blocked.length}.` : ""),
+            (blocked.length > 0 ? ` Пропущено (аренда в работе или бронь): ${blocked.length}.` : ""),
           "info"
         );
       }
@@ -1350,6 +1627,21 @@ export function ClientsTab({
           </button>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
+          {/* Настройка столбцов — 1:1 перенесённая кнопка из EquipmentTab.tsx
+              (29-й проход, п.11 обзора). */}
+          <button
+            type="button"
+            className={"btn" + (columnsEditMode ? " btn-primary" : "")}
+            onClick={() => setColumnsEditMode((v) => !v)}
+            title="Скрыть ненужные столбцы таблицы или перетащить их в другом порядке"
+          >
+            <IconSliders /> {columnsEditMode ? "Готово" : "Настроить столбцы"}
+          </button>
+          {/* Корзина (29-й проход, п.14 обзора) — восстановление удалённых
+              клиентов в течение 30 дней. */}
+          <button className="btn" onClick={() => setShowTrash(true)}>
+            <IconTrash /> Корзина
+          </button>
           <button className="btn" onClick={() => setShowImport(true)}>
             Импорт CSV
           </button>
@@ -1361,6 +1653,61 @@ export function ClientsTab({
           </button>
         </div>
       </div>
+
+      {columnsEditMode && (
+        <div className="panel" style={{ marginBottom: "10px" }}>
+          <div className="panel-body">
+            <div className="field-hint" style={{ marginBottom: "8px" }}>
+              Перетащите карточку, чтобы изменить порядок столбцов, или нажмите на глаз, чтобы скрыть/показать. Столбец «Имя» всегда виден и всегда первый.
+            </div>
+            <div className="col-edit-row">
+              {visibleClientColumns({ ...columnsPrefs, hidden: [] }).map((col) => {
+                const hiddenCol = columnsPrefs.hidden.includes(col.key);
+                return (
+                  <div
+                    key={col.key}
+                    className={"dash-block-cell col-edit-chip" + (hiddenCol ? " dash-block-hidden" : "")}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData("text/plain", col.key);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.currentTarget.classList.add("dragging");
+                    }}
+                    onDragEnd={(e) => e.currentTarget.classList.remove("dragging")}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      e.currentTarget.classList.add("drag-over");
+                    }}
+                    onDragLeave={(e) => e.currentTarget.classList.remove("drag-over")}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.currentTarget.classList.remove("drag-over");
+                      const dragged = e.dataTransfer.getData("text/plain");
+                      if (dragged) moveColumn(dragged, col.key);
+                    }}
+                  >
+                    <div className="dash-handle">
+                      <span className="dash-grip" title="Перетащите, чтобы изменить порядок">
+                        <IconGrip />
+                      </span>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        onClick={() => toggleColumnHidden(col.key)}
+                        title={hiddenCol ? "Показать столбец" : "Скрыть столбец"}
+                      >
+                        {hiddenCol ? <IconEyeOff /> : <IconEye />}
+                      </button>
+                    </div>
+                    <span className="col-edit-chip-label">{col.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* "Недавно просмотренные" (26-й проход, «глазами обычного
           пользователя», п.7) — быстрый доступ к последним открытым
@@ -1386,6 +1733,9 @@ export function ClientsTab({
         <div className="panel" style={{ marginBottom: "10px" }}>
           <div className="panel-body" style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
             <strong>Выбрано: {selectedIds.size}</strong>
+            {/* "На контроле" убран из выбора (29-й проход, п.6 обзора) — это
+                больше не ручное значение, см. clientDisplayRating выше:
+                рейтинг "на контроле" вычисляется сам по текущей просрочке. */}
             <Dropdown
               value={bulkRating}
               onChange={setBulkRating}
@@ -1394,7 +1744,6 @@ export function ClientsTab({
               style={{ maxWidth: "200px" }}
               options={[
                 { value: "normal", label: "Надёжный" },
-                { value: "watch", label: "На контроле" },
                 { value: "blacklist", label: "Чёрный список" },
               ]}
             />
@@ -1443,7 +1792,15 @@ export function ClientsTab({
                     title="Выбрать все"
                   />
                 </th>
-                {CLIENT_SORT_COLUMNS.map((col) => {
+                {/* "Имя" — всегда первый и всегда виден, вне настройки
+                    столбцов (см. CLIENT_TOGGLEABLE_COLUMN_IDS). */}
+                <th className={"sortable" + (sort.key === "name" ? " active" : "")} onClick={() => toggleSort("name")}>
+                  Имя
+                  <span className={"sort-arrow" + (sort.key === "name" ? "" : " sort-arrow-idle")}>
+                    {sort.key === "name" ? (sort.dir === "desc" ? "▼" : "▲") : "↕"}
+                  </span>
+                </th>
+                {clientColumns.map((col) => {
                   const active = sort.key === col.key;
                   return (
                     <th key={col.key} className={"sortable" + (active ? " active" : "")} onClick={() => toggleSort(col.key)}>
@@ -1468,6 +1825,14 @@ export function ClientsTab({
                 const lastRental = lastRentalDate(c.id, rentals);
                 const tagList = (c.tags ?? "").split(",").map((t) => t.trim()).filter(Boolean);
                 const waDigits = normalizePhoneDigits(c.phone);
+                const cellCtx: ClientCellContext = {
+                  clientRentals,
+                  activeCount,
+                  overdueNow,
+                  lastRental,
+                  displayRating: clientDisplayRating(c, rentals),
+                  revenue: clientLifetimeRevenue(c.id, rentals),
+                };
                 return (
                   <tr key={c.id} data-clickable="true" onClick={() => openClient(c.id)}>
                     <td onClick={(e) => e.stopPropagation()}>
@@ -1552,19 +1917,9 @@ export function ClientsTab({
                         </div>
                       </div>
                     </td>
-                    <td>{c.doc ?? "—"}</td>
-                    <td>
-                      <Badge meta={RATING_META[c.rating]} />
-                    </td>
-                    <td>
-                      {clientRentals.length} всего{activeCount > 0 ? `, ${activeCount} сейчас` : ""}
-                      {overdueNow > 0 && (
-                        <div style={{ marginTop: "4px" }}>
-                          <Badge meta={{ label: `Просрочено × ${overdueNow}`, tone: "critical" }} />
-                        </div>
-                      )}
-                    </td>
-                    <td>{lastRental ? fmtDate(lastRental) : "—"}</td>
+                    {clientColumns.map((col) => (
+                      <td key={col.key}>{renderClientCell(col.key, c, cellCtx)}</td>
+                    ))}
                     <td onClick={(e) => e.stopPropagation()} style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       <button type="button" className="icon-btn" title="Изменить" onClick={() => openEditModal(c.id)}>
                         <IconEdit />
@@ -1595,6 +1950,13 @@ export function ClientsTab({
         businessId={businessId}
         onClose={() => setShowImport(false)}
         onImported={() => void reloadClients()}
+      />
+
+      <ClientTrashModal
+        open={showTrash}
+        businessId={businessId}
+        onClose={() => setShowTrash(false)}
+        onRestored={() => void reloadClients()}
       />
 
       {openClientId && <div className="slideover-backdrop" onClick={() => setOpenClientId(null)} />}
@@ -1678,6 +2040,10 @@ export function ClientDetailPanel({
 
   if (!client) return null;
 
+  // См. clientDisplayRating выше — "На контроле" больше не хранится как
+  // ручной выбор, а вычисляется по текущей просрочке (29-й проход, п.6 обзора).
+  const displayRating = clientDisplayRating(client, rentals);
+
   const history = rentals
     .filter((r) => r.client_id === clientId)
     .slice()
@@ -1685,7 +2051,15 @@ export function ClientDetailPanel({
   // Список ограничен по умолчанию (24-й проход, п.5 обзора) — у постоянного
   // клиента с десятками аренд слайдовер иначе растягивался бы бесконечно.
   const HISTORY_PAGE = 6;
-  const visibleHistory = showAllHistory ? history : history.slice(0, HISTORY_PAGE);
+  // Фильтр истории по месяцу из мини-графика активности (29-й проход, п.4
+  // обзора, "клик по графику должен фильтровать историю по месяцу") — "YYYY-MM"
+  // или null ("не фильтровать"). Сбрасывается при закрытии/переоткрытии
+  // карточки естественным образом (компонент размонтируется целиком).
+  const [historyMonthFilter, setHistoryMonthFilter] = useState<string | null>(null);
+  const monthFilteredHistory = historyMonthFilter
+    ? history.filter((r) => r.start_date.startsWith(historyMonthFilter))
+    : history;
+  const visibleHistory = showAllHistory ? monthFilteredHistory : monthFilteredHistory.slice(0, HISTORY_PAGE);
 
   const lifetimeRevenue = history.filter((r) => r.status === "returned").reduce((s, r) => s + r.total, 0);
   const lateReturns = history.filter((r) => r.status === "returned" && r.actual_return && r.actual_return > r.end_date).length;
@@ -1746,7 +2120,7 @@ export function ClientDetailPanel({
             <h3>
               {client.name}
               {client.client_type === "company" && (
-                <span className="badge-tag" title="Организация">
+                <span className="badge-tag" title="Организация" style={{ marginLeft: "6px" }}>
                   Орг.
                 </span>
               )}
@@ -1761,6 +2135,44 @@ export function ClientDetailPanel({
         </div>
         <button className="icon-btn" onClick={onClose}>
           <IconClose />
+        </button>
+      </div>
+
+      {/* Кнопки действий (29-й проход, п.13 обзора: "перенести действия
+          наверх, не заставлять листать всю карточку до конца ради простого
+          удаления") — раньше были самым последним блоком слайдовера, теперь
+          сразу под шапкой, тем же принципом, что и заголовок/аватар выше:
+          самое частое взаимодействие с карточкой не должно требовать скролла. */}
+      <div className="slideover-section" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+        {/* "+ Новая аренда" прямо из карточки (25-й проход, п.1 обзора) —
+            открывает глобальную модалку выше по дереву (см. комментарий у
+            onCreateRental в сигнатуре компонента), доступна везде, где
+            открыта карточка (и во вкладке "Клиенты", и с дашборда). */}
+        {onCreateRental && (
+          <button className="btn btn-primary" onClick={() => onCreateRental(clientId)}>
+            + Новая аренда
+          </button>
+        )}
+        {onEdit && (
+          <button className="btn" onClick={() => onEdit(clientId)}>
+            Изменить
+          </button>
+        )}
+        {/* Слияние дублей (24-й проход, п.7 обзора) — доступно только там же,
+            где и полноценное редактирование (см. комментарий у onEdit выше),
+            и только если в бизнесе есть с кем объединять. */}
+        {onEdit && clients.length > 1 && (
+          <button className="btn" onClick={() => setShowMerge(true)}>
+            Объединить с другим клиентом
+          </button>
+        )}
+        <button
+          className="btn btn-danger-ghost"
+          onClick={() => {
+            onDelete(clientId);
+          }}
+        >
+          Удалить
         </button>
       </div>
 
@@ -1845,14 +2257,27 @@ export function ClientDetailPanel({
         <>
           <div className="slideover-section">
             <h4>Надёжность</h4>
-            <div style={{ marginBottom: "10px" }}>
-              <Badge meta={RATING_META[client.rating]} />
+            <div style={{ marginBottom: "10px", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <Badge meta={RATING_META[displayRating]} />
+              {/* Постоянная пометка "когда-то был в чёрном списке" (29-й
+                  проход, п.8 обзора) — не сбрасывается автоматически, видна
+                  и после того, как клиента реабилитировали. */}
+              {client.was_blacklisted && client.rating !== "blacklist" && (
+                <span title="Раньше уже был в чёрном списке" style={{ display: "inline-block" }}>
+                  <Badge meta={{ label: "Был в чёрном списке", tone: "muted" }} />
+                </span>
+              )}
             </div>
             {client.rating === "blacklist" && client.blacklist_reason && (
               <div className="field-hint" style={{ marginBottom: "10px" }}>
                 Причина: {client.blacklist_reason}
               </div>
             )}
+            {/* "На контроле" убран из кнопок выбора (29-й проход, п.6 обзора)
+                — это больше не ручное состояние, а вычисляется само по
+                текущей просрочке (см. clientDisplayRating/displayRating
+                выше), поэтому выбирать осталось только между "Надёжный" и
+                "Чёрный список". */}
             <div className="rating-picker">
               <button
                 className={"btn btn-sm" + (client.rating === "normal" ? " btn-primary" : "")}
@@ -1861,18 +2286,18 @@ export function ClientDetailPanel({
                 Надёжный
               </button>
               <button
-                className={"btn btn-sm" + (client.rating === "watch" ? " btn-primary" : "")}
-                onClick={() => void setRating("watch")}
-              >
-                На контроле
-              </button>
-              <button
                 className={"btn btn-sm" + (client.rating === "blacklist" ? " btn-primary" : "")}
                 onClick={() => void setRating("blacklist")}
               >
                 Чёрный список
               </button>
             </div>
+            {displayRating === "watch" && client.rating !== "blacklist" && (
+              <div className="field-hint" style={{ marginTop: "8px" }}>
+                Статус «На контроле» выставляется автоматически, пока у клиента есть просрочка прямо сейчас — вручную
+                его включать/выключать не нужно.
+              </div>
+            )}
           </div>
 
           <div className="slideover-section">
@@ -1889,13 +2314,27 @@ export function ClientDetailPanel({
             </div>
           </div>
 
-          <MiniActivityChart rentals={history} />
+          <MiniActivityChart
+            rentals={history}
+            onSelectMonth={(key) => {
+              setHistoryMonthFilter(key);
+              setShowAllHistory(false);
+              setPanelTab("history");
+            }}
+          />
 
           <div className="slideover-section">
             <h4>Контакты</h4>
             <div className="kv-grid">
+              {/* Телефон отдельной строкой в блоке "Контакты" (29-й проход,
+                  п.1 обзора: раньше номер был виден только под именем в
+                  шапке, а сам блок "Контакты" его не показывал вовсе) —
+                  кликабельная tel:-ссылка, тем же принципом, что и кнопка
+                  "Позвонить" выше. */}
+              <span className="k">Телефон</span>
+              <span>{client.phone ? <a href={`tel:${client.phone}`}>{client.phone}</a> : "—"}</span>
               <span className="k">Email</span>
-              <span>{client.email ?? "—"}</span>
+              <span>{client.email ? <a href={`mailto:${client.email}`}>{client.email}</a> : "—"}</span>
               <span className="k">Документ</span>
               <span>{client.doc ?? "—"}</span>
               {client.client_type === "company" && (
@@ -1959,8 +2398,18 @@ export function ClientDetailPanel({
 
       {panelTab === "history" && (
         <div className="slideover-section">
+          {historyMonthFilter && (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+              <span className="field-hint">Показаны аренды, начатые в {monthKeyToLabel(historyMonthFilter)}</span>
+              <button type="button" className="btn btn-sm" onClick={() => setHistoryMonthFilter(null)}>
+                Сбросить
+              </button>
+            </div>
+          )}
           {history.length === 0 ? (
             <div className="empty-note">Ещё не сдавалось в аренду</div>
+          ) : monthFilteredHistory.length === 0 ? (
+            <div className="empty-note">В этом месяце аренд не было</div>
           ) : (
             <>
               {visibleHistory.map((r) => (
@@ -1979,14 +2428,14 @@ export function ClientDetailPanel({
                   <Badge meta={RENTAL_META[rentalDisplayStatus(r)]} />
                 </div>
               ))}
-              {history.length > HISTORY_PAGE && (
+              {monthFilteredHistory.length > HISTORY_PAGE && (
                 <button
                   type="button"
                   className="btn btn-sm"
                   style={{ marginTop: "8px" }}
                   onClick={() => setShowAllHistory((v) => !v)}
                 >
-                  {showAllHistory ? "Свернуть" : `Показать ещё ${history.length - HISTORY_PAGE}`}
+                  {showAllHistory ? "Свернуть" : `Показать ещё ${monthFilteredHistory.length - HISTORY_PAGE}`}
                 </button>
               )}
             </>
@@ -1995,39 +2444,6 @@ export function ClientDetailPanel({
       )}
 
       {panelTab === "journal" && <ClientNotesJournal businessId={businessId} clientId={clientId} />}
-
-      <div className="slideover-section" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-        {/* "+ Новая аренда" прямо из карточки (25-й проход, п.1 обзора) —
-            открывает глобальную модалку выше по дереву (см. комментарий у
-            onCreateRental в сигнатуре компонента), доступна везде, где
-            открыта карточка (и во вкладке "Клиенты", и с дашборда). */}
-        {onCreateRental && (
-          <button className="btn btn-primary" onClick={() => onCreateRental(clientId)}>
-            + Новая аренда
-          </button>
-        )}
-        {onEdit && (
-          <button className="btn" onClick={() => onEdit(clientId)}>
-            Изменить
-          </button>
-        )}
-        {/* Слияние дублей (24-й проход, п.7 обзора) — доступно только там же,
-            где и полноценное редактирование (см. комментарий у onEdit выше),
-            и только если в бизнесе есть с кем объединять. */}
-        {onEdit && clients.length > 1 && (
-          <button className="btn" onClick={() => setShowMerge(true)}>
-            Объединить с другим клиентом
-          </button>
-        )}
-        <button
-          className="btn btn-danger-ghost"
-          onClick={() => {
-            onDelete(clientId);
-          }}
-        >
-          Удалить
-        </button>
-      </div>
 
       <DocModal title={docModal?.title ?? ""} open={!!docModal} onClose={() => setDocModal(null)}>
         {docModal?.node}
@@ -2122,6 +2538,7 @@ function MergeClientModal({
   return (
     <dialog
       id="modal"
+      className="wide"
       ref={ref}
       onClose={onClose}
       onClick={(e) => {
@@ -2143,10 +2560,16 @@ function MergeClientModal({
           </div>
           <div className="field">
             <label>Перенести историю в</label>
+            {/* Поле поиска в пикере (29-й проход, п.15 обзора) — в базе с
+                сотнями клиентов листать простой список неудобно; заодно
+                модалка расширена (className="wide" на <dialog> выше), чтобы
+                длинные имена/телефоны в списке не переносились через строку. */}
             <Dropdown
               value={targetId}
               onChange={setTargetId}
               placeholder="Выберите клиента"
+              searchable
+              searchPlaceholder="Поиск по имени…"
               options={candidates.map((c) => ({ value: c.id, label: c.name + (c.phone ? ` · ${c.phone}` : "") }))}
             />
           </div>
@@ -2375,13 +2798,31 @@ function lastMonths(n: number): { key: string; label: string }[] {
   return out;
 }
 
+/** Подпись месяца по ключу "YYYY-MM" в родительном падеже, для фразы
+ * "Показаны аренды, начатые в …" над отфильтрованной историей ниже. */
+function monthKeyToLabel(key: string): string {
+  const [y, m] = key.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("ru", { month: "long", year: "numeric" });
+}
+
 /** Мини-график активности клиента — сколько аренд НАЧАТО в каждом из
  * последних 6 месяцев (26-й проход, «глазами обычного пользователя»,
  * п.4): раньше про динамику клиента (затихает/разгоняется) можно было
  * судить только по одной цифре "выручка за всё время" и построчной истории.
  * Простой SVG-бар-чарт без сторонних библиотек — тот же принцип "минимум
- * зависимостей", что и весь остальной проект (см. Dropdown.tsx и т.п.). */
-function MiniActivityChart({ rentals }: { rentals: Rental[] }) {
+ * зависимостей", что и весь остальной проект (см. Dropdown.tsx и т.п.).
+ * 29-й проход, п.4 обзора — три правки по фидбеку с живого прода:
+ *  1. preserveAspectRatio="none" убран — это и был баг "график растянут
+ *     криво": "none" заставляет SVG растягивать содержимое под фактическую
+ *     ширину контейнера НЕ сохраняя пропорции viewBox, так что на широких
+ *     карточках столбики визуально "расплющивались" по высоте. Без этого
+ *     атрибута работает дефолт "xMidYMid meet" — сохраняет пропорции.
+ *  2. Каждый столбец кликабелен — открывает вкладку "История", отфильтрованную
+ *     по этому месяцу (см. onSelectMonth/historyMonthFilter в ClientDetailPanel).
+ *  3. Подпись под заголовком уточняет, что считается КОЛИЧЕСТВО сделок, а не
+ *     выручка — раньше это было неочевидно, цифры на графике легко спутать
+ *     с деньгами. */
+function MiniActivityChart({ rentals, onSelectMonth }: { rentals: Rental[]; onSelectMonth: (monthKey: string) => void }) {
   if (rentals.length === 0) return null;
   const months = lastMonths(6);
   const counts = months.map((m) => rentals.filter((r) => r.start_date.startsWith(m.key)).length);
@@ -2391,13 +2832,23 @@ function MiniActivityChart({ rentals }: { rentals: Rental[] }) {
   return (
     <div className="slideover-section">
       <h4>Активность по месяцам</h4>
-      <svg width="100%" height="60" viewBox="0 0 180 60" preserveAspectRatio="none" style={{ display: "block" }}>
+      <div className="field-hint" style={{ marginBottom: "6px" }}>
+        Количество арендных сделок, начатых в месяце (не выручка) — нажмите на столбец, чтобы посмотреть их в истории.
+      </div>
+      <svg width="100%" height="60" viewBox="0 0 180 60" style={{ display: "block" }}>
         {months.map((m, i) => {
           const x = i * barSlot + 3;
           const h = (counts[i] / max) * 38;
           return (
-            <g key={m.key}>
+            <g
+              key={m.key}
+              onClick={() => counts[i] > 0 && onSelectMonth(m.key)}
+              style={{ cursor: counts[i] > 0 ? "pointer" : "default" }}
+            >
               <title>{`${m.label}: ${counts[i]}`}</title>
+              {/* Прозрачная область побольше вокруг столбца — увеличивает
+                  кликабельную зону сверх узкого самого столбца. */}
+              <rect x={x - 2} y="0" width={Math.max(barWidth + 4, 1)} height="46" fill="transparent" />
               <rect x={x} y={44 - h} width={Math.max(barWidth, 1)} height={Math.max(h, 1)} rx="2" fill="var(--accent)" />
               <text x={x + barWidth / 2} y="56" fontSize="7.5" textAnchor="middle" fill="var(--muted)">
                 {m.label}
@@ -2415,6 +2866,25 @@ function MiniActivityChart({ rentals }: { rentals: Rental[] }) {
 // заставлять пользователя ждать загрузку и кодирование файла, который
 // backend всё равно отклонит.
 const MAX_CLIENT_DOCUMENT_BYTES = 5 * 1024 * 1024;
+
+/** Открыть/скачать документ клиента через Blob + ObjectURL вместо прямой
+ * data:-ссылки (29-й проход, п.9 обзора) — современный Chrome блокирует
+ * навигацию верхнего фрейма на data: URL ("Not allowed to navigate top
+ * frame to data URL"), так что клик по ссылке `href="data:…"` в реальном
+ * проде у пользователя просто ничего не делал молча, без видимой ошибки.
+ * Blob-URL того же ограничения не имеет. URL.revokeObjectURL — с небольшой
+ * задержкой, а не сразу: сама навигация в новую вкладку асинхронна, слишком
+ * ранний revoke иногда успевал "погасить" ссылку раньше, чем вкладка её
+ * прочитает. */
+function openClientDocument(doc: ClientDocument) {
+  const byteChars = atob(doc.data_base64);
+  const bytes = new Uint8Array(byteChars.length);
+  for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+  const blob = new Blob([bytes], { type: doc.content_type });
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank", "noopener,noreferrer");
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
 
 /** Прикреплённые сканы/фото документов клиента (26-й проход, проф. обзор,
  * п.4: "Документ" в карточке — это раньше был только текст, а не сама
@@ -2445,22 +2915,44 @@ function ClientDocumentsSection({ businessId, clientId }: { businessId: string; 
     };
   }, [businessId, clientId]);
 
-  async function handleFile(file: File | null) {
-    if (!file) return;
+  /** Загрузка сразу нескольких файлов (29-й проход, п.9 обзора: "нужно
+   * прикреплять сразу несколько файлов, а не по одному") — по одному запросу
+   * на файл, последовательно (не Promise.all — чтобы не заваливать backend
+   * параллельными запросами при выборе сразу десятка сканов, да и порядок
+   * появления в списке предсказуемее). Каждый файл сохраняет собственное имя
+   * как и раньше (ClientDocument.filename) — это и есть его "подпись" в
+   * списке, отдельного поля метки не заводили. Один неудачный файл не
+   * прерывает загрузку остальных — итоговая ошибка (если была) показывается
+   * одной строкой после того, как отработали все. */
+  async function handleFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
     setError(null);
-    if (file.size > MAX_CLIENT_DOCUMENT_BYTES) {
-      setError("Файл слишком большой (максимум 5 МБ)");
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
-    }
+    const list = Array.from(files);
+    const tooBig = list.filter((f) => f.size > MAX_CLIENT_DOCUMENT_BYTES);
+    const toUpload = list.filter((f) => f.size <= MAX_CLIENT_DOCUMENT_BYTES);
     setUploading(true);
+    let failed = 0;
     try {
-      const form = new FormData();
-      form.append("file", file);
-      const created = await api.postForm<ClientDocument>(`/businesses/${businessId}/clients/${clientId}/documents`, form);
-      setDocs((prev) => [created, ...(prev ?? [])]);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Не удалось загрузить файл");
+      for (const file of toUpload) {
+        try {
+          const form = new FormData();
+          form.append("file", file);
+          const created = await api.postForm<ClientDocument>(`/businesses/${businessId}/clients/${clientId}/documents`, form);
+          setDocs((prev) => [created, ...(prev ?? [])]);
+        } catch {
+          failed++;
+        }
+      }
+      if (tooBig.length > 0 || failed > 0) {
+        setError(
+          [
+            tooBig.length > 0 ? `Слишком большой файл (максимум 5 МБ): ${tooBig.map((f) => f.name).join(", ")}` : "",
+            failed > 0 ? `Не удалось загрузить файлов: ${failed}` : "",
+          ]
+            .filter(Boolean)
+            .join(". ")
+        );
+      }
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -2481,16 +2973,18 @@ function ClientDocumentsSection({ businessId, clientId }: { businessId: string; 
     <div className="slideover-section">
       <h4>Документы{docs ? ` · ${docs.length}` : ""}</h4>
       <div className="field-hint" style={{ marginBottom: "8px" }}>
-        Сканы/фото документов клиента (паспорт, доверенность и т.п.) — до 5 МБ на файл.
+        Сканы/фото документов клиента (паспорт, доверенность и т.п.) — до 5 МБ на файл, можно выбрать сразу несколько.
       </div>
       <input
         ref={fileInputRef}
         type="file"
         accept="image/*,application/pdf"
-        onChange={(e) => void handleFile(e.target.files?.[0] ?? null)}
+        multiple
+        onChange={(e) => void handleFiles(e.target.files)}
         disabled={uploading}
         style={{ marginBottom: "8px" }}
       />
+      {uploading && <div className="empty-note">Загружаем…</div>}
       {error && <div className="form-error">{error}</div>}
       {docs === null ? (
         <div className="empty-note">Загрузка…</div>
@@ -2499,7 +2993,10 @@ function ClientDocumentsSection({ businessId, clientId }: { businessId: string; 
       ) : (
         docs.map((d) => (
           <div className="mini-item" key={d.id}>
-            <a href={`data:${d.content_type};base64,${d.data_base64}`} target="_blank" rel="noreferrer">
+            {/* Blob + ObjectURL вместо прямой data:-ссылки — см. докстринг
+                openClientDocument выше (Chrome блокирует top-frame навигацию
+                на data: URL). */}
+            <a href="#" onClick={(e) => { e.preventDefault(); openClientDocument(d); }}>
               <IconFile /> {d.filename}
             </a>
             <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>

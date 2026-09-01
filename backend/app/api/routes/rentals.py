@@ -93,14 +93,18 @@ async def create_rental(body: RentalCreate, ctx: BusinessContext = Depends(edit_
     if body.end_date < body.start_date:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Дата окончания раньше даты начала")
 
+    # deleted_at is not None — клиент/позиция в корзине (29-й проход, см.
+    # app/services/trash.py): для НОВОЙ аренды это тот же случай, что и
+    # "не найден" — трогать спрятанные записи можно только через
+    # POST .../restore, не заводя на них новые обязательства.
     client = db.get(Client, body.client_id)
-    if client is None or client.business_id != ctx.business_id:
+    if client is None or client.business_id != ctx.business_id or client.deleted_at is not None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Клиент не найден в этом бизнесе")
 
     items_data = []
     for eq_id in body.equipment_ids:
         equipment = db.get(Equipment, eq_id)
-        if equipment is None or equipment.business_id != ctx.business_id:
+        if equipment is None or equipment.business_id != ctx.business_id or equipment.deleted_at is not None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Оборудование {eq_id} не найдено в этом бизнесе")
         if equipment.status not in (EquipmentStatus.available,):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"«{equipment.name}» сейчас недоступно (статус: {equipment.status.value})")
@@ -326,7 +330,7 @@ async def edit_rental(
         equipment_by_id: dict[uuid.UUID, Equipment] = {}
         for eq_id in new_ids:
             equipment = db.get(Equipment, eq_id)
-            if equipment is None or equipment.business_id != ctx.business_id:
+            if equipment is None or equipment.business_id != ctx.business_id or equipment.deleted_at is not None:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Оборудование {eq_id} не найдено в этом бизнесе")
             equipment_by_id[eq_id] = equipment
 

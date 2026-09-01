@@ -10,10 +10,21 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import { useData } from "../../context/DataContext";
-import type { Equipment, Rental } from "../../api/types";
+import type { Equipment, Rental, TrashedEquipment } from "../../api/types";
 import { EQ_META, Badge, equipmentDisplayStatus, nextFreeDate } from "../../lib/statusMeta";
 import { money, fmtDate, isoAddDays, todayISO } from "../../lib/format";
-import { IconCopy, IconChevronDown, IconCheck, IconGrip, IconSliders, IconEye, IconEyeOff } from "../../lib/icons";
+import {
+  IconCopy,
+  IconChevronDown,
+  IconCheck,
+  IconGrip,
+  IconSliders,
+  IconEye,
+  IconEyeOff,
+  IconTrash,
+  IconRestore,
+  IconClose,
+} from "../../lib/icons";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
@@ -203,6 +214,123 @@ function equipmentCellClassName(key: string): string | undefined {
 }
 
 /* ============================================================
+   Корзина оборудования (29-й проход, п.14 обзора) — точная копия
+   ClientTrashModal из ClientsTab.tsx, только для позиций оборудования. См.
+   докстринг там же: список удалённых за последние 30 дней (см.
+   TRASH_RETENTION_DAYS в app/services/trash.py), восстановление в один клик.
+   ============================================================ */
+function EquipmentTrashModal({
+  open,
+  businessId,
+  onClose,
+  onRestored,
+}: {
+  open: boolean;
+  businessId: string;
+  onClose: () => void;
+  onRestored: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const [items, setItems] = useState<TrashedEquipment[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setItems(null);
+    setError(null);
+    api
+      .get<TrashedEquipment[]>(`/businesses/${businessId}/equipment/trash`)
+      .then((res) => {
+        if (!cancelled) setItems(res);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : "Не удалось загрузить корзину");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, businessId]);
+
+  async function handleRestore(id: string) {
+    setRestoringId(id);
+    try {
+      await api.post(`/businesses/${businessId}/equipment/${id}/restore`, {});
+      setItems((prev) => (prev ?? []).filter((e) => e.id !== id));
+      onRestored();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Не удалось восстановить позицию");
+    } finally {
+      setRestoringId(null);
+    }
+  }
+
+  return (
+    <dialog
+      id="modal"
+      className="wide"
+      ref={ref}
+      onClose={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="modal-head">
+        <h3>Корзина оборудования</h3>
+        <button type="button" className="icon-btn" onClick={onClose}>
+          <IconClose />
+        </button>
+      </div>
+      <div className="modal-body">
+        <div className="field-hint" style={{ marginBottom: "10px" }}>
+          Удалённые позиции хранятся здесь 30 дней и восстанавливаются в один клик. Позиции с историей аренд остаются в
+          корзине бессрочно — это финансовая история, физически она не удаляется.
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        {items === null ? (
+          <div className="empty-note">Загрузка…</div>
+        ) : items.length === 0 ? (
+          <div className="empty-note">Корзина пуста</div>
+        ) : (
+          items.map((it) => (
+            <div className="mini-item" key={it.id}>
+              <span>
+                {it.name} · № {it.code ?? "—"} · {it.category}
+                <span style={{ color: "var(--muted)", fontSize: "11.5px", marginLeft: "8px" }}>
+                  удалена {fmtDate(it.deleted_at.slice(0, 10))}
+                  {it.deleted_by_name ? ` · ${it.deleted_by_name}` : ""}
+                </span>
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={restoringId === it.id}
+                onClick={() => void handleRestore(it.id)}
+              >
+                <IconRestore /> {restoringId === it.id ? "Восстанавливаем…" : "Восстановить"}
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="modal-foot">
+        <button type="button" className="btn btn-primary" onClick={onClose}>
+          Готово
+        </button>
+      </div>
+    </dialog>
+  );
+}
+
+/* ============================================================
    Вкладка «Оборудование»
    ============================================================ */
 export function EquipmentTab({
@@ -281,6 +409,8 @@ export function EquipmentTab({
   const [formError, setFormError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  // Корзина (29-й проход, п.14 обзора) — тот же idiom, что и importOpen выше.
+  const [trashOpen, setTrashOpen] = useState(false);
   // Инкрементируется при успешном "Сохранить и добавить ещё" — сигнал для
   // EquipmentFormModal сбросить внутреннее состояние формы, не закрывая
   // <dialog> (тот же паттерн, что и createRentalSignal в RentalsTab).
@@ -555,11 +685,13 @@ export function EquipmentTab({
       notify("Ни одну из выбранных позиций нельзя удалить: по каждой есть аренда в работе или бронь.");
       return;
     }
+    // 29-й проход, п.14 обзора: удаление теперь мягкое (см. EquipmentTrashModal
+    // выше) — формулировка обновлена вместе с backend'ом.
     const message =
       blocked.length > 0
-        ? `Будет безвозвратно удалено позиций: ${deletable.length} из ${ids.length}. Остальные ${blocked.length} пропущены — по ним есть аренда в работе или бронь.`
-        : `Будет безвозвратно удалено позиций: ${deletable.length}.`;
-    if (!(await confirmBulk(message, { danger: true }))) return;
+        ? `Будет перемещено в корзину позиций: ${deletable.length} из ${ids.length}. Остальные ${blocked.length} пропущены — по ним есть аренда в работе или бронь. Восстановить можно в течение 30 дней.`
+        : `Будет перемещено в корзину позиций: ${deletable.length}. Восстановить можно в течение 30 дней.`;
+    if (!(await confirmBulk(message, { danger: true, confirmLabel: "В корзину" }))) return;
     setBulkBusy(true);
     try {
       const results = await Promise.allSettled(deletable.map((id) => api.delete(`/businesses/${businessId}/equipment/${id}`)));
@@ -726,6 +858,11 @@ export function EquipmentTab({
             title="Скрыть ненужные столбцы таблицы или перетащить их в другом порядке"
           >
             <IconSliders /> {columnsEditMode ? "Готово" : "Настроить столбцы"}
+          </button>
+          {/* Корзина (29-й проход, п.14 обзора) — восстановление удалённого
+              оборудования в течение 30 дней. */}
+          <button className="btn" onClick={() => setTrashOpen(true)}>
+            <IconTrash /> Корзина
           </button>
           <button className="btn" onClick={() => exportEquipmentCsv(list, rentals, today)} disabled={list.length === 0}>
             Экспорт CSV
@@ -1054,6 +1191,13 @@ export function EquipmentTab({
         categories={equipmentCategories}
         onClose={() => setImportOpen(false)}
         onImported={() => void Promise.all([reloadEquipment(), reloadEquipmentCategories(), reloadEquipmentWarehouses()])}
+      />
+
+      <EquipmentTrashModal
+        open={trashOpen}
+        businessId={businessId}
+        onClose={() => setTrashOpen(false)}
+        onRestored={() => void Promise.all([reloadEquipment(), reloadEquipmentCategories(), reloadEquipmentWarehouses()])}
       />
 
       <EquipmentCategoriesModal

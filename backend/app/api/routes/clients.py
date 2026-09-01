@@ -5,14 +5,14 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import log_action
+from app.core.clock import utcnow
 from app.core.deps import BusinessContext, require_permission
 from app.database import get_db
 from app.models.business import Employee, PermissionLevel, ResourceType
-from app.models.inventory import Client, ClientDocument, ClientNote, ClientRating, Rental
+from app.models.inventory import Client, ClientDocument, ClientNote, ClientRating, ClientType, Rental
 from app.schemas.inventory import (
     ClientCreate,
     ClientDocumentOut,
@@ -22,8 +22,12 @@ from app.schemas.inventory import (
     ClientNoteCreate,
     ClientNoteOut,
     ClientOut,
+    ClientRestoreOut,
+    ClientTrashedOut,
     ClientUpdate,
 )
+from app.schemas.inventory import _validate_phone_format
+from app.services.trash import purge_expired
 
 # Лимит размера файла документа клиента (26-й проход) — 5 МБ ДО base64,
 # проверяется и здесь (истина), и на фронте (чтобы не тратить время
@@ -72,14 +76,87 @@ def _normalize_phone(phone: str | None) -> str:
     return "".join(ch for ch in (phone or "") if ch.isdigit())
 
 
+def _get_active_client(db: Session, ctx: BusinessContext, client_id: uuid.UUID) -> Client:
+    """Клиент, который считается "существующим" для обычных маршрутов —
+    активный (не в корзине), из этого бизнеса. Клиент в корзине для этих
+    маршрутов ведёт себя как несуществующий (404) — единственный путь
+    что-то с ним сделать — POST .../restore (29-й проход, см. докстринг
+    alembic/versions/0014_soft_delete_and_client_flags.py)."""
+
+    client = db.get(Client, client_id)
+    if client is None or client.business_id != ctx.business_id or client.deleted_at is not None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+    return client
+
+
+def _require_company_fields(client_type: ClientType, contact_person: str | None, inn: str | None) -> None:
+    """Контактное лицо и ИНН обязательны для клиента-организации (29-й
+    проход, п.19 обзора: раньше можно было стереть контактное лицо
+    организации, сохранить — и оно молча пропадало насовсем без единого
+    предупреждения). Проверяется на уровне маршрута, а не схемы Pydantic —
+    у PATCH тело может не содержать вообще ни contact_person, ни client_type
+    (точечное обновление другого поля), поэтому валидировать нужно уже
+    ОКОНЧАТЕЛЬНОЕ, слитое с базой состояние клиента, а не сырой payload
+    запроса."""
+
+    if client_type != ClientType.company:
+        return
+    missing = []
+    if not (contact_person or "").strip():
+        missing.append("контактное лицо")
+    if not (inn or "").strip():
+        missing.append("ИНН")
+    if missing:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Для организации обязательно укажите: {', '.join(missing)}")
+
+
 @router.get("", response_model=list[ClientOut])
 async def list_clients(ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)):
-    return db.scalars(select(Client).where(Client.business_id == ctx.business_id)).all()
+    return db.scalars(
+        select(Client).where(Client.business_id == ctx.business_id, Client.deleted_at.is_(None))
+    ).all()
+
+
+@router.get("/trash", response_model=list[ClientTrashedOut])
+async def list_trashed_clients(ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)):
+    """Корзина клиентов (29-й проход, п.14 обзора) — см.
+    app/services/trash.py. Зачистка просроченных (>30 дней, без истории
+    аренд) записей выполняется здесь же, лениво, перед самим запросом."""
+
+    purge_expired(db, ctx.business_id)
+    rows = db.execute(
+        select(Client, Employee.name)
+        .join(Employee, Employee.id == Client.deleted_by_id, isouter=True)
+        .where(Client.business_id == ctx.business_id, Client.deleted_at.is_not(None))
+        .order_by(Client.deleted_at.desc())
+    ).all()
+    out = []
+    for client, deleted_by_name in rows:
+        item = ClientTrashedOut.model_validate(client)
+        item.deleted_by_name = deleted_by_name
+        out.append(item)
+    return out
+
+
+@router.post("/{client_id}/restore", response_model=ClientRestoreOut)
+async def restore_client(client_id: uuid.UUID, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)):
+    client = db.get(Client, client_id)
+    if client is None or client.business_id != ctx.business_id or client.deleted_at is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден в корзине")
+    client.deleted_at = None
+    client.deleted_by_id = None
+    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="restore", resource="client", resource_id=str(client_id))
+    db.commit()
+    return ClientRestoreOut(id=client_id)
 
 
 @router.post("", response_model=ClientOut, status_code=status.HTTP_201_CREATED)
 async def create_client(body: ClientCreate, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)):
-    client = Client(business_id=ctx.business_id, **body.model_dump())
+    data = body.model_dump()
+    _require_company_fields(data["client_type"], data.get("contact_person"), data.get("inn"))
+    client = Client(business_id=ctx.business_id, **data)
+    if client.rating == ClientRating.blacklist:
+        client.was_blacklisted = True
     db.add(client)
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="client")
     db.commit()
@@ -91,11 +168,17 @@ async def create_client(body: ClientCreate, ctx: BusinessContext = Depends(edit_
 async def update_client(
     client_id: uuid.UUID, body: ClientUpdate, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
 ):
-    client = db.get(Client, client_id)
-    if client is None or client.business_id != ctx.business_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+    client = _get_active_client(db, ctx, client_id)
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(client, field, value)
+
+    _require_company_fields(client.client_type, client.contact_person, client.inn)
+    # Постоянная пометка "был в чёрном списке" (29-й проход, п.8 обзора) —
+    # выставляется один раз при переходе В чёрный список, никогда не
+    # сбрасывается автоматически при выходе из него (см. Client.was_blacklisted).
+    if client.rating == ClientRating.blacklist:
+        client.was_blacklisted = True
+
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="update", resource="client", resource_id=str(client_id))
     db.commit()
     db.refresh(client)
@@ -104,9 +187,13 @@ async def update_client(
 
 @router.delete("/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_client(client_id: uuid.UUID, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)):
-    client = db.get(Client, client_id)
-    if client is None or client.business_id != ctx.business_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+    """Перемещает клиента в корзину (29-й проход, п.14 обзора) — НЕ
+    физическое удаление строки (см. app/services/trash.py и докстринг
+    миграции 0014). Поэтому в отличие от старой версии этого эндпоинта
+    клиента с закрытой историей аренд теперь тоже можно "удалить" (спрятать)
+    — история никуда не денется и восстановится вместе с карточкой."""
+
+    client = _get_active_client(db, ctx, client_id)
 
     open_rental = db.scalar(
         select(Rental).where(Rental.client_id == client_id, Rental.status.in_(["booked", "active", "overdue"]))
@@ -114,36 +201,10 @@ async def delete_client(client_id: uuid.UUID, ctx: BusinessContext = Depends(edi
     if open_rental is not None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Нельзя удалить клиента с открытой арендой")
 
-    # Клиента с ЛЮБОЙ историей аренд (даже полностью завершённой/отменённой)
-    # тоже нельзя удалить — Rental.client_id стоит на ondelete="RESTRICT"
-    # (см. models/inventory.py:Rental), это финансовая история, которую
-    # нельзя молча терять вместе с карточкой клиента. Раньше эта проверка
-    # смотрела только на открытые аренды — попытка удалить клиента с уже
-    # ЗАКРЫТОЙ историей проходила её и падала прямо на ограничении внешнего
-    # ключа необработанным IntegrityError (голый 500 вместо понятной
-    # причины). Найдено при обзоре вкладки «Клиенты» (24-й проход, п.1):
-    # здесь тот же случай ловится заранее и отдаётся понятным сообщением.
-    # Если карточка — дубль другой, для этого есть перенос истории через
-    # merge_client ниже, а не потеря данных через удаление.
-    any_rental = db.scalar(select(Rental.id).where(Rental.client_id == client_id).limit(1))
-    if any_rental is not None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Нельзя удалить клиента с историей аренд (даже завершённых) — это финансовая история. "
-            "Если карточка дублирует другую, объедините их через «Объединить с другим клиентом».",
-        )
-
-    db.delete(client)
+    client.deleted_at = utcnow()
+    client.deleted_by_id = ctx.employee.id if ctx.employee is not None else None
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="delete", resource="client", resource_id=str(client_id))
-    try:
-        db.commit()
-    except IntegrityError:
-        # Защита от гонки/непредвиденной ссылки, не пойманной проверками
-        # выше (например, если позже появится ещё одна таблица со ссылкой
-        # на clients.id) — тот же принцип, что и явная проверка выше, только
-        # на случай, если сама проверка что-то не учла.
-        db.rollback()
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Не удалось удалить клиента — на него ссылаются другие записи")
+    db.commit()
 
 
 @router.post("/import", response_model=ClientImportResult)
@@ -175,7 +236,7 @@ async def import_clients(file: UploadFile, ctx: BusinessContext = Depends(edit_d
     # и тот же человек (например, у членов семьи) — просто сигнал сотруднику,
     # что стоит проверить и, возможно, объединить карточки вручную (merge).
     existing_by_phone: dict[str, uuid.UUID] = {}
-    for c in db.scalars(select(Client).where(Client.business_id == ctx.business_id)):
+    for c in db.scalars(select(Client).where(Client.business_id == ctx.business_id, Client.deleted_at.is_(None))):
         if c.phone:
             existing_by_phone.setdefault(_normalize_phone(c.phone), c.id)
 
@@ -189,7 +250,7 @@ async def import_clients(file: UploadFile, ctx: BusinessContext = Depends(edit_d
             if not name:
                 raise ValueError("Пустое имя/название")
             rating = _parse_rating(row.get("rating", ""))
-            phone = row.get("phone") or None
+            phone = _validate_phone_format(row.get("phone") or None)
             normalized_phone = _normalize_phone(phone) if phone else None
             duplicate_warning = normalized_phone is not None and normalized_phone in existing_by_phone
 
@@ -247,12 +308,9 @@ async def merge_client(
     if client_id == body.into_client_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Нельзя объединить клиента с самим собой")
 
-    source = db.get(Client, client_id)
-    if source is None or source.business_id != ctx.business_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
-
+    source = _get_active_client(db, ctx, client_id)
     target = db.get(Client, body.into_client_id)
-    if target is None or target.business_id != ctx.business_id:
+    if target is None or target.business_id != ctx.business_id or target.deleted_at is not None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Целевой клиент не найден в этом бизнесе")
 
     moved_rentals = db.scalars(select(Rental).where(Rental.client_id == client_id)).all()
@@ -286,9 +344,7 @@ async def list_client_notes(client_id: uuid.UUID, ctx: BusinessContext = Depends
     отличие от Client.notes (одна затираемая памятка), это append-only
     лента; см. ClientNote в app/models/inventory.py. Порядок — от новых
     к старым, тем же принципом, что и история аренд в ClientDetailPanel."""
-    client = db.get(Client, client_id)
-    if client is None or client.business_id != ctx.business_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+    client = _get_active_client(db, ctx, client_id)
 
     rows = db.execute(
         select(ClientNote, Employee.name)
@@ -303,9 +359,7 @@ async def list_client_notes(client_id: uuid.UUID, ctx: BusinessContext = Depends
 async def create_client_note(
     client_id: uuid.UUID, body: ClientNoteCreate, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
 ):
-    client = db.get(Client, client_id)
-    if client is None or client.business_id != ctx.business_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+    client = _get_active_client(db, ctx, client_id)
 
     note = ClientNote(
         business_id=ctx.business_id,
@@ -333,9 +387,7 @@ async def list_client_documents(
     """Сканы/фото документов клиента (26-й проход) — см. ClientDocument в
     app/models/inventory.py. Порядок — от новых к старым, тем же принципом,
     что и журнал заметок (list_client_notes выше)."""
-    client = db.get(Client, client_id)
-    if client is None or client.business_id != ctx.business_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+    client = _get_active_client(db, ctx, client_id)
 
     rows = db.execute(
         select(ClientDocument, Employee.name)
@@ -350,9 +402,7 @@ async def list_client_documents(
 async def upload_client_document(
     client_id: uuid.UUID, file: UploadFile, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
 ):
-    client = db.get(Client, client_id)
-    if client is None or client.business_id != ctx.business_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+    client = _get_active_client(db, ctx, client_id)
 
     raw = await file.read()
     if len(raw) == 0:
