@@ -282,13 +282,36 @@ class EquipmentImportResult(BaseModel):
 class ClientContact(BaseModel):
     """Один доп. контакт клиента-организации (26-й проход) — см.
     Client.additional_contacts в app/models/inventory.py. Список таких
-    объектов целиком перезаписывается при сохранении формы."""
+    объектов целиком перезаписывается при сохранении формы.
+
+    ВХОДНАЯ схема — используется только в ClientCreate/ClientUpdate. Валидатор
+    телефона здесь оправдан: он не даёт сохранить заведомый мусор ПРИ ЗАПИСИ.
+    См. ClientContactOut ниже — для чтения уже сохранённых данных нужна
+    отдельная схема без этой проверки."""
 
     name: str = Field(min_length=1, max_length=255)
     role: str | None = Field(default=None, max_length=255)
     phone: str | None = Field(default=None, max_length=32)
 
     _validate_phone = field_validator("phone")(_validate_phone_format)
+
+
+class ClientContactOut(BaseModel):
+    """Тот же доп. контакт, но для ОТДАЧИ клиенту — БЕЗ валидатора формата
+    телефона (29-й проход, разбор прод-инцидента сразу после раскатки
+    строгой проверки телефона: у части клиентов доп. контакты были сохранены
+    ДО того, как валидатор появился, и в БД спокойно лежат номера вроде
+    "+7 12". Если переиспользовать ClientContact (с валидатором) в ClientOut,
+    FastAPI пытается провалидировать эти уже сохранённые значения ПРИ ЧТЕНИИ
+    и падает с ResponseValidationError → 500 на весь список клиентов —
+    ни один клиент бизнеса не отдаётся, пока в БД есть хоть один такой
+    "старый" контакт. Валидация форматов должна работать только на входе
+    (не пускать мусор внутрь), но не может ломать чтение уже сохранённых
+    данных — отдаём как есть, без проверки."""
+
+    name: str
+    role: str | None
+    phone: str | None
 
 
 class ClientCreate(BaseModel):
@@ -360,7 +383,7 @@ class ClientOut(BaseModel):
     blacklist_reason: str | None
     # ---- 26-й проход ----
     birthday: date | None
-    additional_contacts: list[ClientContact] | None
+    additional_contacts: list[ClientContactOut] | None
     # ---- 29-й проход ----
     was_blacklisted: bool
 

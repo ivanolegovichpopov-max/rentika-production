@@ -5,6 +5,7 @@
 (merge). Сквозные сценарии через реальные HTTP-эндпоинты, тот же стиль, что
 и test_rentals_flow.py.
 """
+from app.models.inventory import Client
 from tests.conftest import auth_headers, register_business
 
 
@@ -371,6 +372,40 @@ def test_create_and_update_client_birthday_and_contacts(client):
     ).json()
     assert plain["birthday"] is None
     assert plain["additional_contacts"] is None
+
+
+def test_list_clients_survives_legacy_invalid_contact_phone(client, db_session):
+    """Регресс-тест на прод-инцидент 29-го прохода: строгий валидатор
+    телефона в ClientContact (см. _validate_phone_format в schemas/
+    inventory.py) появился ПОСЛЕ того, как некоторые клиенты уже сохранили
+    доп. контакты (26-й проход) без него — в БД у части бизнесов реально
+    лежали значения вроде "+7 12" (2 цифры). Раньше ClientOut переиспользовал
+    ту же схему ClientContact (с валидатором) для ОТДАЧИ данных — FastAPI
+    валидирует response_model при сериализации, и старое "плохое" значение
+    роняло ResponseValidationError → 500 на ВЕСЬ список клиентов бизнеса
+    (не только на одного клиента с плохими данными). Симулируем именно это:
+    пишем невалидный (по новым правилам) телефон в БД в обход API-валидации
+    напрямую через ORM, как если бы запись была сделана до появления
+    валидатора — и проверяем, что список клиентов всё равно отдаётся."""
+    owner = register_business(client, email="clients-legacy-phone@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    created = client.post(
+        f"/api/businesses/{business_id}/clients",
+        json={"name": "ООО Легаси", "client_type": "company", "contact_person": "Иванов", "inn": "7701234567"},
+        headers=headers,
+    ).json()
+
+    # В обход валидатора схемы — напрямую через ORM, как "старые" данные.
+    row = db_session.get(Client, created["id"])
+    row.additional_contacts = [{"name": "Старый контакт", "role": None, "phone": "+7 12"}]
+    db_session.commit()
+
+    listed = client.get(f"/api/businesses/{business_id}/clients", headers=headers)
+    assert listed.status_code == 200
+    found = next(c for c in listed.json() if c["id"] == created["id"])
+    assert found["additional_contacts"][0]["phone"] == "+7 12"
 
 
 def test_client_documents_upload_list_delete(client):
