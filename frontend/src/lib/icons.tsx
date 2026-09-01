@@ -78,8 +78,20 @@ export const IconRentals = (p: SVGProps<SVGSVGElement>) => (
 export const IconFinance = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}><line x1="12" y1="20" x2="12" y2="10" /><line x1="18" y1="20" x2="18" y2="4" /><line x1="6" y1="20" x2="6" y2="16" /></Svg>
 );
+// 30-й проход: раньше был 1-в-1 такой же путь, что и у IconUser ниже — в
+// сайдбаре "Сотрудники" (команда, несколько человек) и "Профиль" (один
+// человек, я сам) визуально не отличались друг от друга (пользователь
+// заметил на живом скриншоте). Стандартная фигура "двое людей" (Feather
+// "users") однозначно читается как "команда/группа", в отличие от одного
+// силуэта у IconUser — тот же visual language, что и у остальных иконок
+// (24×24, тот же stroke), просто другой набор фигур.
 export const IconEmployees = (p: SVGProps<SVGSVGElement>) => (
-  <Svg {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></Svg>
+  <Svg {...p}>
+    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+  </Svg>
 );
 export const IconSecurity = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></Svg>

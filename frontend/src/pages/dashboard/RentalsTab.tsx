@@ -826,7 +826,11 @@ export function RentalsTab({
             </button>
           ))}
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        {/* marginLeft: "auto" — тот же фикс, что и в ClientsTab.tsx/
+            EquipmentTab.tsx (30-й проход): без него эта группа прижималась
+            бы к левому краю, если перенесётся на вторую строку из-за
+            нехватки места слева. */}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginLeft: "auto" }}>
           <Dropdown
             value={sort}
             onChange={setSort}
