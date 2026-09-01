@@ -859,16 +859,20 @@ export function EquipmentTab({
           >
             <IconSliders /> {columnsEditMode ? "Готово" : "Настроить столбцы"}
           </button>
-          {/* Корзина (29-й проход, п.14 обзора) — восстановление удалённого
-              оборудования в течение 30 дней. */}
-          <button className="btn" onClick={() => setTrashOpen(true)}>
-            <IconTrash /> Корзина
-          </button>
           <button className="btn" onClick={() => exportEquipmentCsv(list, rentals, today)} disabled={list.length === 0}>
             Экспорт CSV
           </button>
           <button className="btn" onClick={() => setImportOpen(true)}>
             Импорт CSV
+          </button>
+          {/* Корзина (29-й проход, п.14 обзора) — восстановление удалённого
+              оборудования в течение 30 дней. Специально в самом конце ряда,
+              сразу перед "+ Добавить" (ещё один повторный обзор — расстановка
+              кнопок панели): по смыслу это "аварийное" действие на крайний
+              случай, а не рабочая операция вроде экспорта/импорта, поэтому
+              логичнее держать её на отшибе, а не в середине блока настроек. */}
+          <button className="btn" onClick={() => setTrashOpen(true)}>
+            <IconTrash /> Корзина
           </button>
           <button className="btn btn-primary" onClick={openAddModal}>
             + Добавить

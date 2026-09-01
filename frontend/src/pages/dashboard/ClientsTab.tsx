@@ -1668,16 +1668,20 @@ export function ClientsTab({
           >
             <IconSliders /> {columnsEditMode ? "Готово" : "Настроить столбцы"}
           </button>
-          {/* Корзина (29-й проход, п.14 обзора) — восстановление удалённых
-              клиентов в течение 30 дней. */}
-          <button className="btn" onClick={() => setShowTrash(true)}>
-            <IconTrash /> Корзина
-          </button>
           <button className="btn" onClick={() => setShowImport(true)}>
             Импорт CSV
           </button>
           <button className="btn" onClick={() => exportClientsCsv(list, rentals)} disabled={list.length === 0}>
             Экспорт CSV
+          </button>
+          {/* Корзина (29-й проход, п.14 обзора) — восстановление удалённых
+              клиентов в течение 30 дней. Специально в конце ряда, сразу перед
+              "+ Добавить" (ещё один повторный обзор — расстановка кнопок
+              панели, та же правка, что и в EquipmentTab.tsx): это "аварийное"
+              действие на крайний случай, а не рабочая операция вроде
+              экспорта/импорта, логичнее держать её на отшибе. */}
+          <button className="btn" onClick={() => setShowTrash(true)}>
+            <IconTrash /> Корзина
           </button>
           <button className="btn btn-primary" onClick={openAddModal}>
             + Добавить
