@@ -808,19 +808,34 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    полупрозрачную по умолчанию ячейку при скролле будет видно содержимое
    соседних колонок под ней. */
 /* width/min-width на самой колонке (33-й проход, ремонт находки предыдущего
-   прохода) — репорт с реальными данными показал колонку схлопнутой до
-   нулевой ширины в состоянии покоя в одном из браузеров, хотя в Chromium
-   песочницы (и в самом опубликованном бандле — проверено содержимое CSS)
-   та же разметка вела себя верно. Судя по всему, это cross-browser
-   нестыковка между position: sticky на ячейке и авто-раскладкой ширины
-   таблицы, когда единственный источник ширины колонки — content-based
-   расчёт по невидимым (opacity: 0) кнопкам. Явный width, заданный
-   одновременно на <th> и на <td> этой колонки, не оставляет браузеру
-   пространства для альтернативной интерпретации — 104px хватает на две
-   32px-иконки с зазором и стандартным паддингом ячейки (16px×2). */
-.row-actions { position: sticky; right: 0; width: 104px; min-width: 104px; background: var(--surface); opacity: 0; transition: opacity 0.12s; }
-tr:hover .row-actions, tr:focus-within .row-actions { opacity: 1; }
-@media (hover: none) { .row-actions { opacity: 1; } }
+   прохода) — репорт с реальными данными показал колонку, выглядящую как
+   отсутствующую в состоянии покоя. Этот фикс не помог — см. ниже. */
+/* 34-й проход, настоящая причина находки 33-го прохода — найдена только
+   прямой проверкой в РЕАЛЬНОМ браузере пользователя (не в песочнице),
+   через боевой аккаунт и devtools-замеры, а не очередной "на глаз" правкой
+   ширины/позиционирования. Геометрия ячейки на деле была верна (104px,
+   всё сходится по пикселям) — сломано было другое, сразу по двум причинам:
+   1) opacity: 0 висел на самой ячейке <td>/<th>, а не на кнопке внутри
+   неё, поэтому вместе с иконкой в состоянии покоя пропадал и фон самой
+   ячейки — в шапке таблицы (thead th, фон var(--surface-2)) это давало
+   чёткий белый разрыв посреди серой полосы заголовков, визуально
+   неотличимый от "колонка потерялась" — именно это годами (32-й и 33-й
+   проходы) чинили в лоб через ширину, хотя ширина была ни при чём;
+   2) имя класса .row-actions случайно совпадало с давно существующим и
+   уже не используемым в JSX правилом ниже (.row-actions { display: flex;
+   gap: 8px }, оставшимся в файле без единого потребителя) — оно исправно
+   долетало каскадом до наших <td>/<th> и переключало их display с
+   table-cell на flex, что в таблицах — поведение вне гарантий спецификации
+   и потенциально разное между движками/версиями браузеров (вероятное
+   объяснение, почему баг не воспроизводился в песочнице Playwright, но был
+   виден у пользователя). Мёртвое правило удалено. opacity теперь только на
+   .icon-btn внутри ячейки — сама ячейка всегда непрозрачна и закрашена
+   контекстным фоном (серым в шапке, белым/серым в теле по наведению). */
+.row-actions { position: sticky; right: 0; width: 104px; min-width: 104px; background: var(--surface); }
+thead th.row-actions { background: var(--surface-2); }
+.row-actions .icon-btn { opacity: 0; transition: opacity 0.12s; }
+tr:hover .row-actions .icon-btn, tr:focus-within .row-actions .icon-btn { opacity: 1; }
+@media (hover: none) { .row-actions .icon-btn { opacity: 1; } }
 tbody tr[data-clickable="true"]:hover .row-actions { background: var(--surface-2); }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; box-shadow: var(--shadow-sm); margin-bottom: 16px; }
 .inline-form { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
@@ -835,7 +850,6 @@ tbody tr[data-clickable="true"]:hover .row-actions { background: var(--surface-2
   0% { background: var(--accent-soft, var(--surface-2)); }
   100% { background: transparent; }
 }
-.row-actions { display: flex; gap: 8px; }
 .badge-owner { margin-left: 6px; background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 /* Легаси-алиасы статусных бейджей (используются только в ещё не
  * переоформленных экранах) — тонально совпадают с badge.tone-* выше. */
