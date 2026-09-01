@@ -11,6 +11,7 @@ import { itemCostForDays } from "../../../lib/financeCalc";
 import { CategoryAutocomplete } from "./CategoryAutocomplete";
 import { Dropdown } from "../../../components/Dropdown";
 import { type EquipmentFormState, hasTieredValues, isFormDirty, parseDecimalField } from "./formHelpers";
+import { useModalDialog } from "../../../lib/useModalDialog";
 
 /** Модалка добавления/изменения оборудования — тот же идиом `<dialog>`
  * (ref + showModal()/close() в useEffect по `open`), что и DocModal в
@@ -76,7 +77,12 @@ export function EquipmentFormModal({
   // выше (восемнадцатый проход).
   onManageWarehouses?: (onPicked: (name: string) => void) => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
+  // useModalDialog вместо инлайновой ref+useEffect-пары (29-й проход,
+  // повторный обзор, п.16 — подробности в докстринге хука) — защищает от
+  // подтверждённого вживую в браузере бага, когда закрытие вложенного
+  // confirm-диалога ("Несохранённые изменения") спонтанно эмитило нативное
+  // close и на ЭТОМ диалоге тоже, хотя open оставался true.
+  const { ref, handleNativeClose } = useModalDialog(open);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<EquipmentFormState>(initial);
   const [showTiered, setShowTiered] = useState(hasTieredValues(initial));
@@ -85,13 +91,6 @@ export function EquipmentFormModal({
   // Отдельный useConfirm — для "Несохранённые изменения будут потеряны?" при
   // закрытии заполненной формы (16-й проход, п.6 предыдущего обзора).
   const { confirm: confirmDiscard, dialog: discardDialog } = useConfirm();
-
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
 
   // Сброс формы при открытии и при каждом "Сохранить и добавить ещё"
   // (resetSignal меняется) — родитель к этому моменту уже пересчитал
@@ -232,7 +231,7 @@ export function EquipmentFormModal({
       id="modal"
       className="wide"
       ref={ref}
-      onClose={onClose}
+      onClose={() => handleNativeClose(onClose)}
       onCancel={(e) => {
         // Нативный Escape по умолчанию закрыл бы диалог мгновенно — перехватываем,
         // чтобы провести через ту же проверку "не потерять несохранённое", что и

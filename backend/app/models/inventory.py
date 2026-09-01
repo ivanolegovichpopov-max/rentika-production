@@ -268,6 +268,12 @@ class ClientDocument(Base):
     content_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     data_base64: Mapped[str] = mapped_column(Text, nullable=False)
+    # Короткая пометка "что это за документ" (29-й проход, повторный обзор,
+    # п.12 — "непонятно, какой документ есть какой, если их несколько, а
+    # называются они как в телефоне сфотографировавшего"). Необязательное —
+    # старые/невыставленные документы просто идентифицируются по filename,
+    # как и раньше.
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now()
     )

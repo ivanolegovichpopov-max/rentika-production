@@ -420,9 +420,20 @@ class ClientDocumentOut(BaseModel):
     content_type: str
     size_bytes: int
     data_base64: str
+    # 29-й проход, повторный обзор, п.12 — короткая подпись документа
+    # ("Разворот паспорта", "Прописка"), необязательная.
+    label: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ClientDocumentUpdate(BaseModel):
+    """Изменение подписи уже загруженного документа (label — единственное
+    редактируемое поле; сам файл/имя неизменяемы после загрузки, тем же
+    append-only принципом, что и остальное содержимое ClientDocument)."""
+
+    label: str | None = Field(default=None, max_length=255)
 
 
 class ClientNoteCreate(BaseModel):

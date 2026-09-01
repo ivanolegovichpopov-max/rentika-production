@@ -16,6 +16,7 @@ import { money, fmtDate, colorFromId, initials, formatPhoneInput } from "../../l
 import {
   IconClose,
   IconEdit,
+  IconCheck,
   IconTrash,
   IconRestore,
   IconPhone,
@@ -31,6 +32,7 @@ import {
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
+import { useModalDialog } from "../../lib/useModalDialog";
 import { parseCsv, csvRowsToObjects, toCsv } from "../../lib/csv";
 import { DocModal, buildContractDoc } from "./documents";
 import { Dropdown } from "../../components/Dropdown";
@@ -146,19 +148,12 @@ function ClientFormModal({
   onClose: () => void;
   onSubmit: (form: ClientFormState) => Promise<void> | void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
+  const { ref, handleNativeClose } = useModalDialog(open);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<ClientFormState>(initial);
   const [localError, setLocalError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const { confirm: confirmDiscard, dialog: discardDialog } = useConfirm();
-
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
 
   useEffect(() => {
     if (open) {
@@ -170,8 +165,31 @@ function ClientFormModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  /** 29-й проход, повторный обзор, п.19-полировка: то же самое правило, что
+   * и на backend (_require_company_fields/_validate_inn_format/
+   * _validate_phone_format в app/schemas и app/api/routes/clients.py) — но
+   * проверяем ДО отправки запроса, чтобы пользователь не тратил время на
+   * заполнение остальной формы и не упирался в ошибку сервера только на
+   * последнем шаге. Backend остаётся источником истины и перепроверяет то же
+   * самое ещё раз — этот блок только UX, не замена серверной валидации. */
   function validateLocally(): string | null {
     if (!form.name.trim()) return "Имя/название не может состоять из одних пробелов";
+    if (form.clientType === "company") {
+      const missing: string[] = [];
+      if (!form.contactPerson.trim()) missing.push("контактное лицо");
+      if (!form.inn.trim()) missing.push("ИНН");
+      if (missing.length > 0) return `Для организации обязательно укажите: ${missing.join(", ")}`;
+    }
+    if (form.inn.trim()) {
+      const innDigits = form.inn.trim();
+      if (!/^\d+$/.test(innDigits) || ![10, 12].includes(innDigits.length)) {
+        return "ИНН должен состоять из 10 цифр (организация) или 12 цифр (ИП/физлицо)";
+      }
+    }
+    if (form.phone.trim()) {
+      const digits = form.phone.replace(/\D/g, "").length;
+      if (digits < 10 || digits > 15) return "Похоже на некорректный номер телефона — должно быть от 10 до 15 цифр";
+    }
     return null;
   }
 
@@ -204,7 +222,7 @@ function ClientFormModal({
     <dialog
       id="modal"
       ref={ref}
-      onClose={onClose}
+      onClose={() => handleNativeClose(onClose)}
       onCancel={(e) => {
         e.preventDefault();
         void requestClose();
@@ -251,7 +269,10 @@ function ClientFormModal({
             </div>
           </div>
           <div className="field">
-            <label>Имя / название</label>
+            {/* Звёздочка у обязательных полей (29-й проход, повторный обзор,
+                п.19-полировка) — раньше ничто в форме не показывало, какие
+                поля обязательны, а какие нет. */}
+            <label>Имя / название *</label>
             <input
               required
               ref={nameInputRef}
@@ -277,13 +298,20 @@ function ClientFormModal({
               <div className="field-hint">Иностранный номер — начните ввод с кода страны, маска не тронет его.</div>
             </div>
             <div className="field">
-              <label>Email</label>
+              {/* 29-й проход, повторный обзор, п.17 — у остальных необязательных
+                  полей (день рождения ниже) в подписи есть "(необязательно)",
+                  у email его не было, хотя поле точно так же необязательное. */}
+              <label>Email (необязательно)</label>
               <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
             </div>
           </div>
           <div className="field-row">
             <div className="field">
-              <label>{form.clientType === "company" ? "Документ / реквизиты" : "Документ (паспорт)"}</label>
+              {/* 29-й проход, повторный обзор, п.18 — "Документ / реквизиты"
+                  для компании читался как дублирующий отдельное поле ИНН чуть
+                  ниже. Переформулировано однозначно: это поле для прочих
+                  реквизитов (ОГРН, юр. адрес и т.п.), а не замена ИНН. */}
+              <label>{form.clientType === "company" ? "Прочие реквизиты (ОГРН, юр. адрес и т.п.)" : "Документ (паспорт)"}</label>
               <input value={form.doc} onChange={(e) => setForm({ ...form, doc: e.target.value })} />
             </div>
             <div className="field">
@@ -298,7 +326,9 @@ function ClientFormModal({
             <>
               <div className="field-row">
                 <div className="field">
-                  <label>Контактное лицо</label>
+                  {/* Обязательно для организации — см. звёздочку выше у
+                      "Имя / название" и validateLocally/_require_company_fields. */}
+                  <label>Контактное лицо *</label>
                   <input
                     value={form.contactPerson}
                     onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
@@ -306,7 +336,7 @@ function ClientFormModal({
                   />
                 </div>
                 <div className="field">
-                  <label>ИНН</label>
+                  <label>ИНН *</label>
                   <input value={form.inn} onChange={(e) => setForm({ ...form, inn: e.target.value })} />
                 </div>
               </div>
@@ -1824,7 +1854,6 @@ export function ClientsTab({
                 const overdueNow = clientRentals.filter((r) => rentalDisplayStatus(r) === "overdue").length;
                 const lastRental = lastRentalDate(c.id, rentals);
                 const tagList = (c.tags ?? "").split(",").map((t) => t.trim()).filter(Boolean);
-                const waDigits = normalizePhoneDigits(c.phone);
                 const cellCtx: ClientCellContext = {
                   clientRentals,
                   activeCount,
@@ -1874,36 +1903,19 @@ export function ClientsTab({
                               </span>
                             )}
                           </div>
-                          <div className="cell-sub" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          {/* 29-й проход, п. из обзора "иконки звонок/WhatsApp/
+                              email в строке" — раньше здесь рядом с телефоном
+                              стояли три отдельные кнопки-иконки быстрого
+                              действия (звонок/WhatsApp/почта). При растущем
+                              числе бейджей в этой же ячейке (VIP-уровень,
+                              день рождения, "Неполный профиль", теги) они
+                              превращались в визуальный шум, а быстрый доступ
+                              к контактам уже есть в карточке клиента
+                              (раздел "Контакты" — кликабельные tel:/mailto:
+                              ссылки). Убраны; телефон в строке остаётся
+                              обычным текстом. */}
+                          <div className="cell-sub">
                             <span>{c.phone ?? "—"}</span>
-                            {(c.phone || c.email) && (
-                              <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex", gap: "4px" }}>
-                                {/* Быстрый звонок/WhatsApp/почта прямо из строки
-                                    таблицы (25-й/26-й проход) — без открытия
-                                    карточки клиента. */}
-                                {c.phone && (
-                                  <a className="icon-btn" href={`tel:${c.phone}`} title="Позвонить">
-                                    <IconPhone />
-                                  </a>
-                                )}
-                                {c.phone && (
-                                  <a
-                                    className="icon-btn"
-                                    href={`https://wa.me/${waDigits}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    title="Написать в WhatsApp"
-                                  >
-                                    <IconSend />
-                                  </a>
-                                )}
-                                {c.email && (
-                                  <a className="icon-btn" href={`mailto:${c.email}`} title="Написать на почту">
-                                    <IconMail />
-                                  </a>
-                                )}
-                              </span>
-                            )}
                           </div>
                           {tagList.length > 0 && (
                             <div style={{ marginTop: "4px", display: "flex", gap: "4px", flexWrap: "wrap" }}>
@@ -2876,13 +2888,33 @@ const MAX_CLIENT_DOCUMENT_BYTES = 5 * 1024 * 1024;
  * задержкой, а не сразу: сама навигация в новую вкладку асинхронна, слишком
  * ранний revoke иногда успевал "погасить" ссылку раньше, чем вкладка её
  * прочитает. */
-function openClientDocument(doc: ClientDocument) {
+function documentToBlobUrl(doc: ClientDocument): string {
   const byteChars = atob(doc.data_base64);
   const bytes = new Uint8Array(byteChars.length);
   for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
   const blob = new Blob([bytes], { type: doc.content_type });
-  const url = URL.createObjectURL(blob);
+  return URL.createObjectURL(blob);
+}
+
+function openClientDocument(doc: ClientDocument) {
+  const url = documentToBlobUrl(doc);
   window.open(url, "_blank", "noopener,noreferrer");
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+/** Явная кнопка "Скачать" (29-й проход, повторный обзор, п.11 — открытие в
+ * новой вкладке не всегда очевидно как "сохранить файл", особенно для PDF;
+ * нужна отдельная кнопка со скачиванием под явным именем файла). Тот же
+ * Blob-URL, что и у openClientDocument, но через временный <a download>,
+ * а не window.open — так браузер сохраняет файл вместо навигации. */
+function downloadClientDocument(doc: ClientDocument) {
+  const url = documentToBlobUrl(doc);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = doc.filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
@@ -2898,6 +2930,12 @@ function ClientDocumentsSection({ businessId, clientId }: { businessId: string; 
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  // 29-й проход, повторный обзор, п.12: подпись документа ("Разворот
+  // паспорта", "Прописка") — редактируется по одному файлу за раз, id
+  // редактируемого документа + черновик текста, null = ничего не редактируется.
+  const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
+  const [labelDraft, setLabelDraft] = useState("");
+  const [savingLabel, setSavingLabel] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -2919,11 +2957,13 @@ function ClientDocumentsSection({ businessId, clientId }: { businessId: string; 
    * прикреплять сразу несколько файлов, а не по одному") — по одному запросу
    * на файл, последовательно (не Promise.all — чтобы не заваливать backend
    * параллельными запросами при выборе сразу десятка сканов, да и порядок
-   * появления в списке предсказуемее). Каждый файл сохраняет собственное имя
-   * как и раньше (ClientDocument.filename) — это и есть его "подпись" в
-   * списке, отдельного поля метки не заводили. Один неудачный файл не
-   * прерывает загрузку остальных — итоговая ошибка (если была) показывается
-   * одной строкой после того, как отработали все. */
+   * появления в списке предсказуемее). Подпись при самой загрузке не
+   * запрашиваем — при выборе сразу нескольких файлов одна общая подпись на
+   * все была бы бессмысленной (нужны разные: "Разворот паспорта", "Прописка"
+   * и т.п.), поэтому подпись добавляется/меняется по каждому файлу отдельно
+   * после загрузки (см. handleSaveLabel ниже, повторный обзор, п.12). Один
+   * неудачный файл не прерывает загрузку остальных — итоговая ошибка (если
+   * была) показывается одной строкой после того, как отработали все. */
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     setError(null);
@@ -2969,6 +3009,28 @@ function ClientDocumentsSection({ businessId, clientId }: { businessId: string; 
     }
   }
 
+  function startEditLabel(doc: ClientDocument) {
+    setEditingLabelId(doc.id);
+    setLabelDraft(doc.label ?? "");
+    setError(null);
+  }
+
+  async function handleSaveLabel(doc: ClientDocument) {
+    setSavingLabel(true);
+    try {
+      const updated = await api.patch<ClientDocument>(
+        `/businesses/${businessId}/clients/${clientId}/documents/${doc.id}`,
+        { label: labelDraft.trim() || null }
+      );
+      setDocs((prev) => (prev ?? []).map((d) => (d.id === doc.id ? updated : d)));
+      setEditingLabelId(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Не удалось сохранить подпись");
+    } finally {
+      setSavingLabel(false);
+    }
+  }
+
   return (
     <div className="slideover-section">
       <h4>Документы{docs ? ` · ${docs.length}` : ""}</h4>
@@ -2992,21 +3054,68 @@ function ClientDocumentsSection({ businessId, clientId }: { businessId: string; 
         <div className="empty-note">Файлов пока нет</div>
       ) : (
         docs.map((d) => (
-          <div className="mini-item" key={d.id}>
-            {/* Blob + ObjectURL вместо прямой data:-ссылки — см. докстринг
-                openClientDocument выше (Chrome блокирует top-frame навигацию
-                на data: URL). */}
-            <a href="#" onClick={(e) => { e.preventDefault(); openClientDocument(d); }}>
-              <IconFile /> {d.filename}
-            </a>
-            <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <span style={{ color: "var(--muted)", fontSize: "11.5px", whiteSpace: "nowrap" }}>
-                {fmtDate(d.created_at.slice(0, 10))}
+          <div className="mini-item" key={d.id} style={{ flexDirection: "column", alignItems: "stretch", gap: "4px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+              {/* Blob + ObjectURL вместо прямой data:-ссылки — см. докстринг
+                  openClientDocument выше (Chrome блокирует top-frame навигацию
+                  на data: URL). */}
+              <a href="#" onClick={(e) => { e.preventDefault(); openClientDocument(d); }}>
+                <IconFile /> {d.filename}
+              </a>
+              <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ color: "var(--muted)", fontSize: "11.5px", whiteSpace: "nowrap" }}>
+                  {fmtDate(d.created_at.slice(0, 10))}
+                </span>
+                <button
+                  type="button"
+                  className="link-btn"
+                  title="Скачать файл"
+                  onClick={() => downloadClientDocument(d)}
+                  style={{ whiteSpace: "nowrap" }}
+                >
+                  Скачать
+                </button>
+                <button type="button" className="icon-btn" title="Удалить" onClick={() => void handleDelete(d)}>
+                  <IconTrash />
+                </button>
               </span>
-              <button type="button" className="icon-btn" title="Удалить" onClick={() => void handleDelete(d)}>
-                <IconTrash />
-              </button>
-            </span>
+            </div>
+            {/* Подпись документа (29-й проход, повторный обзор, п.12) — чтобы
+                несколько файлов не приходилось различать только по имени с
+                телефона ("Разворот паспорта", "Прописка" и т.п.). */}
+            {editingLabelId === d.id ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <input
+                  type="text"
+                  value={labelDraft}
+                  onChange={(e) => setLabelDraft(e.target.value)}
+                  placeholder="Подпись, например «Разворот паспорта»"
+                  maxLength={255}
+                  autoFocus
+                  disabled={savingLabel}
+                  style={{ flex: 1, fontSize: "12.5px" }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleSaveLabel(d);
+                    if (e.key === "Escape") setEditingLabelId(null);
+                  }}
+                />
+                <button type="button" className="icon-btn" title="Сохранить" disabled={savingLabel} onClick={() => void handleSaveLabel(d)}>
+                  <IconCheck />
+                </button>
+                <button type="button" className="icon-btn" title="Отмена" disabled={savingLabel} onClick={() => setEditingLabelId(null)}>
+                  <IconClose />
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <span style={{ fontSize: "12.5px", color: d.label ? "var(--text)" : "var(--muted)", fontStyle: d.label ? "normal" : "italic" }}>
+                  {d.label || "Без подписи"}
+                </span>
+                <button type="button" className="icon-btn" title="Изменить подпись" onClick={() => startEditLabel(d)}>
+                  <IconEdit />
+                </button>
+              </div>
+            )}
           </div>
         ))
       )}

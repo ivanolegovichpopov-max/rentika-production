@@ -3,7 +3,7 @@ import csv
 import io
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from app.models.inventory import Client, ClientDocument, ClientNote, ClientRatin
 from app.schemas.inventory import (
     ClientCreate,
     ClientDocumentOut,
+    ClientDocumentUpdate,
     ClientImportResult,
     ClientImportRowResult,
     ClientMerge,
@@ -400,7 +401,14 @@ async def list_client_documents(
 
 @router.post("/{client_id}/documents", response_model=ClientDocumentOut, status_code=status.HTTP_201_CREATED)
 async def upload_client_document(
-    client_id: uuid.UUID, file: UploadFile, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
+    client_id: uuid.UUID,
+    file: UploadFile,
+    # 29-й проход, повторный обзор, п.12 — необязательная короткая подпись
+    # ("Разворот паспорта" и т.п.), задаётся сразу при загрузке; multipart-
+    # форма, поэтому Form(...), а не тело JSON (файл и так уже multipart).
+    label: str | None = Form(None),
+    ctx: BusinessContext = Depends(edit_dep),
+    db: Session = Depends(get_db),
 ):
     client = _get_active_client(db, ctx, client_id)
 
@@ -410,6 +418,8 @@ async def upload_client_document(
     if len(raw) > MAX_CLIENT_DOCUMENT_BYTES:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Файл слишком большой (максимум 5 МБ)")
 
+    clean_label = (label or "").strip() or None
+
     doc = ClientDocument(
         business_id=ctx.business_id,
         client_id=client_id,
@@ -418,6 +428,7 @@ async def upload_client_document(
         content_type=file.content_type or "application/octet-stream",
         size_bytes=len(raw),
         data_base64=base64.b64encode(raw).decode("ascii"),
+        label=clean_label,
     )
     db.add(doc)
     log_action(
@@ -426,6 +437,29 @@ async def upload_client_document(
     db.commit()
     db.refresh(doc)
     return _document_out(doc, ctx.employee.name if ctx.employee is not None else None)
+
+
+@router.patch("/{client_id}/documents/{document_id}", response_model=ClientDocumentOut)
+async def update_client_document(
+    client_id: uuid.UUID,
+    document_id: uuid.UUID,
+    body: ClientDocumentUpdate,
+    ctx: BusinessContext = Depends(edit_dep),
+    db: Session = Depends(get_db),
+):
+    """Изменить подпись уже загруженного документа (29-й проход, повторный
+    обзор, п.12) — например, добавить её задним числом к файлам, загруженным
+    ещё до появления этого поля."""
+    doc = db.get(ClientDocument, document_id)
+    if doc is None or doc.business_id != ctx.business_id or doc.client_id != client_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Документ не найден")
+    doc.label = (body.label or "").strip() or None
+    db.commit()
+    db.refresh(doc)
+    employee_name = None
+    if doc.employee_id is not None:
+        employee_name = db.scalar(select(Employee.name).where(Employee.id == doc.employee_id))
+    return _document_out(doc, employee_name)
 
 
 @router.delete("/{client_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -462,6 +462,69 @@ def test_client_documents_upload_list_delete(client):
     assert client.get(f"/api/businesses/{business_id}/clients/{client_id}/documents", headers=headers).json() == []
 
 
+def test_client_document_label_upload_and_patch(client):
+    """29-й проход, повторный обзор, п.12: у документа клиента есть короткая
+    подпись (label) — можно задать при загрузке и изменить позже, чтобы
+    несколько файлов не приходилось различать только по имени с телефона."""
+    owner = register_business(client, email="clients-docs-label@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Клиент с подписанными документами"}, headers=headers
+    ).json()["id"]
+
+    # Загрузка без подписи — label остаётся null (обратная совместимость со старыми файлами).
+    no_label_files = {"file": ("scan1.jpg", b"\xff\xd8\xff\xe0fake-jpeg-bytes-1", "image/jpeg")}
+    no_label_doc = client.post(
+        f"/api/businesses/{business_id}/clients/{client_id}/documents", files=no_label_files, headers=headers
+    ).json()
+    assert no_label_doc["label"] is None
+
+    # Загрузка с подписью.
+    files = {"file": ("IMG_20260901_112233.jpg", b"\xff\xd8\xff\xe0fake-jpeg-bytes-2", "image/jpeg")}
+    uploaded = client.post(
+        f"/api/businesses/{business_id}/clients/{client_id}/documents",
+        files=files,
+        data={"label": "Разворот паспорта"},
+        headers=headers,
+    )
+    assert uploaded.status_code == 201
+    doc = uploaded.json()
+    assert doc["label"] == "Разворот паспорта"
+
+    listed = client.get(f"/api/businesses/{business_id}/clients/{client_id}/documents", headers=headers).json()
+    by_id = {d["id"]: d for d in listed}
+    assert by_id[doc["id"]]["label"] == "Разворот паспорта"
+    assert by_id[no_label_doc["id"]]["label"] is None
+
+    # Изменение подписи задним числом (в т.ч. у файла, загруженного без неё).
+    patched = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}/documents/{no_label_doc['id']}",
+        json={"label": "Прописка"},
+        headers=headers,
+    )
+    assert patched.status_code == 200
+    assert patched.json()["label"] == "Прописка"
+
+    # Пустая строка/пробелы очищают подпись (трактуется как "без подписи").
+    cleared = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}/documents/{doc['id']}",
+        json={"label": "   "},
+        headers=headers,
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["label"] is None
+
+    # Неизвестный документ — 404.
+    missing = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}/documents/00000000-0000-0000-0000-000000000000",
+        json={"label": "Что угодно"},
+        headers=headers,
+    )
+    assert missing.status_code == 404
+
+
 def test_client_notes_reject_unknown_client(client):
     owner = register_business(client, email="clients-notes2@example.com", password="correct horse battery staple")
     headers = auth_headers(owner["access_token"])
