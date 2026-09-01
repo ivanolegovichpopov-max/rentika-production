@@ -1405,7 +1405,10 @@ export function ClientsTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ratingFilter, overdueOnly, dormantOnly, birthdayOnly, search]);
 
-  const RECENT_CLIENTS_LIMIT = 8;
+  // 5 вместо прежних 8 (29-й проход, ещё один повторный обзор — "Недавние"
+  // выглядели тяжеловесно) — это подсказка-ярлык для беглого взгляда, а не
+  // ещё один список, который стоит сканировать целиком.
+  const RECENT_CLIENTS_LIMIT = 5;
   function openClient(id: string) {
     setOpenClientId(id);
     setRecentIds((prev) => [id, ...prev.filter((x) => x !== id)].slice(0, RECENT_CLIENTS_LIMIT));
@@ -1774,15 +1777,15 @@ export function ClientsTab({
           карточкам, для сотрудника, который весь день переключается между
           несколькими постоянными клиентами. Не показывается, пока ничего ещё
           не открывали, и не зависит от текущего поиска/фильтра — это ярлыки,
-          а не ещё один список. */}
+          а не ещё один список. Оформлены заметно тише самих кнопок-действий
+          (29-й проход, ещё один повторный обзор — были такими же по весу,
+          как настоящие кнопки, плюс цветные аватарки дублировали цвет из
+          самой таблицы прямо над ней; см. .chip-quiet в styles.css). */}
       {recentClients.length > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginBottom: "10px" }}>
-          <span style={{ color: "var(--muted)", fontSize: "12.5px" }}>Недавние:</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap", marginBottom: "10px" }}>
+          <span style={{ color: "var(--muted)", fontSize: "12.5px", marginRight: "2px" }}>Недавние:</span>
           {recentClients.map((c) => (
-            <button key={c.id} type="button" className="btn btn-sm" onClick={() => openClient(c.id)}>
-              <span className="avatar" style={{ background: colorFromId(c.id), width: 18, height: 18, fontSize: "9px", marginRight: "6px" }}>
-                {initials(c.name)}
-              </span>
+            <button key={c.id} type="button" className="chip-quiet" onClick={() => openClient(c.id)}>
               {c.name}
             </button>
           ))}
