@@ -1657,63 +1657,65 @@ export function ClientsTab({
               </button>
             ))}
           </div>
-          {/* Доп. переключатели (29-й проход — "верхняя часть страницы
-              перегружена кнопками"; 30-й проход — "Не арендовали N+ дней" и
-              "Дни рождения" нарушали согласованность со страницей
-              «Оборудование», где подобных доп. тумблеров нет): раньше все
-              три были одного визуального веса и стиля с вкладками рейтинга
-              слева (.segmented) — из-за этого непонятно, что это разные
-              механизмы (вкладки рейтинга взаимоисключающие, эти —
-              независимые вкл/выкл фильтры, свободно комбинируются друг с
-              другом и с рейтингом). "Просрочка сейчас" нужна каждый день
-              (клиентский аналог статуса "Просрочено" на «Оборудовании») —
-              оставлена отдельной кнопкой. "Не арендовали"/"Дни рождения"
-              нужны реже — свёрнуты в один дропдаун "Фильтры" ниже, данные и
-              счётчики при этом никуда не делись. btn-sm визуально отделяет
-              обе группы как менее значимые, вспомогательные. */}
-          <button
-            type="button"
-            className={"btn btn-sm" + (overdueOnly ? " btn-primary" : "")}
-            onClick={() => setOverdueOnly((v) => !v)}
-            title="Показать только клиентов с просрочкой прямо сейчас"
-          >
-            Просрочка сейчас ({overdueNowCount})
-          </button>
-          <div className="cat-filter" ref={moreFiltersRef}>
+          {/* Группа "Просрочка сейчас" + "Фильтры" (31-й проход — "свежим
+              взглядом" обзор всех кнопок разом): раньше "Просрочка сейчас"
+              была на btn-sm (меньше и более округлая — пилюля 16px), а
+              "Фильтры" — на .cat-filter-btn (выше и более прямоугольная —
+              8px), из-за чего в одном ряду встречались три разных высоты
+              кнопок (сегменты рейтинга, эта пара, "Ещё"/"+Добавить") — ряд
+              выглядел "рябым". Обе теперь одной высоты (плюс обёрнуты в
+              общий div БЕЗ собственного flexWrap — переносятся на новую
+              строку только вдвоём, если не помещаются, а не порознь, как
+              вышло с "Все категории"/"Все склады" на «Оборудовании»).
+              "Просрочка сейчас" нужна каждый день (клиентский аналог
+              статуса "Просрочено" на «Оборудовании») — отдельная кнопка.
+              "Не арендовали"/"Дни рождения" нужны реже — свёрнуты в
+              дропдаун "Фильтры", данные и счётчики никуда не делись. */}
+          <div style={{ display: "flex", gap: "10px" }}>
             <button
               type="button"
-              className={"btn btn-sm cat-filter-btn" + (moreFiltersActiveCount > 0 ? " btn-primary" : "")}
-              onClick={() => setMoreFiltersOpen((v) => !v)}
+              className={"btn" + (overdueOnly ? " btn-primary" : "")}
+              onClick={() => setOverdueOnly((v) => !v)}
+              title="Показать только клиентов с просрочкой прямо сейчас"
             >
-              {moreFiltersActiveCount === 0 ? "Фильтры" : `Фильтры: ${moreFiltersActiveCount}`}
-              <IconChevronDown />
+              Просрочка сейчас ({overdueNowCount})
             </button>
-            {moreFiltersOpen && (
-              <div className="cat-filter-panel">
-                <label className={"cat-filter-option" + (dormantOnly ? " checked" : "")}>
-                  <input type="checkbox" className="sr-only" checked={dormantOnly} onChange={() => setDormantOnly((v) => !v)} />
-                  <span className="cat-filter-check">{dormantOnly && <IconCheck />}</span>
-                  <span
-                    className="cat-filter-name"
-                    title={`Клиенты, у которых была хотя бы одна аренда, но не за последние ${DORMANT_DAYS_THRESHOLD} дней — повод напомнить о себе`}
-                  >
-                    Не арендовали {DORMANT_DAYS_THRESHOLD}+ дней
-                  </span>
-                  <span className="cat-filter-count">{dormantCount}</span>
-                </label>
-                <label className={"cat-filter-option" + (birthdayOnly ? " checked" : "")}>
-                  <input type="checkbox" className="sr-only" checked={birthdayOnly} onChange={() => setBirthdayOnly((v) => !v)} />
-                  <span className="cat-filter-check">{birthdayOnly && <IconCheck />}</span>
-                  <span
-                    className="cat-filter-name"
-                    title="Клиенты, у которых день рождения в ближайшие 7 дней — повод поздравить/предложить скидку"
-                  >
-                    <IconGift width={14} height={14} /> Дни рождения
-                  </span>
-                  <span className="cat-filter-count">{birthdayCount}</span>
-                </label>
-              </div>
-            )}
+            <div className="cat-filter" ref={moreFiltersRef}>
+              <button
+                type="button"
+                className={"btn cat-filter-btn" + (moreFiltersActiveCount > 0 ? " btn-primary" : "")}
+                onClick={() => setMoreFiltersOpen((v) => !v)}
+              >
+                {moreFiltersActiveCount === 0 ? "Фильтры" : `Фильтры: ${moreFiltersActiveCount}`}
+                <IconChevronDown />
+              </button>
+              {moreFiltersOpen && (
+                <div className="cat-filter-panel">
+                  <label className={"cat-filter-option" + (dormantOnly ? " checked" : "")}>
+                    <input type="checkbox" className="sr-only" checked={dormantOnly} onChange={() => setDormantOnly((v) => !v)} />
+                    <span className="cat-filter-check">{dormantOnly && <IconCheck />}</span>
+                    <span
+                      className="cat-filter-name"
+                      title={`Клиенты, у которых была хотя бы одна аренда, но не за последние ${DORMANT_DAYS_THRESHOLD} дней — повод напомнить о себе`}
+                    >
+                      Не арендовали {DORMANT_DAYS_THRESHOLD}+ дней
+                    </span>
+                    <span className="cat-filter-count">{dormantCount}</span>
+                  </label>
+                  <label className={"cat-filter-option" + (birthdayOnly ? " checked" : "")}>
+                    <input type="checkbox" className="sr-only" checked={birthdayOnly} onChange={() => setBirthdayOnly((v) => !v)} />
+                    <span className="cat-filter-check">{birthdayOnly && <IconCheck />}</span>
+                    <span
+                      className="cat-filter-name"
+                      title="Клиенты, у которых день рождения в ближайшие 7 дней — повод поздравить/предложить скидку"
+                    >
+                      <IconGift width={14} height={14} /> Дни рождения
+                    </span>
+                    <span className="cat-filter-count">{birthdayCount}</span>
+                  </label>
+                </div>
+              )}
+            </div>
           </div>
         </div>
         {/* Колонка кнопок в .tab-toolbar-grid (30-й проход — ещё один

@@ -837,9 +837,13 @@ export function RentalsTab({
             placeholder={SORTS[0]?.label ?? ""}
             options={SORTS.map((s) => ({ value: s.id, label: s.label }))}
           />
+          {/* Без btn-sm (31-й проход — "свежим взглядом" обзор всех кнопок
+              разом, тот же фикс, что и у "Просрочка сейчас" в
+              ClientsTab.tsx): рядом стоит Dropdown (.cat-filter-btn, выше
+              btn-sm) — без выравнивания высоты ряд выглядел "рябым". */}
           <button
             type="button"
-            className={"btn btn-sm" + (riskOnly ? " btn-primary" : "")}
+            className={"btn" + (riskOnly ? " btn-primary" : "")}
             title="Показать только клиентов «на контроле» или из чёрного списка"
             onClick={() => setRiskOnly((v) => !v)}
           >
