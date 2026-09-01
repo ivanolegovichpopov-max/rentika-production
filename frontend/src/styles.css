@@ -379,6 +379,14 @@ tbody tr { cursor: default; }
 tbody tr[data-clickable="true"] { cursor: pointer; }
 tbody tr[data-clickable="true"]:hover { background: var(--surface-2); }
 .cell-name { font-weight: 700; }
+/* Имя клиента + бейджи (Орг./уровень/др. рождения/"Неполный профиль") —
+   переносятся на вторую строку внутри своей же колонки, если не помещаются,
+   вместо того, чтобы раздувать всю колонку и выталкивать последнюю колонку
+   с кнопками действий за край экрана (32-й проход, обзор оформления). Только
+   на «Клиентах» — где бейджей у одной строки может накопиться сразу
+   несколько; .cell-name сам по себе (у «Оборудования» и других таблиц)
+   не тронут. */
+.cell-name-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 320px; }
 .cell-sub { color: var(--muted); font-size: 12px; }
 /* Точка "есть заметка" у строки оборудования (16-й проход) — вынесена в
    класс из инлайн-style, чтобы её мог переиспользовать и заголовок группы
@@ -589,9 +597,13 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    кликабельно. */
 .chip-quiet {
   display: inline-flex; align-items: center; gap: 6px; background: none; border: none; padding: 3px 8px;
-  border-radius: 14px; font: inherit; font-size: 12px; color: var(--ink-secondary); cursor: pointer; white-space: nowrap;
+  border-radius: 14px; font: inherit; font-size: 12px; color: var(--accent); cursor: pointer; white-space: nowrap;
 }
-.chip-quiet:hover { background: var(--surface-2); color: var(--ink); }
+/* Цвет ссылки в состоянии покоя (32-й проход — раньше был нейтрально-серым,
+   .chip-quiet выглядел как обычная подпись-метаданные, а не кликабельный
+   элемент). Подчёркивание появляется только при наведении/фокусе — в покое
+   ряд имён остаётся лёгким, не превращается в полосу синих ссылок. */
+.chip-quiet:hover, .chip-quiet:focus-visible { background: var(--surface-2); color: var(--accent-hover); text-decoration: underline; }
 
 /* ---------- Пиклист оборудования (форма аренды) ---------- */
 .eq-picklist { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
@@ -759,6 +771,46 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    контейнера вместо переноса фильтров на новую строку — классическая
    нестыковка grid+flex. */
 .tab-toolbar-grid > :first-child { min-width: 0; }
+/* Разделитель между сегмент-контролом рейтинга/статуса и группой
+   независимых фильтров/тумблеров в тулбаре (32-й проход — обзор
+   визуального оформления: сегмент рейтинга, кнопка-тумблер "Просрочка
+   сейчас" и дропдаун "Фильтры" на «Клиентах» были одинаковыми по форме
+   белыми пилюлями подряд — непонятно, что это три разных по поведению
+   механизма (взаимоисключающие вкладки / независимый вкл-выкл / мульти-
+   выбор). Тонкая вертикальная линия + увеличенный отступ явно отделяют
+   "режим просмотра" (сегмент) от "дополнительных фильтров поверх него"
+   (остальное), не трогая сами компоненты. */
+.toolbar-divider { width: 1px; align-self: stretch; min-height: 30px; background: var(--border); flex: none; }
+/* Двухуровневая подпись ступенчатого тарифа в колонке "Ставка" на
+   «Оборудовании» (32-й проход): раньше это была одна строка вида "690 ₽/14дн
+   → 190 ₽/7 дн", в узкой колонке переносившаяся на две визуально
+   равнозначные строки — непонятно, какая цена "главная". Основная ставка —
+   обычным текстом-акцентом ячейки, цена "после периода" — мельче и
+   приглушённым цветом, как остальные вспомогательные подписи под основным
+   значением в таблицах приложения (например .cell-sub). */
+.rate-primary { color: var(--ink); font-weight: 600; }
+.rate-secondary { font-size: 11px; font-weight: 400; color: var(--muted); margin-top: 1px; }
+/* Кнопки быстрых действий в последней колонке строки таблицы — видны только
+   при наведении/фокусе на строку (32-й проход, по образцу уже
+   существующего .dash-handle на дашборде). При активном режиме массового
+   выбора (тело таблицы теряет hover-семантику) не применяется — там кнопки
+   и так не рендерятся. resize/touch-устройства без hover получают кнопки
+   всегда видимыми через (hover: none) — иначе действие было бы недостижимо.
+   position: sticky + right: 0 (доп. правка того же прохода — обнаружилось
+   при проверке, что у клиента с несколькими бейджами разом столбец имени
+   мог раздувать всю таблицу шире контейнера даже после переноса бейджей на
+   вторую строку — .cell-name-wrap ограничивает рост, но не гарантирует его
+   до пикселя при любом сочетании данных). Приклеивает колонку действий к
+   правому краю ВИДИМОЙ области .table-wrap — она остаётся на месте, даже
+   если сама таблица шире контейнера и требует горизонтального скролла,
+   вместо того чтобы полагаться на точный подбор max-width под все возможные
+   комбинации бейджей/данных. background обязателен — иначе сквозь
+   полупрозрачную по умолчанию ячейку при скролле будет видно содержимое
+   соседних колонок под ней. */
+.row-actions { position: sticky; right: 0; background: var(--surface); opacity: 0; transition: opacity 0.12s; }
+tr:hover .row-actions, tr:focus-within .row-actions { opacity: 1; }
+@media (hover: none) { .row-actions { opacity: 1; } }
+tbody tr[data-clickable="true"]:hover .row-actions { background: var(--surface-2); }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; box-shadow: var(--shadow-sm); margin-bottom: 16px; }
 .inline-form { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
 .data-table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow-sm); }

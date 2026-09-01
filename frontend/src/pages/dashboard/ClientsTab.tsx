@@ -1657,6 +1657,12 @@ export function ClientsTab({
               </button>
             ))}
           </div>
+          {/* Разделитель между сегментом рейтинга и группой доп. фильтров
+              (32-й проход — обзор оформления: без него все три контрола в
+              ряду выглядели одинаковыми пилюлями, хотя ведут себя по-разному
+              — вкладки против независимых тумблеров/дропдауна). См.
+              .toolbar-divider в styles.css. */}
+          <div className="toolbar-divider" />
           {/* Группа "Просрочка сейчас" + "Фильтры" (31-й проход — "свежим
               взглядом" обзор всех кнопок разом): раньше "Просрочка сейчас"
               была на btn-sm (меньше и более округлая — пилюля 16px), а
@@ -1966,10 +1972,25 @@ export function ClientsTab({
                             lib/format.ts), 25-й проход, п.3 обзора. */}
                         <span className="avatar" style={{ background: colorFromId(c.id) }}>{initials(c.name)}</span>
                         <div>
-                          <div className="cell-name">
-                            {c.name}
+                          {/* cell-name-wrap (32-й проход — обзор оформления,
+                              п. "Удалить съезжает за край экрана"): у клиента с
+                              несколькими бейджами разом (Орг. + уровень +
+                              день рождения + "Неполный профиль") имя раньше
+                              росло одной нерастяжимой строкой — при
+                              table-layout:auto это раздувало всю таблицу шире
+                              контейнера, и последняя колонка с кнопками
+                              "Изменить"/"Удалить" уезжала за правый край
+                              экрана (видна только после горизонтального
+                              скролла). flex-wrap переносит бейджи на вторую
+                              строку внутри своей же колонки вместо того, чтобы
+                              раздувать её вширь — остальные колонки таблицы
+                              (и кнопки действий) сохраняют свою ширину
+                              независимо от количества бейджей у конкретного
+                              клиента. */}
+                          <div className="cell-name cell-name-wrap">
+                            <span>{c.name}</span>
                             {c.client_type === "company" && (
-                              <span className="badge-tag" title="Организация" style={{ marginLeft: "6px" }}>
+                              <span className="badge-tag" title="Организация">
                                 Орг.
                               </span>
                             )}
@@ -1977,12 +1998,12 @@ export function ClientsTab({
                                 отдельная ось от рейтинга надёжности слева в
                                 своей колонке, поэтому здесь, у имени. */}
                             {valueTiers.has(c.id) && (
-                              <span style={{ marginLeft: "6px", display: "inline-block" }}>
+                              <span style={{ display: "inline-block" }}>
                                 <Badge meta={VALUE_TIER_META[valueTiers.get(c.id)!]} />
                               </span>
                             )}
                             {isBirthdayThisWeek(c.birthday) && (
-                              <span title="День рождения на этой неделе" style={{ marginLeft: "6px", display: "inline-flex", verticalAlign: "middle" }}>
+                              <span title="День рождения на этой неделе" style={{ display: "inline-flex", verticalAlign: "middle" }}>
                                 <IconGift width={14} height={14} />
                               </span>
                             )}
@@ -1990,7 +2011,7 @@ export function ClientsTab({
                                 нет ни телефона, ни документа: риск отдать технику
                                 клиенту, с которым потом не связаться. */}
                             {isIncompleteProfile(c) && (
-                              <span style={{ marginLeft: "6px", display: "inline-block" }}>
+                              <span style={{ display: "inline-block" }}>
                                 <Badge meta={{ label: "Неполный профиль", tone: "warning" }} />
                               </span>
                             )}
@@ -2024,7 +2045,11 @@ export function ClientsTab({
                     {clientColumns.map((col) => (
                       <td key={col.key}>{renderClientCell(col.key, c, cellCtx)}</td>
                     ))}
-                    <td onClick={(e) => e.stopPropagation()} style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    {/* row-actions (32-й проход, обзор оформления) — кнопки
+                        видны только при наведении/фокусе на строку, чтобы не
+                        превращаться в "стену иконок" на длинном списке
+                        клиентов; см. .row-actions в styles.css. */}
+                    <td onClick={(e) => e.stopPropagation()} className="row-actions" style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       <button type="button" className="icon-btn" title="Изменить" onClick={() => openEditModal(c.id)}>
                         <IconEdit />
                       </button>{" "}

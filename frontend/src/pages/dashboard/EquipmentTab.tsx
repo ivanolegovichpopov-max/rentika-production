@@ -29,7 +29,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
 import { EMPTY_FORM, formFromEquipment, formFromEquipmentAsCopy, formToPayload, type EquipmentFormState } from "./equipment/formHelpers";
-import { rateLabel, equipmentHasOpenRentals } from "./equipment/helpers";
+import { rateLabelParts, equipmentHasOpenRentals } from "./equipment/helpers";
 import { exportEquipmentCsv } from "./equipment/csv";
 import { EquipmentFormModal } from "./equipment/EquipmentFormModal";
 import { EquipmentImportModal } from "./equipment/EquipmentImportModal";
@@ -199,8 +199,18 @@ function renderEquipmentCell(key: string, it: Equipment, status: string, freeFro
           {freeFrom && <div className="cell-sub">своб. с {freeFrom}</div>}
         </>
       );
-    case "rate":
-      return rateLabel(it);
+    case "rate": {
+      // Двухуровневая подпись (32-й проход, обзор оформления) — основная
+      // цена и цена "после периода" визуально разного веса, см.
+      // .rate-primary/.rate-secondary в styles.css.
+      const { primary, secondary } = rateLabelParts(it);
+      return (
+        <>
+          <div className="rate-primary">{primary}</div>
+          {secondary && <div className="rate-secondary">{secondary}</div>}
+        </>
+      );
+    }
     case "deposit":
       return money(it.deposit);
     default:
@@ -1079,7 +1089,11 @@ export function EquipmentTab({
                           {renderEquipmentCell(col.key, it, status, freeFrom)}
                         </td>
                       ))}
-                      <td onClick={(e) => e.stopPropagation()} style={{ textAlign: "right" }}>
+                      {/* row-actions (32-й проход, обзор оформления, тот же
+                          приём, что и у кнопок "Изменить"/"Удалить" на
+                          «Клиентах») — иконка "Копировать" видна только при
+                          наведении/фокусе на строку. */}
+                      <td onClick={(e) => e.stopPropagation()} className="row-actions" style={{ textAlign: "right" }}>
                         <button type="button" className="icon-btn" title="Копировать" onClick={() => openCopyModal(it)}>
                           <IconCopy />
                         </button>
@@ -1183,7 +1197,7 @@ export function EquipmentTab({
                                 {renderEquipmentCell(col.key, it, status, freeFrom)}
                               </td>
                             ))}
-                            <td onClick={(e) => e.stopPropagation()} style={{ textAlign: "right" }}>
+                            <td onClick={(e) => e.stopPropagation()} className="row-actions" style={{ textAlign: "right" }}>
                               <button type="button" className="icon-btn" title="Копировать" onClick={() => openCopyModal(it)}>
                                 <IconCopy />
                               </button>
