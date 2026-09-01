@@ -37,6 +37,7 @@ import { EquipmentCategoriesModal } from "./equipment/EquipmentCategoriesModal";
 import { EquipmentWarehousesModal } from "./equipment/EquipmentWarehousesModal";
 import { EquipmentDetailPanel } from "./equipment/EquipmentDetailPanel";
 import { Dropdown } from "../../components/Dropdown";
+import { MoreActionsMenu } from "../../components/MoreActionsMenu";
 
 export { EquipmentDetailPanel };
 
@@ -836,44 +837,37 @@ export function EquipmentTab({
           )}
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
-          {isOwner && (
-            <button className="btn" onClick={() => setCategoriesModal({})}>
-              Категории
-            </button>
-          )}
-          {isOwner && (
-            <button className="btn" onClick={() => setWarehousesModal({})}>
-              Склады
-            </button>
-          )}
-          {/* Настройка столбцов таблицы — двадцать первый проход, п.4 обзора:
-              переоформлено по образцу режима настройки Дашборда (кнопка со
-              IconSliders, переключается на "Готово", карточки-столбцы с
-              грипом+глазом появляются рядом, а не в выпадающем списке —
-              см. columnsEditMode ниже и ряд карточек над таблицей). */}
-          <button
-            type="button"
-            className={"btn" + (columnsEditMode ? " btn-primary" : "")}
-            onClick={() => setColumnsEditMode((v) => !v)}
-            title="Скрыть ненужные столбцы таблицы или перетащить их в другом порядке"
-          >
-            <IconSliders /> {columnsEditMode ? "Готово" : "Настроить столбцы"}
-          </button>
-          <button className="btn" onClick={() => exportEquipmentCsv(list, rentals, today)} disabled={list.length === 0}>
-            Экспорт CSV
-          </button>
-          <button className="btn" onClick={() => setImportOpen(true)}>
-            Импорт CSV
-          </button>
-          {/* Корзина (29-й проход, п.14 обзора) — восстановление удалённого
-              оборудования в течение 30 дней. Специально в самом конце ряда,
-              сразу перед "+ Добавить" (ещё один повторный обзор — расстановка
-              кнопок панели): по смыслу это "аварийное" действие на крайний
-              случай, а не рабочая операция вроде экспорта/импорта, поэтому
-              логичнее держать её на отшибе, а не в середине блока настроек. */}
-          <button className="btn" onClick={() => setTrashOpen(true)}>
-            <IconTrash /> Корзина
-          </button>
+          {/* Редкие служебные действия спрятаны за одной кнопкой "⋯ Ещё"
+              (29-й проход, ещё один повторный обзор — "верхняя часть
+              страницы перегружена кнопками", та же правка, что и в
+              ClientsTab.tsx): управление категориями/складами, настройку
+              столбцов, импорт/экспорт CSV и корзину открывают не каждый
+              день, в отличие от "+ Добавить". См.
+              components/MoreActionsMenu.tsx. */}
+          <MoreActionsMenu
+            actions={[
+              ...(isOwner
+                ? [
+                    { key: "categories", label: "Категории", onClick: () => setCategoriesModal({}) },
+                    { key: "warehouses", label: "Склады", onClick: () => setWarehousesModal({}) },
+                  ]
+                : []),
+              {
+                key: "columns",
+                icon: <IconSliders />,
+                label: columnsEditMode ? "Готово (настройка столбцов)" : "Настроить столбцы",
+                onClick: () => setColumnsEditMode((v) => !v),
+              },
+              {
+                key: "export",
+                label: "Экспорт CSV",
+                onClick: () => exportEquipmentCsv(list, rentals, today),
+                disabled: list.length === 0,
+              },
+              { key: "import", label: "Импорт CSV", onClick: () => setImportOpen(true) },
+              { key: "trash", icon: <IconTrash />, label: "Корзина", onClick: () => setTrashOpen(true) },
+            ]}
+          />
           <button className="btn btn-primary" onClick={openAddModal}>
             + Добавить
           </button>

@@ -33,6 +33,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
 import { useModalDialog } from "../../lib/useModalDialog";
+import { MoreActionsMenu } from "../../components/MoreActionsMenu";
 import { parseCsv, csvRowsToObjects, toCsv } from "../../lib/csv";
 import { DocModal, buildContractDoc } from "./documents";
 import { Dropdown } from "../../components/Dropdown";
@@ -1632,9 +1633,17 @@ export function ClientsTab({
               </button>
             ))}
           </div>
+          {/* Три доп. переключателя (29-й проход, ещё один повторный обзор —
+              "верхняя часть страницы перегружена кнопками"): раньше были
+              одного визуального веса и стиля с вкладками рейтинга слева
+              (.segmented) — из-за этого непонятно, что это разные механизмы
+              (вкладки рейтинга взаимоисключающие, эти три — независимые
+              вкл/выкл фильтры, свободно комбинируются друг с другом и с
+              рейтингом). btn-sm визуально отделяет их как менее значимую,
+              вспомогательную группу. */}
           <button
             type="button"
-            className={"btn" + (overdueOnly ? " btn-primary" : "")}
+            className={"btn btn-sm" + (overdueOnly ? " btn-primary" : "")}
             onClick={() => setOverdueOnly((v) => !v)}
             title="Показать только клиентов с просрочкой прямо сейчас"
           >
@@ -1642,7 +1651,7 @@ export function ClientsTab({
           </button>
           <button
             type="button"
-            className={"btn" + (dormantOnly ? " btn-primary" : "")}
+            className={"btn btn-sm" + (dormantOnly ? " btn-primary" : "")}
             onClick={() => setDormantOnly((v) => !v)}
             title={`Клиенты, у которых была хотя бы одна аренда, но не за последние ${DORMANT_DAYS_THRESHOLD} дней — повод напомнить о себе`}
           >
@@ -1650,7 +1659,7 @@ export function ClientsTab({
           </button>
           <button
             type="button"
-            className={"btn" + (birthdayOnly ? " btn-primary" : "")}
+            className={"btn btn-sm" + (birthdayOnly ? " btn-primary" : "")}
             onClick={() => setBirthdayOnly((v) => !v)}
             title="Клиенты, у которых день рождения в ближайшие 7 дней — повод поздравить/предложить скидку"
           >
@@ -1658,31 +1667,30 @@ export function ClientsTab({
           </button>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
-          {/* Настройка столбцов — 1:1 перенесённая кнопка из EquipmentTab.tsx
-              (29-й проход, п.11 обзора). */}
-          <button
-            type="button"
-            className={"btn" + (columnsEditMode ? " btn-primary" : "")}
-            onClick={() => setColumnsEditMode((v) => !v)}
-            title="Скрыть ненужные столбцы таблицы или перетащить их в другом порядке"
-          >
-            <IconSliders /> {columnsEditMode ? "Готово" : "Настроить столбцы"}
-          </button>
-          <button className="btn" onClick={() => setShowImport(true)}>
-            Импорт CSV
-          </button>
-          <button className="btn" onClick={() => exportClientsCsv(list, rentals)} disabled={list.length === 0}>
-            Экспорт CSV
-          </button>
-          {/* Корзина (29-й проход, п.14 обзора) — восстановление удалённых
-              клиентов в течение 30 дней. Специально в конце ряда, сразу перед
-              "+ Добавить" (ещё один повторный обзор — расстановка кнопок
-              панели, та же правка, что и в EquipmentTab.tsx): это "аварийное"
-              действие на крайний случай, а не рабочая операция вроде
-              экспорта/импорта, логичнее держать её на отшибе. */}
-          <button className="btn" onClick={() => setShowTrash(true)}>
-            <IconTrash /> Корзина
-          </button>
+          {/* Редкие служебные действия спрятаны за одной кнопкой "⋯ Ещё"
+              (29-й проход, ещё один повторный обзор — "верхняя часть
+              страницы перегружена кнопками"): настройку столбцов, импорт/
+              экспорт CSV и корзину открывают не каждый день, в отличие от
+              "+ Добавить" — незачем держать их все на виду тем же весом,
+              что и главное действие. См. components/MoreActionsMenu.tsx. */}
+          <MoreActionsMenu
+            actions={[
+              {
+                key: "columns",
+                icon: <IconSliders />,
+                label: columnsEditMode ? "Готово (настройка столбцов)" : "Настроить столбцы",
+                onClick: () => setColumnsEditMode((v) => !v),
+              },
+              { key: "import", label: "Импорт CSV", onClick: () => setShowImport(true) },
+              {
+                key: "export",
+                label: "Экспорт CSV",
+                onClick: () => exportClientsCsv(list, rentals),
+                disabled: list.length === 0,
+              },
+              { key: "trash", icon: <IconTrash />, label: "Корзина", onClick: () => setShowTrash(true) },
+            ]}
+          />
           <button className="btn btn-primary" onClick={openAddModal}>
             + Добавить
           </button>
