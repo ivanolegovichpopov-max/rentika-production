@@ -771,6 +771,18 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 }
 .cat-filter-btn:hover { border-color: var(--accent); }
 .cat-filter-btn svg { flex: none; opacity: 0.6; }
+/* Триггер меню "Ещё" (components/MoreActionsMenu.tsx, 29-й проход, ещё один
+   повторный обзор) — сознательно НЕ .cat-filter-btn: без рамки/фона и
+   приглушённым цветом текста, чтобы не выглядеть как ещё один фильтр в
+   том же ряду, а читаться как более тихий, второстепенный элемент —
+   именно то, ради чего редкие действия вообще прятались за этой кнопкой. */
+.more-menu-btn {
+  display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 13.5px;
+  padding: 8px 10px; border: none; border-radius: 8px; background: none;
+  color: var(--ink-secondary); cursor: pointer; white-space: nowrap;
+}
+.more-menu-btn:hover { background: var(--surface-2); color: var(--ink); }
+.more-menu-btn svg { flex: none; opacity: 0.6; }
 .cat-filter-panel {
   position: absolute; top: calc(100% + 4px); left: 0; z-index: 5; min-width: 220px; max-height: 280px;
   overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
