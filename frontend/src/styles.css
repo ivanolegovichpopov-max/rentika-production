@@ -807,7 +807,18 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    комбинации бейджей/данных. background обязателен — иначе сквозь
    полупрозрачную по умолчанию ячейку при скролле будет видно содержимое
    соседних колонок под ней. */
-.row-actions { position: sticky; right: 0; background: var(--surface); opacity: 0; transition: opacity 0.12s; }
+/* width/min-width на самой колонке (33-й проход, ремонт находки предыдущего
+   прохода) — репорт с реальными данными показал колонку схлопнутой до
+   нулевой ширины в состоянии покоя в одном из браузеров, хотя в Chromium
+   песочницы (и в самом опубликованном бандле — проверено содержимое CSS)
+   та же разметка вела себя верно. Судя по всему, это cross-browser
+   нестыковка между position: sticky на ячейке и авто-раскладкой ширины
+   таблицы, когда единственный источник ширины колонки — content-based
+   расчёт по невидимым (opacity: 0) кнопкам. Явный width, заданный
+   одновременно на <th> и на <td> этой колонки, не оставляет браузеру
+   пространства для альтернативной интерпретации — 104px хватает на две
+   32px-иконки с зазором и стандартным паддингом ячейки (16px×2). */
+.row-actions { position: sticky; right: 0; width: 104px; min-width: 104px; background: var(--surface); opacity: 0; transition: opacity 0.12s; }
 tr:hover .row-actions, tr:focus-within .row-actions { opacity: 1; }
 @media (hover: none) { .row-actions { opacity: 1; } }
 tbody tr[data-clickable="true"]:hover .row-actions { background: var(--surface-2); }
