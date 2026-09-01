@@ -683,6 +683,35 @@ export function EquipmentTab({
     }
   }
 
+  /** Одиночное удаление прямо из строки таблицы (35-й проход — пользователь
+   * попросил добавить кнопку "Удалить" рядом с "Копировать" на
+   * «Оборудовании» по образцу уже существующих иконок на «Клиентах»,
+   * показывающихся по наведению). Логика — точная копия
+   * EquipmentDetailPanel.handleDelete (та же проверка на открытую
+   * аренду/бронь, тот же мягкий перенос в корзину на 30 дней), только с
+   * confirmBulk/notify этого компонента вместо локальных из слайд-панели. */
+  async function handleDelete(id: string) {
+    const item = equipment.find((e) => e.id === id);
+    if (equipmentHasOpenRentals(id, rentals)) {
+      notify("Нельзя удалить: по этой позиции есть аренда в работе или бронь. Сначала завершите её.");
+      return;
+    }
+    if (
+      !(await confirmBulk(`«${item?.name ?? ""}» будет перемещено в корзину. Восстановить можно в течение 30 дней.`, {
+        danger: true,
+        confirmLabel: "В корзину",
+      }))
+    )
+      return;
+    try {
+      await api.delete(`/businesses/${businessId}/equipment/${id}`);
+      if (openId === id) setOpenId(null);
+      await Promise.all([reloadEquipment(), reloadEquipmentCategories(), reloadEquipmentWarehouses()]);
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : "Не удалось удалить");
+    }
+  }
+
   /** Массовое удаление — позиции с открытой арендой/бронью пропускаются без
    * попытки удаления (тот же принцип, что и у одиночного удаления в
    * EquipmentDetailPanel.handleDelete, только здесь заранее отфильтровано,
@@ -1095,11 +1124,16 @@ export function EquipmentTab({
                       ))}
                       {/* row-actions (32-й проход, обзор оформления, тот же
                           приём, что и у кнопок "Изменить"/"Удалить" на
-                          «Клиентах») — иконка "Копировать" видна только при
-                          наведении/фокусе на строку. */}
+                          «Клиентах») — иконки видны только при наведении/
+                          фокусе на строку. "Удалить" добавлена 35-м
+                          проходом по прямой просьбе — на «Клиентах» такая
+                          пара уже была, здесь не хватало симметрии. */}
                       <td onClick={(e) => e.stopPropagation()} className="row-actions" style={{ textAlign: "right" }}>
                         <button type="button" className="icon-btn" title="Копировать" onClick={() => openCopyModal(it)}>
                           <IconCopy />
+                        </button>{" "}
+                        <button type="button" className="icon-btn" title="Удалить" onClick={() => void handleDelete(it.id)}>
+                          <IconTrash />
                         </button>
                       </td>
                     </tr>
@@ -1204,6 +1238,9 @@ export function EquipmentTab({
                             <td onClick={(e) => e.stopPropagation()} className="row-actions" style={{ textAlign: "right" }}>
                               <button type="button" className="icon-btn" title="Копировать" onClick={() => openCopyModal(it)}>
                                 <IconCopy />
+                              </button>{" "}
+                              <button type="button" className="icon-btn" title="Удалить" onClick={() => void handleDelete(it.id)}>
+                                <IconTrash />
                               </button>
                             </td>
                           </tr>
