@@ -1527,63 +1527,73 @@ export function RentalsTab({
   return (
     <div>
       <div className="tab-toolbar-grid">
-        <div className="segmented">
-          {FILTERS.map((f) => (
-            <button key={f.id} type="button" className={filter === f.id ? "active" : ""} onClick={() => setFilter(f.id)}>
-              {f.label}
+        {/* Левый кластер: сегменты статусов + сортировка/переключатели-фильтры
+            в одном ряду (44-й проход, по итогам обзора верхней части
+            "Аренды") — тот же приём, что и в ClientsTab.tsx ("Просрочка
+            сейчас"+"Фильтры" через .toolbar-divider рядом с сегментами
+            рейтинга). Раньше сортировка и три иконки-переключателя (риск/
+            истекает/депозит) стояли в ПРАВОЙ колонке — она разрасталась до
+            семи элементов и вытесняла сегменты статусов на вторую строку
+            заметно чаще, чем у "Оборудования" с тем же числом вкладок (6).
+            Сортировка и фильтры — часть того же смыслового кластера, что и
+            сегменты статусов (все вместе решают "что показывать"), поэтому
+            и место им здесь, а не в колонке действий. */}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          <div className="segmented">
+            {FILTERS.map((f) => (
+              <button key={f.id} type="button" className={filter === f.id ? "active" : ""} onClick={() => setFilter(f.id)}>
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <div className="toolbar-divider" />
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <Dropdown
+              value={sort}
+              onChange={setSort}
+              placeholder={SORTS[0]?.label ?? ""}
+              options={SORTS.map((s) => ({ value: s.id, label: s.label }))}
+            />
+            {/* icon-only (41-й проход) — подсказка (title) и так объясняет
+                смысл кнопки при наведении, текстовая подпись была бы
+                избыточна в и без того плотном ряду. */}
+            <button
+              type="button"
+              className={"btn btn-icon-only" + (riskOnly ? " btn-primary" : "")}
+              title="Показать только клиентов «на контроле» или из чёрного списка"
+              aria-label="Только рискованные"
+              onClick={() => setRiskOnly((v) => !v)}
+            >
+              <IconAlert />
             </button>
-          ))}
+            <button
+              type="button"
+              className={"btn btn-icon-only" + (expiringOnly ? " btn-primary" : "")}
+              title="Показать только аренды в работе, которые истекают в ближайшие 2 дня"
+              aria-label="Истекает скоро"
+              onClick={() => setExpiringOnly((v) => !v)}
+            >
+              <IconCalendar />
+            </button>
+            <button
+              type="button"
+              className={"btn btn-icon-only" + (depositDueOnly ? " btn-primary" : "")}
+              title="Показать только закрытые аренды с невозвращённым депозитом"
+              aria-label="Депозит не возвращён"
+              onClick={() => setDepositDueOnly((v) => !v)}
+            >
+              <IconShield />
+            </button>
+          </div>
         </div>
         {/* Колонка кнопок в .tab-toolbar-grid — тот же фикс, что и в
             ClientsTab.tsx/EquipmentTab.tsx (30-й проход): держит эту
             группу у верхнего правого угла независимо от переноса строк
-            слева (см. styles.css, .tab-toolbar-grid). */}
+            слева (см. styles.css, .tab-toolbar-grid). Теперь тут ровно тот
+            же состав, что и у "Оборудования"/"Клиентов" — "Ещё" и основная
+            кнопка действия (плюс временная "Готово" в активном режиме
+            выбора, см. ниже) — а не семь вперемешку с фильтрами. */}
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <Dropdown
-            value={sort}
-            onChange={setSort}
-            placeholder={SORTS[0]?.label ?? ""}
-            options={SORTS.map((s) => ({ value: s.id, label: s.label }))}
-          />
-          {/* Без btn-sm (31-й проход — "свежим взглядом" обзор всех кнопок
-              разом, тот же фикс, что и у "Просрочка сейчас" в
-              ClientsTab.tsx): рядом стоит Dropdown (.cat-filter-btn, выше
-              btn-sm) — без выравнивания высоты ряд выглядел "рябым".
-              41-й проход, по итогам обзора: оба переключателя стали
-              icon-only (btn-icon-only, без видимого текста) — тулбар с
-              двумя новыми кнопками (риск + истекает) стал заметно шире и
-              вытеснял сегментированный переключатель статусов слева в 2-3
-              строки (grid-template-columns: 1fr auto у .tab-toolbar-grid —
-              правая auto-колонка забирала всё больше места). Подсказка
-              (title) и так уже объясняла смысл кнопки при наведении —
-              текстовая подпись была избыточна. */}
-          <button
-            type="button"
-            className={"btn btn-icon-only" + (riskOnly ? " btn-primary" : "")}
-            title="Показать только клиентов «на контроле» или из чёрного списка"
-            aria-label="Только рискованные"
-            onClick={() => setRiskOnly((v) => !v)}
-          >
-            <IconAlert />
-          </button>
-          <button
-            type="button"
-            className={"btn btn-icon-only" + (expiringOnly ? " btn-primary" : "")}
-            title="Показать только аренды в работе, которые истекают в ближайшие 2 дня"
-            aria-label="Истекает скоро"
-            onClick={() => setExpiringOnly((v) => !v)}
-          >
-            <IconCalendar />
-          </button>
-          <button
-            type="button"
-            className={"btn btn-icon-only" + (depositDueOnly ? " btn-primary" : "")}
-            title="Показать только закрытые аренды с невозвращённым депозитом"
-            aria-label="Депозит не возвращён"
-            onClick={() => setDepositDueOnly((v) => !v)}
-          >
-            <IconShield />
-          </button>
           <MoreActionsMenu
             actions={[
               {
@@ -1591,18 +1601,21 @@ export function RentalsTab({
                 label: "Экспорт CSV",
                 onClick: () => exportRentalsCsv(sorted, clients, equipment),
               },
+              // Массовые действия (42-й проход, п.3 обзора) — точка ВХОДА в
+              // режим выбора спрятана в "Ещё", пока он выключен (та же
+              // логика, что у "Настроить столбцы" в EquipmentTab.tsx: не
+              // рядовое ежедневное действие, как "+ Новая аренда"). Пока
+              // включён — пункт меню убран, выход из режима ("Готово")
+              // вынесен в открытую ниже: спрятанный выход из активного
+              // режима неочевиден.
+              ...(selectMode ? [] : [{ key: "select", label: "Выбрать", onClick: toggleSelectMode }]),
             ]}
           />
-          {/* Массовые действия (42-й проход, п.3 обзора) — отдельный
-              переключаемый режим, а не постоянные чекбоксы на каждой
-              карточке, см. докстринг selectMode выше. */}
-          <button
-            type="button"
-            className={"btn btn-sm" + (selectMode ? " btn-primary" : "")}
-            onClick={toggleSelectMode}
-          >
-            {selectMode ? "Готово" : "Выбрать"}
-          </button>
+          {selectMode && (
+            <button type="button" className="btn btn-primary" onClick={toggleSelectMode}>
+              Готово
+            </button>
+          )}
           <button className="btn btn-primary" type="button" onClick={() => setShowCreate(true)}>
             + Новая аренда
           </button>
