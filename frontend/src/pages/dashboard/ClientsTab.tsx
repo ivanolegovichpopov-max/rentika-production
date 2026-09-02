@@ -160,6 +160,20 @@ export function ClientsTab({
   // механизмом, что и sort выше. Храним максимум RECENT_CLIENTS_LIMIT штук,
   // самые новые в начале.
   const [recentIds, setRecentIds] = usePersistedState<string[]>(`client-recent:${businessId}`, []);
+  // 2 вместо прежних 5 (45-й проход, по итогам обзора верхней части
+  // "Клиенты" — "Недавние" переехали в первую строку тулбара, рядом с
+  // сегментами рейтинга, и делят с ними ширину, места заметно меньше, чем
+  // было в отдельной строке под всем тулбаром). Это подсказка-ярлык для
+  // беглого взгляда, а не ещё один список, который стоит сканировать целиком.
+  // Константа объявлена ДО recentClients ниже (45-й проход, фикс): раньше
+  // была объявлена ниже по файлу, а recentClients уже использовался в JSX —
+  // из-за этого урезание лимита с 5 до 2 применялось только к НОВЫМ записям
+  // (при следующем открытии карточки), а уже сохранённые в localStorage
+  // браузера пользователя 5 старых id продолжали отображаться все разом,
+  // пока он не откроет ещё одного клиента. Теперь recentClients сам режется
+  // по лимиту (см. ниже) — старые сохранённые записи сразу показываются
+  // урезанными, без этого ожидания.
+  const RECENT_CLIENTS_LIMIT = 2;
   const { confirm, dialog: confirmDialog } = useConfirm();
   const { confirm: confirmBulk, dialog: bulkConfirmDialog } = useConfirm();
   const { confirm: confirmDuplicate, dialog: duplicateDialog } = useConfirm();
@@ -211,7 +225,10 @@ export function ClientsTab({
     .filter((c) => !dormantOnly || isDormantClient(c.id, rentals))
     .filter((c) => !birthdayOnly || isBirthdayThisWeek(c.birthday));
   const list = sortClientList(withFilters, sort, rentals);
-  const recentClients = recentIds.map((id) => clients.find((c) => c.id === id)).filter((c): c is Client => !!c);
+  const recentClients = recentIds
+    .slice(0, RECENT_CLIENTS_LIMIT)
+    .map((id) => clients.find((c) => c.id === id))
+    .filter((c): c is Client => !!c);
 
   // Сброс выделения при смене фильтров/поиска — тот же принцип, что и в
   // EquipmentTab.tsx: иначе массовое действие могло бы применяться к
@@ -221,12 +238,6 @@ export function ClientsTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ratingFilter, overdueOnly, dormantOnly, birthdayOnly, search]);
 
-  // 2 вместо прежних 5 (45-й проход, по итогам обзора верхней части
-  // "Клиенты" — "Недавние" переехали в первую строку тулбара, рядом с
-  // сегментами рейтинга, и делят с ними ширину, места заметно меньше, чем
-  // было в отдельной строке под всем тулбаром). Это подсказка-ярлык для
-  // беглого взгляда, а не ещё один список, который стоит сканировать целиком.
-  const RECENT_CLIENTS_LIMIT = 2;
   function openClient(id: string) {
     setOpenClientId(id);
     setRecentIds((prev) => [id, ...prev.filter((x) => x !== id)].slice(0, RECENT_CLIENTS_LIMIT));
