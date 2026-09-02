@@ -63,6 +63,12 @@ function entryDetails(entry: RentalHistoryEntry): string[] {
         Array.isArray(meta.equipment_ids) ? `позиций возвращено: ${meta.equipment_ids.length}` : "",
         meta.closed ? "аренда закрыта этим возвратом" : "",
       ].filter(Boolean);
+    // Причина отмены (43-й проход, п.5 обзора) — meta присутствует только
+    // когда сотрудник её ввёл (см. RentalCancel/cancel_rental на backend'е:
+    // пустая причина не создаёт meta вовсе), поэтому здесь достаточно
+    // проверить наличие поля.
+    case "cancel":
+      return typeof meta.reason === "string" && meta.reason ? [`причина: ${meta.reason}`] : [];
     default:
       return [];
   }

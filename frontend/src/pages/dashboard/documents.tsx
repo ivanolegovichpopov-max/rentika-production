@@ -11,13 +11,46 @@ import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import type { Client, Equipment, Rental } from "../../api/types";
 import { fmtDate, money, todayISO } from "../../lib/format";
 import { IconClose, IconPrinter } from "../../lib/icons";
+// docNumber вынесен в rentals/helpers.ts (43-й проход, п.7 обзора) — тем же
+// значением теперь ищут аренду в списке (RentalsTab.tsx), одна формула на
+// оба места.
+import { docNumber } from "./rentals/helpers";
 
 // В проде нет сущности "реквизиты компании" — как и в демо, это статичный
 // плейсхолдер в шаблоне, который бизнес правит от руки перед печатью/подписью.
 const COMPANY_NAME = "[Название вашей компании]";
 
-function docNumber(r: Rental): string {
-  return r.id.slice(0, 8).toUpperCase();
+/**
+ * Шапка "Арендодатель/Арендатор" (43-й проход, п.10 обзора) — общая для всех
+ * пяти документов; `children` — дополнительные пары строк ТОГО ЖЕ doc-grid
+ * (только у buildContractDoc — телефон/документ/период/депозит), рендерятся
+ * внутри одного и того же div.doc-grid, а не отдельным блоком: раскладка —
+ * CSS-грид на две колонки по прямым детям, разбивать его на два div'а нельзя,
+ * не сломав вёрстку.
+ */
+function DocHeader({ client, children }: { client: Client | undefined; children?: ReactNode }) {
+  return (
+    <div className="doc-grid">
+      <div className="k">Арендодатель</div>
+      <div>{COMPANY_NAME}</div>
+      <div className="k">Арендатор</div>
+      <div>{client?.name ?? "—"}</div>
+      {children}
+    </div>
+  );
+}
+
+/** Блок подписей — общий для всех пяти документов (43-й проход, п.10
+ * обзора), различаются только подписи ролей слева/справа (см. вызовы ниже:
+ * "Арендодатель/Арендатор" в договоре, "Передал/Принял" в акте выдачи,
+ * "Принял/Сдал" в актах возврата). */
+function DocSign({ left, right, client }: { left: string; right: string; client: Client | undefined }) {
+  return (
+    <div className="doc-sign">
+      <div className="line">{left} / {COMPANY_NAME}</div>
+      <div className="line">{right} / {client?.name ?? "—"}</div>
+    </div>
+  );
 }
 
 /** Таблица позиций аренды — общая для всех трёх документов (Оборудование / Инв. № / Ставка). */
@@ -59,11 +92,7 @@ export function buildContractDoc(r: Rental, client: Client | undefined, equipmen
         <span className="doc-placeholder">(шаблон — заполните реквизиты)</span>
       </div>
 
-      <div className="doc-grid">
-        <div className="k">Арендодатель</div>
-        <div>{COMPANY_NAME}</div>
-        <div className="k">Арендатор</div>
-        <div>{client?.name ?? "—"}</div>
+      <DocHeader client={client}>
         <div className="k">Телефон</div>
         <div>{client?.phone ?? "—"}</div>
         <div className="k">Документ</div>
@@ -72,7 +101,7 @@ export function buildContractDoc(r: Rental, client: Client | undefined, equipmen
         <div>{fmtDate(r.start_date)} — {fmtDate(r.end_date)}</div>
         <div className="k">Депозит</div>
         <div>{money(r.deposit_total)}</div>
-      </div>
+      </DocHeader>
 
       <ItemsTable r={r} equipment={equipment} />
 
@@ -86,10 +115,7 @@ export function buildContractDoc(r: Rental, client: Client | undefined, equipmen
         депозита — возмещается арендатором дополнительно в полном объёме.
       </p>
 
-      <div className="doc-sign">
-        <div className="line">Арендодатель / {COMPANY_NAME}</div>
-        <div className="line">Арендатор / {client?.name ?? "—"}</div>
-      </div>
+      <DocSign left="Арендодатель" right="Арендатор" client={client} />
     </div>
   );
 }
@@ -124,21 +150,13 @@ export function buildIssueDoc(r: Rental, client: Client | undefined, equipment: 
       <h2>Акт приёма-передачи оборудования</h2>
       <div className="doc-sub">к договору № {docNumber(r)} · выдано {fmtDate(todayISO())}</div>
 
-      <div className="doc-grid">
-        <div className="k">Арендодатель</div>
-        <div>{COMPANY_NAME}</div>
-        <div className="k">Арендатор</div>
-        <div>{client?.name ?? "—"}</div>
-      </div>
+      <DocHeader client={client} />
 
       <ItemsTable r={r} equipment={equipment} />
 
       <p><b>Состояние на момент выдачи:</b> {r.issue_notes || "не указано"}</p>
 
-      <div className="doc-sign">
-        <div className="line">Передал / {COMPANY_NAME}</div>
-        <div className="line">Принял / {client?.name ?? "—"}</div>
-      </div>
+      <DocSign left="Передал" right="Принял" client={client} />
     </div>
   );
 }
@@ -149,12 +167,7 @@ export function buildReturnDoc(r: Rental, client: Client | undefined, equipment:
       <h2>Акт возврата оборудования</h2>
       <div className="doc-sub">к договору № {docNumber(r)} · возврат {fmtDate(r.actual_return || todayISO())}</div>
 
-      <div className="doc-grid">
-        <div className="k">Арендодатель</div>
-        <div>{COMPANY_NAME}</div>
-        <div className="k">Арендатор</div>
-        <div>{client?.name ?? "—"}</div>
-      </div>
+      <DocHeader client={client} />
 
       <ItemsTable r={r} equipment={equipment} />
 
@@ -191,10 +204,7 @@ export function buildReturnDoc(r: Rental, client: Client | undefined, equipment:
         </tbody>
       </table>
 
-      <div className="doc-sign">
-        <div className="line">Принял / {COMPANY_NAME}</div>
-        <div className="line">Сдал / {client?.name ?? "—"}</div>
-      </div>
+      <DocSign left="Принял" right="Сдал" client={client} />
     </div>
   );
 }
@@ -225,12 +235,7 @@ export function buildPartialReturnDoc(
       <h2>Акт частичного возврата оборудования</h2>
       <div className="doc-sub">к договору № {docNumber(r)} · возврат {fmtDate(returnDate)}</div>
 
-      <div className="doc-grid">
-        <div className="k">Арендодатель</div>
-        <div>{COMPANY_NAME}</div>
-        <div className="k">Арендатор</div>
-        <div>{client?.name ?? "—"}</div>
-      </div>
+      <DocHeader client={client} />
 
       <p><b>Возвращённые сейчас позиции:</b></p>
       <table>
@@ -275,10 +280,7 @@ export function buildPartialReturnDoc(
           : "Все позиции по договору возвращены — аренда закрыта."}
       </p>
 
-      <div className="doc-sign">
-        <div className="line">Принял / {COMPANY_NAME}</div>
-        <div className="line">Сдал / {client?.name ?? "—"}</div>
-      </div>
+      <DocSign left="Принял" right="Сдал" client={client} />
     </div>
   );
 }

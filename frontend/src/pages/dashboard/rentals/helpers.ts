@@ -10,6 +10,7 @@
  */
 import type { Equipment, Rental, RentalItem } from "../../../api/types";
 import { money } from "../../../lib/format";
+import { itemCostForDays } from "../../../lib/financeCalc";
 
 /** periodPriceAfter — цена за ОДИН ПОЛНЫЙ ИЛИ НАЧАТЫЙ шаг длиной
  * afterPeriodDays дней (двадцатый проход, п.4 обзора), а не цена, размазанная
@@ -43,6 +44,37 @@ export function itemRateLabel(it: RentalItem): string {
     it.period_price_after_snapshot,
     it.after_period_days_snapshot
   );
+}
+
+/** Стоимость позиции ПО ТЕКУЩЕМУ (живому) тарифу Equipment за N дней — для
+ * живой оценки в CreateRentalModal/EditRentalModal (43-й проход, п.1
+ * обзора), где реальных RentalItem-снимков ещё нет (аренда не создана/не
+ * сохранена). Оборачивает ту же itemCostForDays из financeCalc.ts — ТОЙ ЖЕ
+ * формулой, что считает реальную стоимость аренды и предпросмотр тарифа в
+ * EquipmentFormModal.tsx, без своей копии ступенчатой логики: собирает
+ * временный RentalItem-подобный объект из живых полей Equipment (тот же
+ * приём, что и previewCost в EquipmentFormModal.tsx). */
+export function equipmentCostForDays(e: Equipment, days: number): number {
+  return itemCostForDays(
+    {
+      equipment_id: e.id,
+      daily_rate_snapshot: e.daily_rate,
+      period_days_snapshot: e.period_days,
+      period_price_snapshot: e.period_price,
+      period_price_after_snapshot: e.period_price_after,
+      after_period_days_snapshot: e.after_period_days,
+      returned_at: null,
+    },
+    days
+  );
+}
+
+/** Короткий номер договора, показываемый в печатных документах (documents.tsx)
+ * — первые 8 символов id заглавными. Вынесен сюда (43-й проход, п.7 обзора),
+ * чтобы тем же значением можно было искать аренду в списке (RentalsTab.tsx),
+ * не дублируя формулу в двух местах. */
+export function docNumber(r: Rental): string {
+  return r.id.slice(0, 8).toUpperCase();
 }
 
 /* ============================================================

@@ -4,15 +4,16 @@ import { useData } from "../../context/DataContext";
 import type { Client, Equipment, Rental, RentalItem } from "../../api/types";
 import { money, fmtDate, dayDiff, todayISO, isoAddDays, spanDays } from "../../lib/format";
 import { RENTAL_META, Badge, rentalDisplayStatus, type StatusMeta } from "../../lib/statusMeta";
-import { IconPrinter, IconEdit, IconClose, IconAlert, IconCalendar, IconChevronRight } from "../../lib/icons";
+import { IconPrinter, IconEdit, IconClose, IconAlert, IconCalendar, IconChevronRight, IconShield, IconMessages } from "../../lib/icons";
 import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc, buildBulkContractsDoc } from "./documents";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
 import { Dropdown } from "../../components/Dropdown";
 import { MoreActionsMenu } from "../../components/MoreActionsMenu";
-import { clientDisplayRating } from "./clients/helpers";
-import { equipmentRateLabel, itemRateLabel, isEquipmentFreeForRange, conflictEndFor } from "./rentals/helpers";
+import { clientDisplayRating, normalizePhoneDigits } from "./clients/helpers";
+import { buildRentalSummaryText } from "./clients/summary";
+import { equipmentRateLabel, itemRateLabel, isEquipmentFreeForRange, conflictEndFor, docNumber, equipmentCostForDays } from "./rentals/helpers";
 import { exportRentalsCsv } from "./rentals/csv";
 import { RentalDetailPanel } from "./rentals/RentalDetailPanel";
 
@@ -121,6 +122,15 @@ interface FinancePreview {
   total: number;
 }
 
+/** Аренда закрыта, депозит был, но ещё не отмечен возвращённым (43-й проход,
+ * п.2 обзора) — та же формула, что и чекбокс "Депозит возвращён" в
+ * RentalDetailPanel.tsx (deposit_returned_at выставляется только для
+ * status="returned"), используется и для бейджа на карточке, и для фильтра
+ * "Показать только". */
+function isDepositDue(r: Rental): boolean {
+  return r.status === "returned" && r.deposit_total > 0 && !r.deposit_returned_at;
+}
+
 function previewReturnFinance(r: Rental, actualReturn: string, damageFee: number): FinancePreview {
   const plannedDays = spanDays(r.start_date, r.end_date);
   const endForCalc = actualReturn || (dayDiff(r.end_date) < 0 ? todayISO() : r.end_date);
@@ -186,6 +196,10 @@ function FormModal({
   submitLabel = "Сохранить",
   wide,
   error,
+  // Красная кнопка отправки (43-й проход, п.5 обзора — CancelRentalModal) —
+  // необязательный проп, по умолчанию false, старое поведение (btn-primary)
+  // не меняется ни для одной из уже существующих форм на FormModal.
+  danger,
   children,
 }: {
   title: string;
@@ -195,6 +209,7 @@ function FormModal({
   submitLabel?: string;
   wide?: boolean;
   error?: string | null;
+  danger?: boolean;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -234,7 +249,7 @@ function FormModal({
           <button className="btn" onClick={onClose} type="button">
             Отмена
           </button>
-          <button className="btn btn-primary" type="submit">
+          <button className={"btn " + (danger ? "btn-danger" : "btn-primary")} type="submit">
             {submitLabel}
           </button>
         </div>
@@ -330,6 +345,32 @@ export function CreateRentalModal({
   const [saving, setSaving] = useState(false);
 
   const selectedClient = clients.find((c) => c.id === clientId);
+
+  // Живая оценка стоимости (43-й проход, п.1 обзора) — до сих пор сумма
+  // появлялась только ПОСЛЕ оформления аренды, в самом акте выдачи; здесь же
+  // сотрудник ещё выбирает состав/даты и не знает, на что вообще
+  // ориентировать клиента по телефону. Формула — 1:1 копия расчёта скидки в
+  // create_rental (app/api/routes/rentals.py): явное значение поля "Скидка"
+  // имеет приоритет, иначе — процент по умолчанию у клиента (округление тем
+  // же Math.round, что и backend'ский round()), иначе скидки нет. base
+  // считается по ЖИВОМУ тарифу оборудования (equipmentCostForDays) — как и
+  // сделает backend при создании, снимков позиций аренды ещё не существует.
+  const previewDays = endDate >= startDate ? spanDays(startDate, endDate) : 0;
+  const previewBase =
+    previewDays > 0
+      ? checkedIds.reduce((sum, id) => {
+          const eq = equipment.find((e) => e.id === id);
+          return eq ? sum + equipmentCostForDays(eq, previewDays) : sum;
+        }, 0)
+      : 0;
+  const explicitDiscount = discount.trim() === "" ? null : Number(discount);
+  const previewDiscount =
+    explicitDiscount != null
+      ? explicitDiscount
+      : selectedClient?.default_discount_percent
+        ? Math.round((previewBase * selectedClient.default_discount_percent) / 100)
+        : 0;
+  const previewTotal = Math.max(0, previewBase - previewDiscount);
 
   function toggle(id: string) {
     setCheckedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -435,6 +476,24 @@ export function CreateRentalModal({
           <div className="field-hint">Если не указать — скидки не будет (если у клиента не задана скидка по умолчанию).</div>
         )}
       </div>
+      {previewDays > 0 && checkedIds.length > 0 && (
+        <div className="summary-box">
+          <div className="summary-row">
+            <span>Аренда, {previewDays} дн.</span>
+            <span className="v">{money(previewBase)}</span>
+          </div>
+          {previewDiscount > 0 && (
+            <div className="summary-row">
+              <span>Скидка</span>
+              <span className="v">−{money(previewDiscount)}</span>
+            </div>
+          )}
+          <div className="summary-row total">
+            <span>Ориентировочно к оплате</span>
+            <span className="v">{money(previewTotal)}</span>
+          </div>
+        </div>
+      )}
     </FormModal>
   );
 }
@@ -465,6 +524,23 @@ function EditRentalModal({
   const [discount, setDiscount] = useState(rental.discount ? String(rental.discount) : "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Живая оценка стоимости при правке (43-й проход, п.1 обзора) — тот же
+  // принцип, что и в CreateRentalModal, но проще: PATCH .../rentals/{id}
+  // (app/api/routes/rentals.py:edit_rental) НЕ подставляет скидку по
+  // умолчанию сама, всегда берёт то, что явно передано в форме (см.
+  // handleSubmit ниже — Number(discount) || 0), так что превью здесь без
+  // веток на default_discount_percent клиента.
+  const previewDays = endDate >= startDate ? spanDays(startDate, endDate) : 0;
+  const previewBase =
+    previewDays > 0
+      ? checkedIds.reduce((sum, id) => {
+          const eq = equipment.find((e) => e.id === id);
+          return eq ? sum + equipmentCostForDays(eq, previewDays) : sum;
+        }, 0)
+      : 0;
+  const previewDiscount = Number(discount) || 0;
+  const previewTotal = Math.max(0, previewBase - previewDiscount);
 
   function toggle(id: string) {
     setCheckedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -556,6 +632,24 @@ function EditRentalModal({
         <label>Скидка, ₽ (по договорённости)</label>
         <input type="number" min={0} value={discount} placeholder="0" onChange={(e) => setDiscount(e.target.value)} />
       </div>
+      {previewDays > 0 && checkedIds.length > 0 && (
+        <div className="summary-box">
+          <div className="summary-row">
+            <span>Аренда, {previewDays} дн.</span>
+            <span className="v">{money(previewBase)}</span>
+          </div>
+          {previewDiscount > 0 && (
+            <div className="summary-row">
+              <span>Скидка</span>
+              <span className="v">−{money(previewDiscount)}</span>
+            </div>
+          )}
+          <div className="summary-row total">
+            <span>Ориентировочно к оплате</span>
+            <span className="v">{money(previewTotal)}</span>
+          </div>
+        </div>
+      )}
     </FormModal>
   );
 }
@@ -638,6 +732,255 @@ function ExtendRentalModal({
         <input type="date" value={endDate} min={isoAddDays(rental.end_date, 1)} onChange={(e) => setEndDate(e.target.value)} />
       </div>
       <div className="field-hint">Состав оборудования и скидка не меняются — только дата.</div>
+    </FormModal>
+  );
+}
+
+/* ---------- Отменить аренду (43-й проход, п.5 обзора) ---------- */
+/**
+ * Раньше "Отменить" сразу вызывал generic useConfirm() (да/нет, без полей
+ * ввода) — причину нельзя было указать, хотя backend (POST .../cancel,
+ * body: RentalCancel | None) её уже принимает и пишет в журнал (см.
+ * RentalHistorySection.tsx — entryDetails, case "cancel"). Отдельная
+ * маленькая форма вместо расширения useConfirm полем ввода: useConfirm —
+ * общий на десяток разных да/нет-подтверждений по всему приложению,
+ * прикручивать к нему один текстовый инпут ради одного сценария было бы
+ * менее точечным изменением, чем отдельная модалка на существующем
+ * FormModal (тот же паттерн, что ExtendRentalModal чуть выше).
+ */
+function CancelRentalModal({
+  businessId,
+  rental,
+  client,
+  onClose,
+  onCancelled,
+}: {
+  businessId: string;
+  rental: Rental;
+  client: Client | undefined;
+  onClose: () => void;
+  onCancelled: () => Promise<void>;
+}) {
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+    try {
+      const trimmed = reason.trim();
+      await api.post(`/businesses/${businessId}/rentals/${rental.id}/cancel`, trimmed ? { reason: trimmed } : undefined);
+      await onCancelled();
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Не удалось отменить аренду");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <FormModal
+      title={`Отменить аренду — ${client?.name ?? "—"}`}
+      open
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      submitLabel={saving ? "Отмена…" : "Отменить аренду"}
+      danger
+      error={error}
+    >
+      <div className="field">
+        <label>Причина отмены (необязательно)</label>
+        <textarea
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Клиент передумал, нашёл дешевле у конкурента…"
+        />
+      </div>
+      <div className="field-hint">Причина попадёт в журнал изменений аренды — видна только сотрудникам.</div>
+    </FormModal>
+  );
+}
+
+/* ---------- Массовое напоминание (43-й проход, п.6 обзора) ---------- */
+/**
+ * Список выбранных аренд с кнопками WhatsApp/почта на КАЖДУЮ строку отдельно
+ * — намеренно НЕ один "разослать всем" клик: и wa.me, и mailto: — это
+ * переход по ссылке в новой вкладке/почтовом клиенте, который требует
+ * пользовательского жеста на каждый вызов (браузеры блокируют несколько
+ * одновременных window.open()/переходов по сгенерированному в JS клику без
+ * прямого клика пользователя как всплывающие окна). Текст сообщения и сама
+ * ссылка — переиспользование buildRentalSummaryText/normalizePhoneDigits из
+ * clients/summary.ts и clients/helpers.ts, тех же, что уже использует
+ * одиночная кнопка "Написать клиенту" в RentalDetailPanel.tsx — одна
+ * формула сводки на все три места (детали аренды, карточка клиента, массовая
+ * рассылка).
+ */
+function BulkReminderModal({
+  rentals,
+  clients,
+  equipment,
+  onClose,
+}: {
+  rentals: Rental[];
+  clients: Client[];
+  equipment: Equipment[];
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    dialog.showModal();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, []);
+
+  const rows = rentals
+    .map((r) => ({ rental: r, client: clients.find((c) => c.id === r.client_id) }))
+    .filter((x): x is { rental: Rental; client: Client } => !!x.client && !!(x.client.phone || x.client.email));
+
+  return (
+    <dialog id="modal" ref={ref} onClose={onClose} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-head">
+        <h3>Напомнить клиентам ({rows.length})</h3>
+        <button className="icon-btn" onClick={onClose} type="button">
+          <IconClose />
+        </button>
+      </div>
+      <div className="modal-body">
+        {rows.length === 0 ? (
+          <div className="empty-note">
+            У выбранных аренд нет клиентов с телефоном или почтой — отправить напоминание некому.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {rows.map(({ rental, client }) => (
+              <div
+                key={rental.id}
+                className="summary-box"
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" }}
+              >
+                <div>
+                  <div style={{ fontWeight: 600 }}>{client.name}</div>
+                  <div style={{ color: "var(--muted)", fontSize: "12.5px" }}>
+                    {fmtDate(rental.start_date)} — {fmtDate(rental.end_date)} · {money(rental.total)}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: "6px" }}>
+                  {client.phone && (
+                    <button
+                      className="btn btn-sm"
+                      type="button"
+                      onClick={() =>
+                        window.open(
+                          `https://wa.me/${normalizePhoneDigits(client.phone)}?text=${encodeURIComponent(
+                            buildRentalSummaryText(rental, client, equipment)
+                          )}`,
+                          "_blank",
+                          "noreferrer"
+                        )
+                      }
+                    >
+                      WhatsApp
+                    </button>
+                  )}
+                  {client.email && (
+                    <button
+                      className="btn btn-sm"
+                      type="button"
+                      onClick={() => {
+                        window.location.href = `mailto:${client.email}?subject=${encodeURIComponent(
+                          "Информация по аренде"
+                        )}&body=${encodeURIComponent(buildRentalSummaryText(rental, client, equipment))}`;
+                      }}
+                    >
+                      Почта
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="modal-foot">
+        <button className="btn" onClick={onClose} type="button">
+          Закрыть
+        </button>
+      </div>
+    </dialog>
+  );
+}
+
+/* ---------- Массовое продление (43-й проход, п.8 обзора) ---------- */
+/**
+ * В отличие от ExtendRentalModal (одна аренда — проверка конфликта по
+ * каждой её позиции через conflictEndFor до отправки), здесь одна дата
+ * применяется сразу к нескольким разным арендам через Promise.allSettled —
+ * предварительно проверять конфликт по всем позициям всех аренд разом
+ * избыточно (backend и так отклонит конкретный PATCH при конфликте, см.
+ * edit_rental), а allSettled уже даёт честный подсчёт "скольким реально
+ * удалось продлить", как и handleBulkCancel чуть выше по файлу.
+ */
+function BulkExtendModal({
+  businessId,
+  rentals,
+  onClose,
+  onDone,
+}: {
+  businessId: string;
+  rentals: Rental[];
+  onClose: () => void;
+  onDone: (result: { ok: number; failed: number }) => Promise<void>;
+}) {
+  const latestCurrentEnd = rentals.reduce((max, r) => (r.end_date > max ? r.end_date : max), rentals[0]?.end_date ?? todayISO());
+  const [endDate, setEndDate] = useState(isoAddDays(latestCurrentEnd, 7));
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (endDate <= latestCurrentEnd) {
+      setError("Новая дата окончания должна быть позже текущей даты окончания у всех выбранных аренд.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const results = await Promise.allSettled(
+        rentals.map((r) => api.patch(`/businesses/${businessId}/rentals/${r.id}`, { end_date: endDate }))
+      );
+      const failed = results.filter((res) => res.status === "rejected").length;
+      await onDone({ ok: rentals.length - failed, failed });
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <FormModal
+      title={`Продлить аренды (${rentals.length})`}
+      open
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      submitLabel={saving ? "Сохранение…" : "Продлить все"}
+      error={error}
+    >
+      <div className="field">
+        <label>Новая дата окончания</label>
+        <input type="date" value={endDate} min={isoAddDays(latestCurrentEnd, 1)} onChange={(e) => setEndDate(e.target.value)} />
+      </div>
+      <div className="field-hint">
+        Применится ко всем выбранным арендам ({rentals.length}) — состав оборудования и скидка не меняются. Если у части
+        оборудования на новый период уже есть конфликт с другой бронью, для соответствующей аренды продление не пройдёт — об
+        этом будет сказано в итоговом сообщении.
+      </div>
     </FormModal>
   );
 }
@@ -821,6 +1164,13 @@ export function RentalsTab({
   // список "В работе" глазами; теперь это ещё и фильтруемый переключатель,
   // тем же паттерном, что riskOnly.
   const [expiringOnly, setExpiringOnly] = useState(false);
+  // Индикатор "депозит не возвращён" (43-й проход, п.2 обзора) — для уже
+  // закрытых (возвращённых) аренд с ненулевым депозитом, у которых
+  // deposit_returned_at ещё не проставлен (см. чекбокс в
+  // RentalDetailPanel.tsx, 42-й проход): раньше единственный способ это
+  // заметить — открыть карточку каждой закрытой аренды по очереди, тут же
+  // видно сразу в списке, тем же паттерном, что riskOnly/expiringOnly.
+  const [depositDueOnly, setDepositDueOnly] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   // Предзаполнение "Новой аренды" клиентом+позициями текущей (41-й проход,
   // "Повторить аренду" из RentalDetailPanel) — null при обычном открытии
@@ -830,6 +1180,7 @@ export function RentalsTab({
   const [issueRental, setIssueRental] = useState<Rental | null>(null);
   const [returnRental, setReturnRental] = useState<Rental | null>(null);
   const [extendRental, setExtendRental] = useState<Rental | null>(null);
+  const [cancelRental, setCancelRental] = useState<Rental | null>(null);
   const [openRentalId, setOpenRentalId] = useState<string | null>(null);
   const [docModal, setDocModal] = useState<{ title: string; node: ReactNode } | null>(null);
   // Массовые действия по списку аренд (42-й проход, п.3 обзора) — карточки,
@@ -840,6 +1191,18 @@ export function RentalsTab({
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  // Массовое напоминание (43-й проход, п.6 обзора) — список аренд для
+  // BulkReminderModal, а не булев флаг: сама модалка не пересчитывает
+  // "выбранные сейчас" заново (после закрытия selectedIds может уже
+  // измениться), список фиксируется в момент открытия.
+  const [reminderRentals, setReminderRentals] = useState<Rental[] | null>(null);
+  // Массовое продление (43-й проход, п.8 обзора) — тот же принцип, что и
+  // reminderRentals выше: список фиксируется на момент открытия модалки, а
+  // не выбирается заново из selectedIds/rentals при каждом рендере.
+  const [bulkExtendRentals, setBulkExtendRentals] = useState<Rental[] | null>(null);
+  // Раскрытие блока "старые закрытые" (43-й проход, п.9) — по умолчанию
+  // свёрнут, см. isOldClosed/oldClosed ниже.
+  const [showOldClosed, setShowOldClosed] = useState(false);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const { notify } = useToast();
 
@@ -868,8 +1231,12 @@ export function RentalsTab({
     // п.5 обзора) — раньше можно было найти аренду только по клиенту/
     // оборудованию, хотя в заметках нередко записано что-то по-настоящему
     // уникальное для конкретной сделки ("оставил в залог паспорт", "просил
-    // доставку к 9 утра").
-    const haystack = [client?.name ?? "", names, r.issue_notes ?? "", r.return_notes ?? ""].join(" ").toLowerCase();
+    // доставку к 9 утра"). И номер договора (43-й проход, п.7) — тот же
+    // короткий номер, что напечатан на договоре/актах (docNumber), клиент
+    // по телефону обычно называет именно его, а не своё полное имя.
+    const haystack = [client?.name ?? "", names, r.issue_notes ?? "", r.return_notes ?? "", docNumber(r)]
+      .join(" ")
+      .toLowerCase();
     if (search && !haystack.includes(search.toLowerCase())) return false;
 
     // Живой рейтинг (клиент "на контроле" вычисляется по текущей
@@ -880,6 +1247,8 @@ export function RentalsTab({
     if (riskOnly && (!client || clientDisplayRating(client, rentals) === "normal")) return false;
 
     if (expiringOnly && !(st === "active" && dayDiff(r.end_date) <= 2)) return false;
+
+    if (depositDueOnly && !isDepositDue(r)) return false;
 
     return true;
   });
@@ -894,15 +1263,25 @@ export function RentalsTab({
     return b.start_date.localeCompare(a.start_date);
   });
 
-  async function handleCancel(r: Rental) {
-    if (!(await confirm("Отменить эту аренду?", { danger: true, confirmLabel: "Отменить аренду" }))) return;
-    try {
-      await api.post(`/businesses/${businessId}/rentals/${r.id}/cancel`);
-      await Promise.all([reloadRentals(), reloadEquipment()]);
-    } catch (err) {
-      notify(err instanceof ApiError ? err.message : "Не удалось отменить аренду");
-    }
+  // Свёрнутые по умолчанию старые завершённые аренды (43-й проход, п.9
+  // обзора) — список рос неограниченно (аренды никогда физически не
+  // удаляются), и через несколько месяцев работы бизнеса он становится
+  // длинным и тяжёлым для скролла/рендера, при том что "Возвращено"/
+  // "Отменено" месячной-двух давности почти никогда не открывают повторно.
+  // "Возраст" считается от даты фактического закрытия: actual_return для
+  // возвращённых (если возврат ещё не проставлен — от end_date, как раньше
+  // делал общий сорт), created_at для отменённых (у отменённой брони
+  // end_date мог быть и в будущем — важна дата САМОЙ отмены, а не
+  // несостоявшегося периода). Работает поверх любого фильтра — свернутся,
+  // только когда список и правда содержит старые закрытые записи.
+  const OLD_CLOSED_DAYS = 30;
+  function isOldClosed(r: Rental): boolean {
+    if (r.status === "returned") return -dayDiff(r.actual_return || r.end_date) > OLD_CLOSED_DAYS;
+    if (r.status === "cancelled") return -dayDiff(r.created_at.slice(0, 10)) > OLD_CLOSED_DAYS;
+    return false;
   }
+  const visibleSorted = sorted.filter((r) => !isOldClosed(r));
+  const oldClosed = sorted.filter(isOldClosed);
 
   function openDoc(title: string, node: ReactNode) {
     setDocModal({ title, node });
@@ -963,6 +1342,188 @@ export function RentalsTab({
     }
   }
 
+  /** Открывает BulkExtendModal только для реально продлеваемых аренд
+   * (status="active" — то же самое множество, что и "В работе"/"Просрочено"
+   * в rentalDisplayStatus, см. статус-бейджи выше): "Возвращено"/"Отменено"/
+   * "Забронировано" продлевать бессмысленно — брони переносят через "Изменить",
+   * а не через "Продлить". */
+  function handleBulkExtendOpen() {
+    const chosen = sorted.filter((r) => selectedIds.has(r.id));
+    const extendable = chosen.filter((r) => r.status === "active");
+    const skipped = chosen.length - extendable.length;
+    if (extendable.length === 0) {
+      notify("Среди выбранных нет аренд в статусе «В аренде»/«Просрочено» — продлевать нечего.");
+      return;
+    }
+    if (skipped > 0) {
+      notify(`В продление войдут только аренды в статусе «В аренде»/«Просрочено» (${extendable.length} из ${chosen.length}).`);
+    }
+    setBulkExtendRentals(extendable);
+  }
+
+  // Карточка аренды — вынесена в функцию (43-й проход, п.9 обзора), а не
+  // инлайн-колбэк внутри одного .map(): теперь рендерится ДВУМЯ разными
+  // списками (visibleSorted и — только если развёрнут блок "старые
+  // закрытые" — oldClosed), см. JSX ниже. Само тело/разметка карточки не
+  // менялись, только вынесены в отдельную функцию.
+  function renderCard(r: Rental): ReactNode {
+    const client = clients.find((c) => c.id === r.client_id);
+    const st = rentalDisplayStatus(r);
+    const daysLeft = dayDiff(r.end_date);
+    const soonBadge: StatusMeta | null =
+      st === "active" && daysLeft <= 2
+        ? { label: daysLeft <= 0 ? "Истекает сегодня" : `Осталось ${daysLeft} дн.`, tone: "warning" }
+        : null;
+    const itemNames = r.items.map((it) => equipment.find((e) => e.id === it.equipment_id)?.name ?? "—").join(", ");
+    // Прогресс частичного возврата (41-й проход) — видно на самой
+    // карточке, не открывая панель деталей: если часть позиций уже
+    // вернулась отдельно (RentalDetailPanel → "Вернуть выбранное"), а
+    // часть всё ещё у клиента, аренда по-прежнему "В аренде"/"Просрочено"
+    // целиком — без этого бейджа непонятно, что возврат уже частично идёт.
+    const returnedCount = r.items.filter((it) => it.returned_at).length;
+    const partialBadge: StatusMeta | null =
+      r.status === "active" && returnedCount > 0 && returnedCount < r.items.length
+        ? { label: `Возвращено ${returnedCount}/${r.items.length}`, tone: "info" }
+        : null;
+    const depositBadge: StatusMeta | null = isDepositDue(r) ? { label: "Депозит не возвращён", tone: "warning" } : null;
+
+    return (
+      // Карточка кликабельна целиком — открывает RentalDetailPanel (39-й
+      // проход; раньше это было отложено TODO'шкой, ждавшей общего
+      // механизма "открыть клиента" между вкладками — он появился ещё в
+      // 25-м проходе для ClientsTab/DashboardTab, здесь просто наконец
+      // подключён). Кнопки внутри .rental-actions останавливают
+      // всплытие (stopPropagation ниже), чтобы клик по ним не открывал
+      // панель поверх уже выполняемого действия.
+      <div
+        className="rental-card clickable"
+        key={r.id}
+        onClick={() => (selectMode ? toggleSelected(r.id) : setOpenRentalId(r.id))}
+      >
+        <div className="rental-main">
+          <div className="rental-top">
+            {selectMode && (
+              <input
+                type="checkbox"
+                checked={selectedIds.has(r.id)}
+                onChange={() => toggleSelected(r.id)}
+                onClick={(e) => e.stopPropagation()}
+                style={{ width: "16px", height: "16px" }}
+              />
+            )}
+            <span className="rental-client">{client?.name ?? "Клиент удалён"}</span>
+            <Badge meta={RENTAL_META[st]} />
+            {soonBadge && <Badge meta={soonBadge} />}
+            {partialBadge && <Badge meta={partialBadge} />}
+            {depositBadge && <Badge meta={depositBadge} />}
+            {/* Намёк, что карточка целиком кликабельна (40-й проход, по
+                итогам обзора: раньше это было незаметно — только
+                hover-эффект самой карточки, который пользователь мог
+                заметить, только уже наведясь). margin-left: auto
+                прижимает шеврон к правому краю строки, не трогая
+                grid-раскладку самой карточки. */}
+            <span className="rental-open-hint" title="Открыть детали аренды">
+              <IconChevronRight />
+            </span>
+          </div>
+          <div className="rental-items">{itemNames}</div>
+          <div className="rental-meta">
+            <span>
+              {fmtDate(r.start_date)} — {fmtDate(r.end_date)}
+              {r.actual_return ? " · возврат " + fmtDate(r.actual_return) : ""}
+            </span>
+            <span className="amount-mono mono">{money(r.total)}</span>
+          </div>
+        </div>
+
+        {/* Клик по кнопкам не должен всплывать до карточки — в демо это было
+            бесплатно за счёт делегирования через closest() на уровне всего
+            документа (обработчик разбирал event.target независимо от того,
+            где именно во вложенной разметке произошёл клик). Теперь у
+            самой карточки есть onClick (открывает RentalDetailPanel, см.
+            выше) — stopPropagation здесь обязателен, иначе, например,
+            клик по "Отменить" ещё и открывал бы панель деталей поверх
+            диалога подтверждения. */}
+        <div className="rental-actions" onClick={(e) => e.stopPropagation()}>
+          {r.status === "booked" && (
+            <>
+              <button className="btn btn-primary btn-sm" type="button" onClick={() => setIssueRental(r)}>
+                Выдать
+              </button>
+              <button className="btn btn-sm" type="button" onClick={() => setEditRental(r)}>
+                <IconEdit /> Изменить
+              </button>
+              <button className="btn btn-danger-ghost btn-sm" type="button" onClick={() => setCancelRental(r)}>
+                Отменить
+              </button>
+            </>
+          )}
+          {r.status === "active" && (
+            <>
+              <button className="btn btn-primary btn-sm" type="button" onClick={() => setReturnRental(r)}>
+                Принять возврат
+              </button>
+              <button className="btn btn-sm" type="button" onClick={() => setEditRental(r)}>
+                <IconEdit /> Изменить
+              </button>
+            </>
+          )}
+          {/* Печать (акты/договор) — под "Ещё" (40-й проход, по итогам
+              обзора: раньше три отдельные кнопки-принтера растягивали
+              столбец действий заметно выше основного текста карточки).
+              "Договор" доступен всегда, вне зависимости от статуса —
+              тот же список, что был раньше безусловной кнопкой ниже
+              всех остальных. */}
+          <MoreActionsMenu
+            align="right"
+            actions={[
+              // Быстрое продление (41-й проход) — под "Ещё", а не отдельной
+              // кнопкой в основном ряду: тот же принцип декомпозиции, что
+              // уже применён к печати актов ниже — часто нужны только
+              // Выдать/Принять возврат/Изменить, продление реже.
+              ...(r.status === "active"
+                ? [
+                    {
+                      key: "extend",
+                      label: "Продлить",
+                      icon: <IconEdit />,
+                      onClick: () => setExtendRental(r),
+                    },
+                  ]
+                : []),
+              ...(r.status === "active"
+                ? [
+                    {
+                      key: "issue-doc",
+                      label: "Акт выдачи",
+                      icon: <IconPrinter />,
+                      onClick: () => openDoc("Акт приёма-передачи", buildIssueDoc(r, client, equipment)),
+                    },
+                  ]
+                : []),
+              ...(r.status === "returned"
+                ? [
+                    {
+                      key: "return-doc",
+                      label: "Акт возврата",
+                      icon: <IconPrinter />,
+                      onClick: () => openDoc("Акт возврата", buildReturnDoc(r, client, equipment)),
+                    },
+                  ]
+                : []),
+              {
+                key: "contract-doc",
+                label: "Договор",
+                icon: <IconPrinter />,
+                onClick: () => openDoc("Договор аренды", buildContractDoc(r, client, equipment)),
+              },
+            ]}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="tab-toolbar-grid">
@@ -1014,6 +1575,15 @@ export function RentalsTab({
           >
             <IconCalendar />
           </button>
+          <button
+            type="button"
+            className={"btn btn-icon-only" + (depositDueOnly ? " btn-primary" : "")}
+            title="Показать только закрытые аренды с невозвращённым депозитом"
+            aria-label="Депозит не возвращён"
+            onClick={() => setDepositDueOnly((v) => !v)}
+          >
+            <IconShield />
+          </button>
           <MoreActionsMenu
             actions={[
               {
@@ -1047,9 +1617,13 @@ export function RentalsTab({
               className="btn btn-sm"
               type="button"
               disabled={selectedIds.size === 0}
-              onClick={() => setSelectedIds(new Set(sorted.map((r) => r.id)))}
+              // Только видимые сейчас карточки (43-й проход, п.9 обзора) —
+              // свёрнутые "старые закрытые" ниже списка не попадают в выбор
+              // молча, иначе "Выбрано: N" разошлось бы с тем, что реально
+              // отмечено галочками на экране.
+              onClick={() => setSelectedIds(new Set((showOldClosed ? sorted : visibleSorted).map((r) => r.id)))}
             >
-              Выбрать все ({sorted.length})
+              Выбрать все ({(showOldClosed ? sorted : visibleSorted).length})
             </button>
             <button
               className="btn btn-sm"
@@ -1058,6 +1632,22 @@ export function RentalsTab({
               onClick={handleBulkContracts}
             >
               <IconPrinter /> Договоры пачкой
+            </button>
+            <button
+              className="btn btn-sm"
+              type="button"
+              disabled={selectedIds.size === 0 || bulkBusy}
+              onClick={() => setReminderRentals(sorted.filter((r) => selectedIds.has(r.id)))}
+            >
+              <IconMessages /> Напомнить
+            </button>
+            <button
+              className="btn btn-sm"
+              type="button"
+              disabled={selectedIds.size === 0 || bulkBusy}
+              onClick={handleBulkExtendOpen}
+            >
+              <IconCalendar /> Продлить (выбранные)
             </button>
             <button
               className="btn btn-sm btn-danger-ghost"
@@ -1081,11 +1671,18 @@ export function RentalsTab({
           отфильтрован. Полоска над самим списком, у самых карточек —
           труднее пропустить, чем кнопку в тулбаре наверху. "Сбросить" одним
           кликом снимает оба переключателя разом. */}
-      {(riskOnly || expiringOnly) && (
+      {(riskOnly || expiringOnly || depositDueOnly) && (
         <div className="active-filter-bar">
           <IconAlert />
           <span>
-            Показаны только {[riskOnly && "рискованные клиенты", expiringOnly && "аренды, истекающие скоро"].filter(Boolean).join(" и ")}
+            Показаны только{" "}
+            {[
+              riskOnly && "рискованные клиенты",
+              expiringOnly && "аренды, истекающие скоро",
+              depositDueOnly && "закрытые аренды с невозвращённым депозитом",
+            ]
+              .filter(Boolean)
+              .join(" и ")}
           </span>
           <button
             type="button"
@@ -1093,6 +1690,7 @@ export function RentalsTab({
             onClick={() => {
               setRiskOnly(false);
               setExpiringOnly(false);
+              setDepositDueOnly(false);
             }}
           >
             Сбросить
@@ -1100,161 +1698,24 @@ export function RentalsTab({
         </div>
       )}
 
-      {sorted.map((r) => {
-        const client = clients.find((c) => c.id === r.client_id);
-        const st = rentalDisplayStatus(r);
-        const daysLeft = dayDiff(r.end_date);
-        const soonBadge: StatusMeta | null =
-          st === "active" && daysLeft <= 2
-            ? { label: daysLeft <= 0 ? "Истекает сегодня" : `Осталось ${daysLeft} дн.`, tone: "warning" }
-            : null;
-        const itemNames = r.items.map((it) => equipment.find((e) => e.id === it.equipment_id)?.name ?? "—").join(", ");
-        // Прогресс частичного возврата (41-й проход) — видно на самой
-        // карточке, не открывая панель деталей: если часть позиций уже
-        // вернулась отдельно (RentalDetailPanel → "Вернуть выбранное"), а
-        // часть всё ещё у клиента, аренда по-прежнему "В аренде"/"Просрочено"
-        // целиком — без этого бейджа непонятно, что возврат уже частично идёт.
-        const returnedCount = r.items.filter((it) => it.returned_at).length;
-        const partialBadge: StatusMeta | null =
-          r.status === "active" && returnedCount > 0 && returnedCount < r.items.length
-            ? { label: `Возвращено ${returnedCount}/${r.items.length}`, tone: "info" }
-            : null;
+      {visibleSorted.map(renderCard)}
 
-        return (
-          // Карточка кликабельна целиком — открывает RentalDetailPanel (39-й
-          // проход; раньше это было отложено TODO'шкой, ждавшей общего
-          // механизма "открыть клиента" между вкладками — он появился ещё в
-          // 25-м проходе для ClientsTab/DashboardTab, здесь просто наконец
-          // подключён). Кнопки внутри .rental-actions останавливают
-          // всплытие (stopPropagation ниже), чтобы клик по ним не открывал
-          // панель поверх уже выполняемого действия.
-          <div
-            className="rental-card clickable"
-            key={r.id}
-            onClick={() => (selectMode ? toggleSelected(r.id) : setOpenRentalId(r.id))}
-          >
-            <div className="rental-main">
-              <div className="rental-top">
-                {selectMode && (
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(r.id)}
-                    onChange={() => toggleSelected(r.id)}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ width: "16px", height: "16px" }}
-                  />
-                )}
-                <span className="rental-client">{client?.name ?? "Клиент удалён"}</span>
-                <Badge meta={RENTAL_META[st]} />
-                {soonBadge && <Badge meta={soonBadge} />}
-                {partialBadge && <Badge meta={partialBadge} />}
-                {/* Намёк, что карточка целиком кликабельна (40-й проход, по
-                    итогам обзора: раньше это было незаметно — только
-                    hover-эффект самой карточки, который пользователь мог
-                    заметить, только уже наведясь). margin-left: auto
-                    прижимает шеврон к правому краю строки, не трогая
-                    grid-раскладку самой карточки. */}
-                <span className="rental-open-hint" title="Открыть детали аренды">
-                  <IconChevronRight />
-                </span>
-              </div>
-              <div className="rental-items">{itemNames}</div>
-              <div className="rental-meta">
-                <span>
-                  {fmtDate(r.start_date)} — {fmtDate(r.end_date)}
-                  {r.actual_return ? " · возврат " + fmtDate(r.actual_return) : ""}
-                </span>
-                <span className="amount-mono mono">{money(r.total)}</span>
-              </div>
-            </div>
-
-            {/* Клик по кнопкам не должен всплывать до карточки — в демо это было
-                бесплатно за счёт делегирования через closest() на уровне всего
-                документа (обработчик разбирал event.target независимо от того,
-                где именно во вложенной разметке произошёл клик). Теперь у
-                самой карточки есть onClick (открывает RentalDetailPanel, см.
-                выше) — stopPropagation здесь обязателен, иначе, например,
-                клик по "Отменить" ещё и открывал бы панель деталей поверх
-                диалога подтверждения. */}
-            <div className="rental-actions" onClick={(e) => e.stopPropagation()}>
-              {r.status === "booked" && (
-                <>
-                  <button className="btn btn-primary btn-sm" type="button" onClick={() => setIssueRental(r)}>
-                    Выдать
-                  </button>
-                  <button className="btn btn-sm" type="button" onClick={() => setEditRental(r)}>
-                    <IconEdit /> Изменить
-                  </button>
-                  <button className="btn btn-danger-ghost btn-sm" type="button" onClick={() => handleCancel(r)}>
-                    Отменить
-                  </button>
-                </>
-              )}
-              {r.status === "active" && (
-                <>
-                  <button className="btn btn-primary btn-sm" type="button" onClick={() => setReturnRental(r)}>
-                    Принять возврат
-                  </button>
-                  <button className="btn btn-sm" type="button" onClick={() => setEditRental(r)}>
-                    <IconEdit /> Изменить
-                  </button>
-                </>
-              )}
-              {/* Печать (акты/договор) — под "Ещё" (40-й проход, по итогам
-                  обзора: раньше три отдельные кнопки-принтера растягивали
-                  столбец действий заметно выше основного текста карточки).
-                  "Договор" доступен всегда, вне зависимости от статуса —
-                  тот же список, что был раньше безусловной кнопкой ниже
-                  всех остальных. */}
-              <MoreActionsMenu
-                align="right"
-                actions={[
-                  // Быстрое продление (41-й проход) — под "Ещё", а не отдельной
-                  // кнопкой в основном ряду: тот же принцип декомпозиции, что
-                  // уже применён к печати актов ниже — часто нужны только
-                  // Выдать/Принять возврат/Изменить, продление реже.
-                  ...(r.status === "active"
-                    ? [
-                        {
-                          key: "extend",
-                          label: "Продлить",
-                          icon: <IconEdit />,
-                          onClick: () => setExtendRental(r),
-                        },
-                      ]
-                    : []),
-                  ...(r.status === "active"
-                    ? [
-                        {
-                          key: "issue-doc",
-                          label: "Акт выдачи",
-                          icon: <IconPrinter />,
-                          onClick: () => openDoc("Акт приёма-передачи", buildIssueDoc(r, client, equipment)),
-                        },
-                      ]
-                    : []),
-                  ...(r.status === "returned"
-                    ? [
-                        {
-                          key: "return-doc",
-                          label: "Акт возврата",
-                          icon: <IconPrinter />,
-                          onClick: () => openDoc("Акт возврата", buildReturnDoc(r, client, equipment)),
-                        },
-                      ]
-                    : []),
-                  {
-                    key: "contract-doc",
-                    label: "Договор",
-                    icon: <IconPrinter />,
-                    onClick: () => openDoc("Договор аренды", buildContractDoc(r, client, equipment)),
-                  },
-                ]}
-              />
-            </div>
+      {oldClosed.length > 0 && (
+        <div className="panel" style={{ marginTop: "10px" }}>
+          <div className="panel-body" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span className="field-hint" style={{ margin: 0 }}>
+              {showOldClosed
+                ? `Показаны старые завершённые аренды (${oldClosed.length}, закрыты более ${OLD_CLOSED_DAYS} дн. назад).`
+                : `Скрыто старых завершённых аренд: ${oldClosed.length} (закрыты более ${OLD_CLOSED_DAYS} дн. назад).`}
+            </span>
+            <button className="btn btn-sm" type="button" onClick={() => setShowOldClosed((v) => !v)}>
+              {showOldClosed ? "Свернуть" : "Показать"}
+            </button>
           </div>
-        );
-      })}
+        </div>
+      )}
+
+      {showOldClosed && oldClosed.map(renderCard)}
 
       {sorted.length === 0 && (
         <div className="panel">
@@ -1336,6 +1797,43 @@ export function RentalsTab({
           onClose={() => setExtendRental(null)}
           onSaved={async () => {
             await reloadRentals();
+          }}
+        />
+      )}
+
+      {cancelRental && (
+        <CancelRentalModal
+          businessId={businessId}
+          rental={cancelRental}
+          client={clients.find((c) => c.id === cancelRental.client_id)}
+          onClose={() => setCancelRental(null)}
+          onCancelled={async () => {
+            await Promise.all([reloadRentals(), reloadEquipment()]);
+          }}
+        />
+      )}
+
+      {reminderRentals && (
+        <BulkReminderModal
+          rentals={reminderRentals}
+          clients={clients}
+          equipment={equipment}
+          onClose={() => setReminderRentals(null)}
+        />
+      )}
+
+      {bulkExtendRentals && (
+        <BulkExtendModal
+          businessId={businessId}
+          rentals={bulkExtendRentals}
+          onClose={() => setBulkExtendRentals(null)}
+          onDone={async ({ ok, failed }) => {
+            await Promise.all([reloadRentals(), reloadEquipment()]);
+            setSelectedIds(new Set());
+            notify(
+              failed > 0 ? `Продлено ${ok} из ${ok + failed}. Ошибок: ${failed}.` : `Продлено аренд: ${ok}.`,
+              failed > 0 ? "error" : "info"
+            );
           }}
         />
       )}

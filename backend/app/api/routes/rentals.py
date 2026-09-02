@@ -22,6 +22,7 @@ from app.models.inventory import (
     RentalStatus,
 )
 from app.schemas.inventory import (
+    RentalCancel,
     RentalCreate,
     RentalDepositReturn,
     RentalEdit,
@@ -228,7 +229,12 @@ async def issue_rental(
 
 
 @router.post("/{rental_id}/cancel", response_model=RentalOut)
-async def cancel_rental(rental_id: uuid.UUID, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)):
+async def cancel_rental(
+    rental_id: uuid.UUID,
+    body: RentalCancel | None = None,
+    ctx: BusinessContext = Depends(edit_dep),
+    db: Session = Depends(get_db),
+):
     rental = _get_rental_or_404(db, ctx, rental_id)
     if rental.status not in (RentalStatus.booked, RentalStatus.active):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Эту аренду нельзя отменить в текущем статусе")
@@ -237,7 +243,21 @@ async def cancel_rental(rental_id: uuid.UUID, ctx: BusinessContext = Depends(edi
         equipment = db.get(Equipment, it.equipment_id)
         if equipment and equipment.status == EquipmentStatus.rented:
             equipment.status = EquipmentStatus.available
-    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="cancel", resource="rental", resource_id=str(rental_id))
+    # Причина отмены (43-й проход, п.5 обзора) — необязательна, попадает
+    # ТОЛЬКО в meta записи журнала, не хранится на самой Rental (см.
+    # докстринг RentalCancel): журнал уже читается сотрудниками
+    # (RentalHistorySection.tsx), а причина ценна именно как контекст события,
+    # а не как поле, которое нужно было бы отдельно чистить/переносить.
+    reason = body.reason.strip() if body and body.reason else None
+    log_action(
+        db,
+        business_id=ctx.business_id,
+        user_id=ctx.user.id,
+        action="cancel",
+        resource="rental",
+        resource_id=str(rental_id),
+        meta={"reason": reason} if reason else None,
+    )
     db.commit()
     db.refresh(rental)
     return _to_out(db, rental)

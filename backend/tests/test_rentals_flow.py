@@ -833,3 +833,37 @@ def test_rental_history_lists_lifecycle_actions_with_meta(client):
     assert edit_entry["meta"]["end_date_before"] == original_end
     assert edit_entry["meta"]["end_date_after"] == new_end
     assert "start_date_before" not in edit_entry["meta"]  # дата начала не менялась
+
+
+def test_cancel_with_reason_appears_in_history(client):
+    """43-й проход, п.5: необязательная причина отмены — попадает ТОЛЬКО в
+    meta записи журнала (не хранится на самой аренде), пустая/отсутствующая
+    причина не создаёт мусорной meta."""
+    owner = register_business(client, email="cancel-reason@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    _, _, rental = _setup_rental(client, headers, business_id)
+    rental_id = rental["id"]
+
+    cancel_resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/cancel",
+        json={"reason": "Клиент передумал"},
+        headers=headers,
+    )
+    assert cancel_resp.status_code == 200
+    assert cancel_resp.json()["status"] == "cancelled"
+
+    history = client.get(f"/api/businesses/{business_id}/rentals/{rental_id}/history", headers=headers).json()
+    cancel_entry = next(e for e in history if e["action"] == "cancel")
+    assert cancel_entry["meta"]["reason"] == "Клиент передумал"
+
+    # Без причины (как раньше, без тела запроса) — cancel всё ещё работает,
+    # и meta для этой записи журнала отсутствует, а не {"reason": null}.
+    _, _, rental2 = _setup_rental(client, headers, business_id)
+    rental2_id = rental2["id"]
+    cancel_resp2 = client.post(f"/api/businesses/{business_id}/rentals/{rental2_id}/cancel", headers=headers)
+    assert cancel_resp2.status_code == 200
+    history2 = client.get(f"/api/businesses/{business_id}/rentals/{rental2_id}/history", headers=headers).json()
+    cancel_entry2 = next(e for e in history2 if e["action"] == "cancel")
+    assert cancel_entry2["meta"] is None

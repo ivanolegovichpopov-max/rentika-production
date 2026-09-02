@@ -582,6 +582,15 @@ class RentalIssue(BaseModel):
     issue_notes: str | None = Field(default=None, max_length=1000)
 
 
+class RentalCancel(BaseModel):
+    """43-й проход, п.5 обзора — необязательная причина отмены, попадает в
+    meta записи журнала (action="cancel", см. rental_history), а не в
+    отдельное поле Rental: причина нужна только как контекст для истории,
+    самой аренде она ничего не меняет."""
+
+    reason: str | None = Field(default=None, max_length=500)
+
+
 class RentalReturn(BaseModel):
     damage_fee: float = Field(ge=0, default=0)
     discount: float = Field(ge=0, default=0)

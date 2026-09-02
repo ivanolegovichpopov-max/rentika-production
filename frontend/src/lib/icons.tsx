@@ -200,3 +200,9 @@ export const IconRepeat = (p: SVGProps<SVGSVGElement>) => (
 export const IconHistory = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}><path d="M3 3v5h5" /><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" /><polyline points="12 7 12 12 15 15" /></Svg>
 );
+
+// 43-й проход, п.2 обзора — щит-«гарантия» для бейджа/фильтра "Депозит не
+// возвращён" (RentalsTab.tsx).
+export const IconShield = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></Svg>
+);
