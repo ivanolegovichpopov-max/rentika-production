@@ -452,6 +452,13 @@ class ClientNoteOut(BaseModel):
     employee_name: str | None = None
     text: str
     created_at: datetime
+    # Может ли ТЕКУЩИЙ пользователь удалить именно эту запись (37-й проход) —
+    # считается на сервере (автор + окно по времени, либо владелец бизнеса
+    # без ограничений — см. _note_out в app/api/routes/clients.py) и просто
+    # отдаётся фронту готовым флагом, чтобы кнопка "Удалить" в журнале не
+    # дублировала эту логику на клиенте и не могла разъехаться с тем, что
+    # реально разрешит DELETE-эндпоинт.
+    can_delete: bool = False
 
     model_config = {"from_attributes": True}
 

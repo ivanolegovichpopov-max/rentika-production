@@ -2,13 +2,14 @@ import base64
 import csv
 import io
 import uuid
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import log_action
-from app.core.clock import utcnow
+from app.core.clock import to_aware, utcnow
 from app.core.deps import BusinessContext, require_permission
 from app.database import get_db
 from app.models.business import Employee, PermissionLevel, ResourceType
@@ -37,6 +38,13 @@ from app.services.trash import purge_expired
 # в app/models/inventory.py, но лимит считается от исходного размера файла,
 # который пользователю понятнее любых пересчётов.
 MAX_CLIENT_DOCUMENT_BYTES = 5 * 1024 * 1024
+
+# Окно на удаление СВОЕЙ записи в журнале клиента (37-й проход — см.
+# docstring ClientNote в app/models/inventory.py). Достаточно, чтобы
+# исправить опечатку/случайную запись сразу после добавления, но не
+# позволяет задним числом почистить историю — владелец бизнеса
+# (ctx.full_access) от этого окна не зависит, см. _note_out ниже.
+CLIENT_NOTE_DELETE_WINDOW_MINUTES = 15
 
 router = APIRouter(prefix="/businesses/{business_id}/clients", tags=["clients"])
 
@@ -333,18 +341,33 @@ async def merge_client(
     return target
 
 
-def _note_out(note: ClientNote, employee_name: str | None) -> ClientNoteOut:
+def _note_can_delete(note: ClientNote, ctx: BusinessContext) -> bool:
+    """Владелец бизнеса — всегда (модерация, без ограничения по времени, та
+    же логика, что и у DashboardNote в app/api/routes/notes.py). Обычный
+    сотрудник — только свою запись и только внутри
+    CLIENT_NOTE_DELETE_WINDOW_MINUTES с момента добавления (см. docstring
+    ClientNote и константу выше)."""
+    if ctx.full_access:
+        return True
+    if ctx.employee is None or note.employee_id != ctx.employee.id:
+        return False
+    age = utcnow() - to_aware(note.created_at)
+    return age <= timedelta(minutes=CLIENT_NOTE_DELETE_WINDOW_MINUTES)
+
+
+def _note_out(note: ClientNote, employee_name: str | None, ctx: BusinessContext) -> ClientNoteOut:
     out = ClientNoteOut.model_validate(note)
     out.employee_name = employee_name
+    out.can_delete = _note_can_delete(note, ctx)
     return out
 
 
 @router.get("/{client_id}/notes", response_model=list[ClientNoteOut])
 async def list_client_notes(client_id: uuid.UUID, ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)):
-    """Журнал датированных записей по клиенту (25-й проход, п.4) — в
-    отличие от Client.notes (одна затираемая памятка), это append-only
-    лента; см. ClientNote в app/models/inventory.py. Порядок — от новых
-    к старым, тем же принципом, что и история аренд в ClientDetailPanel."""
+    """Журнал датированных записей по клиенту (25-й проход, п.4; про
+    удаление своей записи в коротком окне — см. docstring ClientNote в
+    app/models/inventory.py). Порядок — от новых к старым, тем же
+    принципом, что и история аренд в ClientDetailPanel."""
     client = _get_active_client(db, ctx, client_id)
 
     rows = db.execute(
@@ -353,7 +376,7 @@ async def list_client_notes(client_id: uuid.UUID, ctx: BusinessContext = Depends
         .where(ClientNote.client_id == client_id, ClientNote.business_id == ctx.business_id)
         .order_by(ClientNote.created_at.desc())
     ).all()
-    return [_note_out(note, employee_name) for note, employee_name in rows]
+    return [_note_out(note, employee_name, ctx) for note, employee_name in rows]
 
 
 @router.post("/{client_id}/notes", response_model=ClientNoteOut, status_code=status.HTTP_201_CREATED)
@@ -372,7 +395,28 @@ async def create_client_note(
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="client_note", resource_id=str(client_id))
     db.commit()
     db.refresh(note)
-    return _note_out(note, ctx.employee.name if ctx.employee is not None else None)
+    return _note_out(note, ctx.employee.name if ctx.employee is not None else None, ctx)
+
+
+@router.delete("/{client_id}/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_client_note(
+    client_id: uuid.UUID, note_id: uuid.UUID, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
+):
+    """Удаление СВОЕЙ записи в коротком окне после добавления, либо любой —
+    владельцем бизнеса (см. _note_can_delete выше и docstring ClientNote).
+    Тот же принцип проверки прав и тот же 403 при отказе, что и у
+    delete_note в app/api/routes/notes.py (доска "Заметки" на дашборде)."""
+    note = db.get(ClientNote, note_id)
+    if note is None or note.business_id != ctx.business_id or note.client_id != client_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Запись не найдена")
+    if not _note_can_delete(note, ctx):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Удалить можно только свою запись, и не позже {CLIENT_NOTE_DELETE_WINDOW_MINUTES} минут после добавления",
+        )
+    db.delete(note)
+    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="delete", resource="client_note", resource_id=str(note_id))
+    db.commit()
 
 
 def _document_out(doc: ClientDocument, employee_name: str | None) -> ClientDocumentOut:

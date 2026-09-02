@@ -3015,17 +3015,25 @@ function BlacklistReasonModal({
 }
 
 /** Журнал датированных записей по клиенту (25-й проход, п.4 обзора) — в
- * отличие от Client.notes (одна затираемая памятка выше), append-only
- * лента с автором и временем каждой записи (см. ClientNote в
- * app/models/inventory.py). Загружается отдельным запросом при открытии
- * карточки — та же причина, что и у остального содержимого слайдовера
- * (история аренд, показатели): не тащить это в общий список клиентов,
- * который и так может быть большим. */
+ * отличие от Client.notes (одна затираемая памятка выше), лента с автором и
+ * временем каждой записи (см. ClientNote в app/models/inventory.py).
+ * Загружается отдельным запросом при открытии карточки — та же причина, что
+ * и у остального содержимого слайдовера (история аренд, показатели): не
+ * тащить это в общий список клиентов, который и так может быть большим.
+ *
+ * С 37-го прохода — уже не полностью неприкосновенна: по итогам обсуждения
+ * "нет возможности управлять записями" автор может удалить СВОЮ запись в
+ * течение короткого окна после добавления (опечатался/добавил не то), не
+ * задним числом. can_delete на каждой записи считается на backend
+ * (_note_can_delete в app/api/routes/clients.py) — фронт просто следует
+ * этому флагу, не дублируя логику "своя запись + окно по времени" у себя. */
 function ClientNotesJournal({ businessId, clientId }: { businessId: string; clientId: string }) {
   const [notes, setNotes] = useState<ClientNote[] | null>(null);
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   useEffect(() => {
     let cancelled = false;
@@ -3061,6 +3069,23 @@ function ClientNotesJournal({ businessId, clientId }: { businessId: string; clie
     }
   }
 
+  async function handleDelete(note: ClientNote) {
+    if (!(await confirm("Удалить запись из журнала? Это необратимо.", { danger: true }))) return;
+    setError(null);
+    setDeletingId(note.id);
+    try {
+      await api.delete(`/businesses/${businessId}/clients/${clientId}/notes/${note.id}`);
+      setNotes((prev) => (prev ?? []).filter((n) => n.id !== note.id));
+    } catch (err) {
+      // 403 сюда приходит только при гонке (окно истекло между рендером
+      // списка и кликом, либо запись удалил кто-то другой) — can_delete на
+      // кнопке уже отфильтровал все ожидаемые случаи заранее.
+      setError(err instanceof ApiError ? err.message : "Не удалось удалить запись");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
     <div className="slideover-section">
       <h4>Журнал{notes ? ` · ${notes.length}` : ""}</h4>
@@ -3085,12 +3110,29 @@ function ClientNotesJournal({ businessId, clientId }: { businessId: string; clie
         notes.map((n) => (
           <div className="mini-item" key={n.id} style={{ alignItems: "flex-start" }}>
             <span>{n.text}</span>
-            <span style={{ color: "var(--muted)", fontSize: "11.5px", whiteSpace: "nowrap", marginLeft: "8px" }}>
-              {n.employee_name ?? "—"} · {fmtDate(n.created_at.slice(0, 10))}
+            <span style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px" }}>
+              <span style={{ color: "var(--muted)", fontSize: "11.5px", whiteSpace: "nowrap" }}>
+                {n.employee_name ?? "—"} · {fmtDate(n.created_at.slice(0, 10))}
+              </span>
+              {/* Кнопка видна только когда can_delete=true — своя запись и
+                  ещё не вышло окно на удаление (либо владелец бизнеса,
+                  которому можно всегда, см. комментарий у компонента). */}
+              {n.can_delete && (
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title="Удалить запись"
+                  disabled={deletingId === n.id}
+                  onClick={() => void handleDelete(n)}
+                >
+                  <IconTrash />
+                </button>
+              )}
             </span>
           </div>
         ))
       )}
+      {confirmDialog}
     </div>
   );
 }

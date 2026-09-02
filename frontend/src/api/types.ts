@@ -171,6 +171,12 @@ export interface ClientNote {
   employee_name: string | null;
   text: string;
   created_at: string;
+  // Может ли ТЕКУЩИЙ пользователь удалить именно эту запись — считается на
+  // backend (автор + короткое окно по времени, либо владелец бизнеса без
+  // ограничений), см. _note_can_delete в app/api/routes/clients.py (37-й
+  // проход). Кнопка "Удалить" в ClientNotesJournal просто следует этому
+  // флагу, не дублируя логику на фронте.
+  can_delete: boolean;
 }
 
 export interface ClientImportRowResult {

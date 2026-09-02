@@ -5,7 +5,9 @@
 (merge). Сквозные сценарии через реальные HTTP-эндпоинты, тот же стиль, что
 и test_rentals_flow.py.
 """
-from app.models.inventory import Client
+from datetime import datetime, timedelta, timezone
+
+from app.models.inventory import Client, ClientNote
 from tests.conftest import auth_headers, register_business
 
 
@@ -319,6 +321,100 @@ def test_client_notes_journal_crud(client):
     # От новых к старым.
     assert listed[0]["text"] == "Приходил, забрал перфоратор"
     assert listed[1]["text"] == "Звонил, спрашивал про виброплиту"
+
+
+def test_client_note_delete_own_recent_only(client, db_session):
+    """37-й проход — журнал больше не полностью неприкосновенен: автор может
+    удалить СВОЮ запись в течение CLIENT_NOTE_DELETE_WINDOW_MINUTES после
+    добавления (опечатался/добавил не то), но не задним числом; чужую запись
+    не может удалить никто, кроме владельца бизнеса (модерация без
+    ограничения по времени). Тот же расклад прав, что и у DashboardNote
+    (test_notes.py:test_everyone_mode_allows_employee_posting_and_self_delete),
+    плюс сама проверка окна по времени."""
+    owner = register_business(client, email="clients-notes-delete@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Клиент для теста удаления"}, headers=headers
+    ).json()["id"]
+
+    # Сотрудник с правом "edit" на клиентов — только тогда вообще может
+    # создавать записи в журнале (create_client_note требует edit_dep).
+    position = client.post(
+        f"/api/businesses/{business_id}/positions", json={"title": "Менеджер"}, headers=headers
+    ).json()
+    client.put(
+        f"/api/businesses/{business_id}/positions/{position['id']}/permissions",
+        json={"permissions": [{"resource": "clients", "level": "edit"}]},
+        headers=headers,
+    )
+    client.post(
+        f"/api/businesses/{business_id}/employees",
+        json={
+            "email": "note-author@example.com",
+            "name": "Автор Записи",
+            "position_id": position["id"],
+            "temporary_password": "another long enough password",
+        },
+        headers=headers,
+    )
+    client.post(
+        f"/api/businesses/{business_id}/employees",
+        json={
+            "email": "note-other@example.com",
+            "name": "Другой Сотрудник",
+            "position_id": position["id"],
+            "temporary_password": "another long enough password",
+        },
+        headers=headers,
+    )
+    author_token = client.post("/api/auth/login", json={"email": "note-author@example.com", "password": "another long enough password"}).json()["access_token"]
+    other_token = client.post("/api/auth/login", json={"email": "note-other@example.com", "password": "another long enough password"}).json()["access_token"]
+    author_headers = auth_headers(author_token)
+    other_headers = auth_headers(other_token)
+
+    created = client.post(
+        f"/api/businesses/{business_id}/clients/{client_id}/notes", json={"text": "Свежая запись"}, headers=author_headers
+    )
+    assert created.status_code == 201
+    note_id = created.json()["id"]
+    assert created.json()["can_delete"] is True  # только что созданная своя запись — в окне
+
+    # Другой сотрудник ту же запись не видит удаляемой и не может удалить.
+    listed_by_other = client.get(f"/api/businesses/{business_id}/clients/{client_id}/notes", headers=other_headers).json()
+    assert listed_by_other[0]["can_delete"] is False
+    forbidden = client.delete(f"/api/businesses/{business_id}/clients/{client_id}/notes/{note_id}", headers=other_headers)
+    assert forbidden.status_code == 403
+
+    # "Перематываем" created_at за пределы окна — тест не может физически
+    # ждать CLIENT_NOTE_DELETE_WINDOW_MINUTES (тот же приём, что и в
+    # test_trash.py с deleted_at).
+    old_ts = datetime.now(timezone.utc) - timedelta(minutes=30)
+    db_session.query(ClientNote).filter(ClientNote.id == note_id).update({"created_at": old_ts}, synchronize_session=False)
+    db_session.commit()
+
+    expired = client.get(f"/api/businesses/{business_id}/clients/{client_id}/notes", headers=author_headers).json()
+    assert expired[0]["can_delete"] is False  # своя, но окно уже прошло
+    too_late = client.delete(f"/api/businesses/{business_id}/clients/{client_id}/notes/{note_id}", headers=author_headers)
+    assert too_late.status_code == 403
+
+    # Владелец бизнеса удаляет ЛЮБУЮ запись в любой момент — модерация без
+    # ограничения по времени/авторству.
+    owner_delete = client.delete(f"/api/businesses/{business_id}/clients/{client_id}/notes/{note_id}", headers=headers)
+    assert owner_delete.status_code == 204
+
+    empty = client.get(f"/api/businesses/{business_id}/clients/{client_id}/notes", headers=headers).json()
+    assert empty == []
+
+    # Второй сценарий: свежая запись, удаляемая самим автором в пределах окна.
+    fresh = client.post(
+        f"/api/businesses/{business_id}/clients/{client_id}/notes", json={"text": "Ещё одна"}, headers=author_headers
+    ).json()
+    own_delete = client.delete(
+        f"/api/businesses/{business_id}/clients/{client_id}/notes/{fresh['id']}", headers=author_headers
+    )
+    assert own_delete.status_code == 204
 
 
 def test_create_and_update_client_birthday_and_contacts(client):
