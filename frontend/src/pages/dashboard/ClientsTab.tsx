@@ -2300,9 +2300,71 @@ export function ClientDetailPanel({
             )}
           </div>
         </div>
-        <button className="icon-btn" onClick={onClose}>
-          <IconClose />
-        </button>
+        {/* "Ещё" перенесена сюда, в шапку, рядом с крестиком закрытия (37-й
+            проход, обзор "кнопка Ещё рвёт карточку клиента"): раньше стояла
+            в одном flex-ряду с "+ Новая аренда"/"Изменить"/"Удалить" и на
+            узкой панели (420px) этот ряд не помещался по ширине — "Ещё"
+            переносилась на отдельную строку и повисала в пустоте между
+            рядом действий и вкладками. Место в шапке не зависит от того,
+            сколько влезло кнопок ниже — здесь всегда достаточно свободного
+            места, а по смыслу это даже точнее: крестик и "Ещё" — управление
+            самой карточкой (закрыть / прочие действия над ней), а
+            "+ Новая аренда"/"Изменить"/"Удалить" — операции с клиентом, две
+            разные категории кнопок больше не смешаны в одном ряду. */}
+        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+          {((onEdit && clients.length > 1) || (summaryRental && (client.phone || client.email))) && (
+            <MoreActionsMenu
+              align="right"
+              iconOnly
+              actions={[
+                // Слияние дублей (24-й проход, п.7 обзора) — доступно только
+                // там же, где и полноценное редактирование, и только если в
+                // бизнесе есть с кем объединять.
+                ...(onEdit && clients.length > 1
+                  ? [{ key: "merge", label: "Объединить с другим клиентом", onClick: () => setShowMerge(true) }]
+                  : []),
+                // Сводка по аренде (26-й проход, «глазами обычного
+                // пользователя», п.5) — ТОЛЬКО текстом: ни wa.me, ни mailto:
+                // не умеют вкладывать файл, это ограничение самих
+                // протоколов, не проекта. Договор целиком по-прежнему
+                // открывается по клику на строку истории — это просто
+                // быстрый способ переслать клиенту суть.
+                ...(summaryRental && client.phone
+                  ? [
+                      {
+                        key: "summary-wa",
+                        label: "Сводка в WhatsApp",
+                        onClick: () =>
+                          window.open(
+                            `https://wa.me/${normalizePhoneDigits(client.phone!)}?text=${encodeURIComponent(
+                              buildRentalSummaryText(summaryRental, client, equipment)
+                            )}`,
+                            "_blank",
+                            "noreferrer"
+                          ),
+                      },
+                    ]
+                  : []),
+                ...(summaryRental && client.email
+                  ? [
+                      {
+                        key: "summary-email",
+                        label: "Сводка на почту",
+                        onClick: () => {
+                          window.location.href = `mailto:${client.email}?subject=${encodeURIComponent(
+                            "Информация по аренде"
+                          )}&body=${encodeURIComponent(buildRentalSummaryText(summaryRental, client, equipment))}`;
+                        },
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          )}
+          <button className="icon-btn" onClick={onClose}>
+            <IconClose />
+          </button>
+        </div>
       </div>
 
       {/* Кнопки действий (29-й проход, п.13 обзора: "перенести действия
@@ -2313,13 +2375,13 @@ export function ClientDetailPanel({
           35-й проход, обзор "карточка перегружена" — в основном ряду
           остались только действия на каждый день (аренда/правка/удаление);
           "Объединить с другим клиентом" и отправка сводки (редкие действия)
-          перенесены в "Ещё" (MoreActionsMenu, тот же приём, что и в шапке
-          списка клиентов/оборудования). Отдельный ряд кнопок
-          "Позвонить"/WhatsApp/"Почта" под этим блоком убран целиком — те же
-          действия теперь иконками прямо у "Телефон"/Email в блоке "Контакты"
-          ниже, рядом со значением, к которому относятся, вместо того чтобы
-          дублировать один и тот же номер тремя разными элементами на экране
-          (текст в шапке → кнопка здесь → ссылка в "Контактах"). */}
+          перенесены в "Ещё" — которая с 37-го прохода живёт в шапке, см.
+          комментарий там. Отдельный ряд кнопок "Позвонить"/WhatsApp/"Почта"
+          под этим блоком убран целиком — те же действия теперь иконками
+          прямо у "Телефон"/Email в блоке "Контакты" ниже, рядом со
+          значением, к которому относятся, вместо того чтобы дублировать
+          один и тот же номер тремя разными элементами на экране (текст в
+          шапке → кнопка здесь → ссылка в "Контактах"). */}
       <div className="slideover-section" style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
         {/* "+ Новая аренда" прямо из карточки (25-й проход, п.1 обзора) —
             открывает глобальную модалку выше по дереву (см. комментарий у
@@ -2343,63 +2405,6 @@ export function ClientDetailPanel({
         >
           Удалить
         </button>
-        {/* margin-left: auto (36-й проход, обзор карточки клиента) — при
-            узкой панели (420px) весь ряд ("+ Новая аренда"/"Изменить"/
-            "Удалить"/"Ещё") не помещается по ширине и переносится; без auto
-            "Ещё" при переносе повисала одна у левого края новой строки —
-            с auto её прижимает к правому краю ряда что при переносе, что
-            без него, вместо случайного места на новой строке. */}
-        {((onEdit && clients.length > 1) || (summaryRental && (client.phone || client.email))) && (
-          <div style={{ marginLeft: "auto" }}>
-          <MoreActionsMenu
-            align="right"
-            iconOnly
-            actions={[
-              // Слияние дублей (24-й проход, п.7 обзора) — доступно только
-              // там же, где и полноценное редактирование, и только если в
-              // бизнесе есть с кем объединять.
-              ...(onEdit && clients.length > 1
-                ? [{ key: "merge", label: "Объединить с другим клиентом", onClick: () => setShowMerge(true) }]
-                : []),
-              // Сводка по аренде (26-й проход, «глазами обычного
-              // пользователя», п.5) — ТОЛЬКО текстом: ни wa.me, ни mailto: не
-              // умеют вкладывать файл, это ограничение самих протоколов, не
-              // проекта. Договор целиком по-прежнему открывается по клику на
-              // строку истории — это просто быстрый способ переслать
-              // клиенту суть.
-              ...(summaryRental && client.phone
-                ? [
-                    {
-                      key: "summary-wa",
-                      label: "Сводка в WhatsApp",
-                      onClick: () =>
-                        window.open(
-                          `https://wa.me/${normalizePhoneDigits(client.phone!)}?text=${encodeURIComponent(
-                            buildRentalSummaryText(summaryRental, client, equipment)
-                          )}`,
-                          "_blank",
-                          "noreferrer"
-                        ),
-                    },
-                  ]
-                : []),
-              ...(summaryRental && client.email
-                ? [
-                    {
-                      key: "summary-email",
-                      label: "Сводка на почту",
-                      onClick: () => {
-                        window.location.href = `mailto:${client.email}?subject=${encodeURIComponent(
-                          "Информация по аренде"
-                        )}&body=${encodeURIComponent(buildRentalSummaryText(summaryRental, client, equipment))}`;
-                      },
-                    },
-                  ]
-                : []),
-            ]}
-          />
-          </div>
-        )}
       </div>
 
       {incompleteProfile && (
