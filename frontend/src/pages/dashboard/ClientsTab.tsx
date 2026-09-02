@@ -2343,7 +2343,14 @@ export function ClientDetailPanel({
         >
           Удалить
         </button>
+        {/* margin-left: auto (36-й проход, обзор карточки клиента) — при
+            узкой панели (420px) весь ряд ("+ Новая аренда"/"Изменить"/
+            "Удалить"/"Ещё") не помещается по ширине и переносится; без auto
+            "Ещё" при переносе повисала одна у левого края новой строки —
+            с auto её прижимает к правому краю ряда что при переносе, что
+            без него, вместо случайного места на новой строке. */}
         {((onEdit && clients.length > 1) || (summaryRental && (client.phone || client.email))) && (
+          <div style={{ marginLeft: "auto" }}>
           <MoreActionsMenu
             actions={[
               // Слияние дублей (24-й проход, п.7 обзора) — доступно только
@@ -2389,6 +2396,7 @@ export function ClientDetailPanel({
                 : []),
             ]}
           />
+          </div>
         )}
       </div>
 
@@ -2400,7 +2408,14 @@ export function ClientDetailPanel({
         </div>
       )}
 
-      <div className="segmented" style={{ margin: "0 16px 4px" }}>
+      {/* margin слева убран (36-й проход, обзор карточки клиента) — .slideover
+          уже даёт всем секциям отступ 22px по padding контейнера, а тут
+          сверху добавлялся ещё и свой margin-left: 16px, из-за чего вкладки
+          съезжали на 38px вместо 22px и не совпадали по левому краю с
+          кнопками действий/заголовками секций над и под ними. Нижний
+          отступ (4px) оставлен — не про выравнивание, а про зазор до
+          следующего блока. */}
+      <div className="segmented" style={{ margin: "0 0 4px" }}>
         <button type="button" className={panelTab === "overview" ? "active" : ""} onClick={() => setPanelTab("overview")}>
           Обзор
         </button>
@@ -3010,21 +3025,49 @@ function monthKeyToLabel(key: string): string {
  *     по этому месяцу (см. onSelectMonth/historyMonthFilter в ClientDetailPanel).
  *  3. Подпись под заголовком уточняет, что считается КОЛИЧЕСТВО сделок, а не
  *     выручка — раньше это было неочевидно, цифры на графике легко спутать
- *     с деньгами. */
+ *     с деньгами.
+ * 36-й проход, обзор карточки клиента, п. "график должен быть на всю
+ * ширину карточки" — viewBox был жёстко "0 0 180 60" (3:1), а
+ * preserveAspectRatio по умолчанию ("xMidYMid meet") масштабирует картинку,
+ * СОХРАНЯЯ эту пропорцию, подгоняя по меньшей стороне — высота была
+ * зафиксирована в 60px, значит ширина результата не могла превышать
+ * 60×3=180px независимо от реальной ширины контейнера (а он ощутимо шире),
+ * остальное место просто пустовало. Простого атрибута тут не хватало —
+ * пришлось измерить фактическую ширину контейнера (ResizeObserver, тот же
+ * приём, что и container queries без самих container queries) и подставить
+ * её в viewBox вместо захардкоженных 180 — тогда 1 единица viewBox = 1px
+ * реального рендера, и вся раскладка столбцов (barSlot и т.п.) считается
+ * уже от неё, а не от произвольного числа. До первого измерения (нулевой
+ * кадр до эффекта) используется разумная по умолчанию ширина — без неё
+ * график в первом кадре был бы нулевой ширины и мигал бы при появлении. */
 function MiniActivityChart({ rentals, onSelectMonth }: { rentals: Rental[]; onSelectMonth: (monthKey: string) => void }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(320);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w && w > 0) setWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   if (rentals.length === 0) return null;
   const months = lastMonths(6);
   const counts = months.map((m) => rentals.filter((r) => r.start_date.startsWith(m.key)).length);
   const max = Math.max(1, ...counts);
-  const barSlot = 180 / months.length;
+  const barSlot = width / months.length;
   const barWidth = barSlot - 6;
   return (
-    <div className="slideover-section">
+    <div className="slideover-section" ref={wrapRef}>
       <h4>Активность по месяцам</h4>
       <div className="field-hint" style={{ marginBottom: "6px" }}>
         Количество арендных сделок, начатых в месяце (не выручка) — нажмите на столбец, чтобы посмотреть их в истории.
       </div>
-      <svg width="100%" height="60" viewBox="0 0 180 60" style={{ display: "block" }}>
+      <svg width="100%" height="60" viewBox={`0 0 ${width} 60`} style={{ display: "block" }}>
         {months.map((m, i) => {
           const x = i * barSlot + 3;
           const h = (counts[i] / max) * 38;
@@ -3039,7 +3082,7 @@ function MiniActivityChart({ rentals, onSelectMonth }: { rentals: Rental[]; onSe
                   кликабельную зону сверх узкого самого столбца. */}
               <rect x={x - 2} y="0" width={Math.max(barWidth + 4, 1)} height="46" fill="transparent" />
               <rect x={x} y={44 - h} width={Math.max(barWidth, 1)} height={Math.max(h, 1)} rx="2" fill="var(--accent)" />
-              <text x={x + barWidth / 2} y="56" fontSize="7.5" textAnchor="middle" fill="var(--muted)">
+              <text x={x + barWidth / 2} y="56" fontSize="10" textAnchor="middle" fill="var(--muted)">
                 {m.label}
               </text>
             </g>
