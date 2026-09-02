@@ -567,7 +567,33 @@ dialog#modal.wide { width: min(820px, 94vw); }
 dialog#modal::backdrop { background: rgba(0,0,0,0.4); }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); }
 .modal-head h3 { font-size: 16px; font-weight: 800; }
-.modal-body { padding: 18px 20px; overflow-y: auto; max-height: 65vh; }
+.modal-body {
+  padding: 18px 20px;
+  overflow-y: auto;
+  max-height: 65vh;
+  /* Тень-подсказка о прокрутке (37-й проход, обзор формы "Новый клиент",
+     п.3: контент внизу обрезался без всякого намёка, что там есть ещё
+     поля — легко было не долистать до конца формы). Классический
+     CSS-приём на background-attachment: local/scroll — верхний/нижний
+     линейные градиенты двигаются вместе с содержимым и закрывают тень
+     собой, когда докручено до самого края, а radial-gradient-тени прибиты
+     к вьюпорту и проступают из-под градиента, пока в эту сторону есть что
+     скроллить. Чистый CSS, без JS и обработчиков скролла — работает
+     одинаково в любой модалке с этим классом, не только в форме клиента. */
+  background: linear-gradient(var(--surface) 30%, rgba(0, 0, 0, 0)), linear-gradient(rgba(0, 0, 0, 0), var(--surface) 70%) 0 100%,
+    radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0)),
+    radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0)) 0 100%;
+  background-repeat: no-repeat;
+  background-color: var(--surface);
+  background-size: 100% 32px, 100% 32px, 100% 10px, 100% 10px;
+  background-attachment: local, local, scroll, scroll;
+}
+/* Подзаголовки секций внутри формы (37-й проход, п.1 — сгруппировать поля
+   по смыслу вместо одного сплошного списка) — тот же вид, что и
+   .slideover-section h4 в карточке клиента, просто без обёртки-секции: в
+   форме модалки поля и так уже в одну колонку/два столбца через
+   .field/.field-row, отдельный контейнер на каждую группу не нужен. */
+.modal-body h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 700; margin: 20px 0 8px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
 
 /* ---------- Модалка подтверждения (замена window.confirm()) ---------- */

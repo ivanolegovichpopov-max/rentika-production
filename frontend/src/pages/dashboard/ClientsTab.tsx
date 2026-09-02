@@ -61,6 +61,17 @@ interface ClientFormState {
   // согласовано целиком) ----
   birthday: string; // "YYYY-MM-DD" или ""
   additionalContacts: ClientContact[];
+  // ---- 37-й проход (обзор формы "Новый клиент") ----
+  /** Сканы/фото документов, выбранные ДО того, как клиент вообще создан —
+   * клиента ещё не существует на backend (id появится только из ответа
+   * POST /clients), а сама загрузка файла (ClientDocumentsSection ниже)
+   * жёстко завязана на clientId в URL. Поэтому файлы здесь держатся как
+   * есть, в памяти, а не отправляются сразу — реальная загрузка (тем же
+   * api.postForm, что и в ClientDocumentsSection) происходит в
+   * handleSubmitForm сразу после того, как клиент создан и получен его id.
+   * Только для режима "add" — при редактировании существующего клиента
+   * документами по-прежнему управляет ClientDocumentsSection в карточке. */
+  pendingDocuments: File[];
 }
 
 const EMPTY_CLIENT_FORM: ClientFormState = {
@@ -76,6 +87,7 @@ const EMPTY_CLIENT_FORM: ClientFormState = {
   tags: "",
   birthday: "",
   additionalContacts: [],
+  pendingDocuments: [],
 };
 
 function formFromClient(c: Client): ClientFormState {
@@ -92,6 +104,10 @@ function formFromClient(c: Client): ClientFormState {
     tags: c.tags ?? "",
     birthday: c.birthday ?? "",
     additionalContacts: c.additional_contacts ?? [],
+    // Правка существующего клиента документами не занимается (см. коммент
+    // у поля выше) — список всегда пуст, поле в форме для этого режима не
+    // рендерится вовсе.
+    pendingDocuments: [],
   };
 }
 
@@ -137,6 +153,7 @@ function isClientFormDirty(current: ClientFormState, initial: ClientFormState): 
 function ClientFormModal({
   open,
   title,
+  mode,
   initial,
   error,
   onClose,
@@ -144,6 +161,11 @@ function ClientFormModal({
 }: {
   open: boolean;
   title: string;
+  /** 37-й проход — только чтобы решить, показывать ли блок загрузки
+   * документов (см. комментарий у pendingDocuments в ClientFormState):
+   * при редактировании документами занимается ClientDocumentsSection в
+   * самой карточке, здесь для этого режима поле не нужно. */
+  mode: "add" | "edit";
   initial: ClientFormState;
   error: string | null;
   onClose: () => void;
@@ -151,10 +173,27 @@ function ClientFormModal({
 }) {
   const { ref, handleNativeClose } = useModalDialog(open);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const pendingFilesInputRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<ClientFormState>(initial);
   const [localError, setLocalError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const { confirm: confirmDiscard, dialog: discardDialog } = useConfirm();
+
+  /** Выбор файлов документа при создании клиента (37-й проход) — только
+   * складывает File-объекты в форму, ничего никуда не отправляет (см.
+   * комментарий у pendingDocuments в ClientFormState). Валидация размера —
+   * тот же лимит и то же сообщение, что и у реальной загрузки в
+   * ClientDocumentsSection (MAX_CLIENT_DOCUMENT_BYTES определена ниже в
+   * этом же файле — на уровень модуля, а не компонента, так что доступна
+   * здесь без дополнительного импорта). */
+  function handlePickFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const list = Array.from(files);
+    const tooBig = list.filter((f) => f.size > MAX_CLIENT_DOCUMENT_BYTES);
+    const ok = list.filter((f) => f.size <= MAX_CLIENT_DOCUMENT_BYTES);
+    setLocalError(tooBig.length > 0 ? `Слишком большой файл (максимум 5 МБ): ${tooBig.map((f) => f.name).join(", ")}` : null);
+    if (ok.length > 0) setForm((prev) => ({ ...prev, pendingDocuments: [...prev.pendingDocuments, ...ok] }));
+  }
 
   useEffect(() => {
     if (open) {
@@ -283,6 +322,16 @@ function ClientFormModal({
               placeholder="Например, Иванов Иван или ООО «Стройка»"
             />
           </div>
+
+          {/* Подзаголовки секций (37-й проход, обзор формы "Новый клиент",
+              п.1: раньше 9+ полей шли одним сплошным списком одного
+              визуального веса — не сразу читалось, где заканчивается один
+              смысловой блок и начинается другой). Тот же приём и тот же
+              класс `h4`, что и в карточке клиента (слайдовер, "Надёжность"/
+              "Активность" и т.п.) — здесь просто через .modal-body h4,
+              а не .slideover-section h4 (см. styles.css), чтобы не тащить в
+              разметку формы лишний оборачивающий div на каждую секцию. */}
+          <h4>Контакты</h4>
           <div className="field-row">
             <div className="field">
               <label>Телефон</label>
@@ -296,7 +345,12 @@ function ClientFormModal({
               />
               {/* 29-й проход, п.5 обзора — маска больше не навязывает "+7"
                   иностранным номерам, стоит явно сказать об этом рядом с
-                  полем, иначе не очевидно из самого интерфейса. */}
+                  полем, иначе не очевидно из самого интерфейса. Ширина
+                  подсказки (37-й проход, проверено предметно) и так
+                  ограничена шириной этой колонки — .field-hint лежит внутри
+                  того же .field, что и сам инпут, а .field-row — grid ровно
+                  на 2 колонки, так что на строку Email эта подсказка не
+                  заходит, хоть визуально и может так казаться. */}
               <div className="field-hint">Иностранный номер — начните ввод с кода страны, маска не тронет его.</div>
             </div>
             <div className="field">
@@ -307,6 +361,8 @@ function ClientFormModal({
               <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
             </div>
           </div>
+
+          <h4>Документы</h4>
           <div className="field-row">
             <div className="field">
               {/* 29-й проход, повторный обзор, п.18 — "Документ / реквизиты"
@@ -410,6 +466,52 @@ function ClientFormModal({
               </div>
             </>
           )}
+          {/* Прикрепление сканов/фото документа прямо при создании клиента
+              (37-й проход — по итогам обсуждения "логично ли иметь эту
+              возможность на этапе заведения клиента, а не только из уже
+              существующей карточки"). Только для режима "add": у
+              редактирования уже есть полноценная секция "Документы" в самой
+              карточке (ClientDocumentsSection) с загрузкой сразу на сервер,
+              дублировать её здесь незачем. Файлы копятся в form.pendingDocuments
+              и реально загружаются только после того, как клиент создан и
+              известен его id — см. комментарий у этого поля в
+              ClientFormState и handleSubmitForm. */}
+          {mode === "add" && (
+            <div className="field">
+              <label>Прикрепить документ (необязательно)</label>
+              <input
+                ref={pendingFilesInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                multiple
+                onChange={(e) => {
+                  handlePickFiles(e.target.files);
+                  if (pendingFilesInputRef.current) pendingFilesInputRef.current.value = "";
+                }}
+              />
+              <div className="field-hint">Скан или фото паспорта/доверенности — до 5 МБ на файл, можно выбрать сразу несколько.</div>
+              {form.pendingDocuments.length > 0 && (
+                <ul style={{ listStyle: "none", padding: 0, margin: "8px 0 0", display: "flex", flexDirection: "column", gap: "4px" }}>
+                  {form.pendingDocuments.map((f, idx) => (
+                    <li key={idx} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12.5px" }}>
+                      <IconFile />
+                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title="Убрать файл"
+                        onClick={() => setForm({ ...form, pendingDocuments: form.pendingDocuments.filter((_, i) => i !== idx) })}
+                      >
+                        <IconClose />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          <h4>Коммерческие условия</h4>
           <div className="field-row">
             <div className="field">
               <label>Скидка по умолчанию, % (необязательно)</label>
@@ -420,7 +522,11 @@ function ClientFormModal({
                 step="0.01"
                 value={form.defaultDiscountPercent}
                 onChange={(e) => setForm({ ...form, defaultDiscountPercent: e.target.value })}
-                placeholder="0"
+                // Плейсхолдер "0" (37-й проход, п.5 обзора) убран — легко
+                // принять за уже выставленное значение "скидка 0%", хотя это
+                // просто пустое необязательное поле. Пустое поле для
+                // type="number" и так ничего не показывает без placeholder,
+                // отдельная подсказка не нужна.
               />
               <div className="field-hint">Подсказка при создании новой аренды этому клиенту — можно поменять на месте.</div>
             </div>
@@ -433,8 +539,9 @@ function ClientFormModal({
               />
             </div>
           </div>
+
+          <h4>Заметка</h4>
           <div className="field">
-            <label>Заметка</label>
             <textarea
               rows={3}
               value={form.notes}
@@ -1483,7 +1590,34 @@ export function ClientsTab({
           );
           if (!proceed) return;
         }
-        await api.post(`/businesses/${businessId}/clients`, clientFormToPayload(form));
+        const created = await api.post<Client>(`/businesses/${businessId}/clients`, clientFormToPayload(form));
+        // Загрузка документов, прикреплённых ДО сохранения (37-й проход —
+        // см. комментарий у pendingDocuments в ClientFormState). До этой
+        // строки клиента ещё не существовало на backend, поэтому раньше
+        // грузить файлы было некуда — теперь есть created.id. Как и в
+        // ClientDocumentsSection, по одному запросу на файл (не Promise.all)
+        // и один неудачный файл не отменяет остальные — но, в отличие от
+        // неё, здесь клиент к этому моменту уже точно сохранён, так что при
+        // сбое части файлов не откатываем и не блокируем создание клиента,
+        // просто мягко предупреждаем через notify() после закрытия модалки.
+        if (form.pendingDocuments.length > 0) {
+          let failed = 0;
+          for (const file of form.pendingDocuments) {
+            try {
+              const body = new FormData();
+              body.append("file", file);
+              await api.postForm(`/businesses/${businessId}/clients/${created.id}/documents`, body);
+            } catch {
+              failed++;
+            }
+          }
+          if (failed > 0) {
+            notify(
+              `Клиент сохранён, но не удалось загрузить файлов: ${failed} из ${form.pendingDocuments.length}. Прикрепите их из карточки клиента.`,
+              "info"
+            );
+          }
+        }
       }
       await reloadClients();
       closeFormModal();
@@ -2104,6 +2238,7 @@ export function ClientsTab({
       <ClientFormModal
         open={modalMode !== null}
         title={formTitle}
+        mode={modalMode === "edit" ? "edit" : "add"}
         initial={formInitial}
         error={formError}
         onClose={closeFormModal}
