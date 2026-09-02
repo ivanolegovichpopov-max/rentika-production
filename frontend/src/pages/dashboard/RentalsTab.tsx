@@ -847,22 +847,32 @@ export function RentalsTab({
           {/* Без btn-sm (31-й проход — "свежим взглядом" обзор всех кнопок
               разом, тот же фикс, что и у "Просрочка сейчас" в
               ClientsTab.tsx): рядом стоит Dropdown (.cat-filter-btn, выше
-              btn-sm) — без выравнивания высоты ряд выглядел "рябым". */}
+              btn-sm) — без выравнивания высоты ряд выглядел "рябым".
+              41-й проход, по итогам обзора: оба переключателя стали
+              icon-only (btn-icon-only, без видимого текста) — тулбар с
+              двумя новыми кнопками (риск + истекает) стал заметно шире и
+              вытеснял сегментированный переключатель статусов слева в 2-3
+              строки (grid-template-columns: 1fr auto у .tab-toolbar-grid —
+              правая auto-колонка забирала всё больше места). Подсказка
+              (title) и так уже объясняла смысл кнопки при наведении —
+              текстовая подпись была избыточна. */}
           <button
             type="button"
-            className={"btn" + (riskOnly ? " btn-primary" : "")}
+            className={"btn btn-icon-only" + (riskOnly ? " btn-primary" : "")}
             title="Показать только клиентов «на контроле» или из чёрного списка"
+            aria-label="Только рискованные"
             onClick={() => setRiskOnly((v) => !v)}
           >
-            <IconAlert /> Только рискованные
+            <IconAlert />
           </button>
           <button
             type="button"
-            className={"btn" + (expiringOnly ? " btn-primary" : "")}
+            className={"btn btn-icon-only" + (expiringOnly ? " btn-primary" : "")}
             title="Показать только аренды в работе, которые истекают в ближайшие 2 дня"
+            aria-label="Истекает скоро"
             onClick={() => setExpiringOnly((v) => !v)}
           >
-            <IconCalendar /> Истекает скоро
+            <IconCalendar />
           </button>
           <MoreActionsMenu
             actions={[
@@ -878,6 +888,32 @@ export function RentalsTab({
           </button>
         </div>
       </div>
+
+      {/* Напоминание о включённом переключателе (41-й проход, по итогам
+          обзора) — раньше единственным признаком был подсвеченный
+          btn-primary в тулбаре, который легко потерять из виду, прокрутив
+          длинный список вниз: непонятно, список правда короткий или просто
+          отфильтрован. Полоска над самим списком, у самых карточек —
+          труднее пропустить, чем кнопку в тулбаре наверху. "Сбросить" одним
+          кликом снимает оба переключателя разом. */}
+      {(riskOnly || expiringOnly) && (
+        <div className="active-filter-bar">
+          <IconAlert />
+          <span>
+            Показаны только {[riskOnly && "рискованные клиенты", expiringOnly && "аренды, истекающие скоро"].filter(Boolean).join(" и ")}
+          </span>
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              setRiskOnly(false);
+              setExpiringOnly(false);
+            }}
+          >
+            Сбросить
+          </button>
+        </div>
+      )}
 
       {sorted.map((r) => {
         const client = clients.find((c) => c.id === r.client_id);
