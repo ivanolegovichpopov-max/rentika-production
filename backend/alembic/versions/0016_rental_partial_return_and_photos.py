@@ -1,6 +1,6 @@
 """rental_items.returned_at + rental_photos — частичный возврат и фотофиксация
 
-Revision ID: 0016_rental_partial_return_and_photos
+Revision ID: 0016_rental_return_photos
 Revises: 0015_client_document_label
 Create Date: 2026-09-02
 
@@ -25,7 +25,16 @@ import sqlalchemy as sa
 
 from app.db_types import GUID
 
-revision = "0016_rental_partial_return_and_photos"
+# ВАЖНО: id ревизии — НЕ то же самое, что имя файла (файл может называться
+# как угодно длинно ради читаемости, Alembic ссылается только на строки
+# revision/down_revision). Сам id обязан помещаться в
+# alembic_version.version_num — колонку VARCHAR(32) в БД. Изначальный
+# длинный id "0016_rental_partial_return_and_photos" (37 символов) уронил
+# деплой прямо на UPDATE alembic_version ("value too long for type
+# character varying(32)") — транзакционный DDL успел откатиться сам, но
+# урок на будущее: id ревизии всегда короче 32 символов, даже когда имя
+# файла для читаемости длиннее.
+revision = "0016_rental_return_photos"
 down_revision = "0015_client_document_label"
 branch_labels = None
 depends_on = None
