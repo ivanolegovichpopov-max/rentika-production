@@ -335,6 +335,16 @@ div.due-item, div.mini-item { display: flex; align-items: center; justify-conten
 .mini-item-action { opacity: 0; transition: opacity 0.12s; }
 .mini-item:hover .mini-item-action, .mini-item:focus-within .mini-item-action { opacity: 1; }
 @media (hover: none) { .mini-item-action { opacity: 1; } }
+/* Разделитель между записями "Журнала" (37-й проход: "нужно чтобы записи
+   визуально разделялись друг с другом") — записи и так очерчены padding'ом
+   .mini-item, но одна к другой встык, без какой-либо границы, читались
+   слитно, особенно при разной высоте (например, если текст перенёсся на
+   несколько строк). Сосед-комбинатор вместо :not(:last-child) — не нужно
+   отдельно думать про последнюю запись, у неё соседа сверху просто нет.
+   Скоуп только на .journal-list — не трогает .mini-item в других местах
+   приложения (Документы, дашборд, Оборудование), где такого разделителя не
+   просили. */
+.journal-list .mini-item + .mini-item { border-top: 1px solid var(--border); }
 
 /* ---------- Кастомизация дашборда (скрыть/переставить блок) ----------
    Своей аналогии в демо нет — новая возможность. dash-block-cell оборачивает

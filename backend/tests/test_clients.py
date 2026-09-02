@@ -323,14 +323,17 @@ def test_client_notes_journal_crud(client):
     assert listed[1]["text"] == "Звонил, спрашивал про виброплиту"
 
 
-def test_client_note_delete_own_recent_only(client, db_session):
+def test_client_note_edit_and_delete_own_recent_only(client, db_session):
     """37-й проход — журнал больше не полностью неприкосновенен: автор может
-    удалить СВОЮ запись в течение CLIENT_NOTE_DELETE_WINDOW_MINUTES после
-    добавления (опечатался/добавил не то), но не задним числом; чужую запись
-    не может удалить никто, кроме владельца бизнеса (модерация без
-    ограничения по времени). Тот же расклад прав, что и у DashboardNote
+    ИЗМЕНИТЬ ТЕКСТ или удалить СВОЮ запись в течение
+    CLIENT_NOTE_DELETE_WINDOW_MINUTES после добавления (опечатался/добавил
+    не то), но не задним числом; чужую запись не может изменить/удалить
+    никто, кроме владельца бизнеса (модерация без ограничения по времени).
+    Тот же расклад прав, что и у DashboardNote
     (test_notes.py:test_everyone_mode_allows_employee_posting_and_self_delete),
-    плюс сама проверка окна по времени."""
+    плюс сама проверка окна по времени. can_edit/can_delete сейчас всегда
+    совпадают (одна и та же _note_can_modify), поэтому не дублируем каждую
+    проверку для обоих полей отдельно, кроме первого раза."""
     owner = register_business(client, email="clients-notes-delete@example.com", password="correct horse battery staple")
     headers = auth_headers(owner["access_token"])
     business_id = _get_business_id(client, owner["access_token"])
@@ -380,12 +383,26 @@ def test_client_note_delete_own_recent_only(client, db_session):
     assert created.status_code == 201
     note_id = created.json()["id"]
     assert created.json()["can_delete"] is True  # только что созданная своя запись — в окне
+    assert created.json()["can_edit"] is True
 
-    # Другой сотрудник ту же запись не видит удаляемой и не может удалить.
+    # Другой сотрудник ту же запись не видит редактируемой/удаляемой и не
+    # может ни изменить, ни удалить.
     listed_by_other = client.get(f"/api/businesses/{business_id}/clients/{client_id}/notes", headers=other_headers).json()
     assert listed_by_other[0]["can_delete"] is False
+    assert listed_by_other[0]["can_edit"] is False
+    forbidden_patch = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}/notes/{note_id}", json={"text": "Чужая правка"}, headers=other_headers
+    )
+    assert forbidden_patch.status_code == 403
     forbidden = client.delete(f"/api/businesses/{business_id}/clients/{client_id}/notes/{note_id}", headers=other_headers)
     assert forbidden.status_code == 403
+
+    # Сам автор в пределах окна может исправить текст (опечатался).
+    own_patch = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}/notes/{note_id}", json={"text": "Исправленный текст"}, headers=author_headers
+    )
+    assert own_patch.status_code == 200
+    assert own_patch.json()["text"] == "Исправленный текст"
 
     # "Перематываем" created_at за пределы окна — тест не может физически
     # ждать CLIENT_NOTE_DELETE_WINDOW_MINUTES (тот же приём, что и в
@@ -396,11 +413,21 @@ def test_client_note_delete_own_recent_only(client, db_session):
 
     expired = client.get(f"/api/businesses/{business_id}/clients/{client_id}/notes", headers=author_headers).json()
     assert expired[0]["can_delete"] is False  # своя, но окно уже прошло
+    assert expired[0]["can_edit"] is False
+    too_late_patch = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}/notes/{note_id}", json={"text": "Поздняя правка"}, headers=author_headers
+    )
+    assert too_late_patch.status_code == 403
     too_late = client.delete(f"/api/businesses/{business_id}/clients/{client_id}/notes/{note_id}", headers=author_headers)
     assert too_late.status_code == 403
 
-    # Владелец бизнеса удаляет ЛЮБУЮ запись в любой момент — модерация без
-    # ограничения по времени/авторству.
+    # Владелец бизнеса может изменить и удалить ЛЮБУЮ запись в любой
+    # момент — модерация без ограничения по времени/авторству.
+    owner_patch = client.patch(
+        f"/api/businesses/{business_id}/clients/{client_id}/notes/{note_id}", json={"text": "Правка владельца"}, headers=headers
+    )
+    assert owner_patch.status_code == 200
+    assert owner_patch.json()["text"] == "Правка владельца"
     owner_delete = client.delete(f"/api/businesses/{business_id}/clients/{client_id}/notes/{note_id}", headers=headers)
     assert owner_delete.status_code == 204
 

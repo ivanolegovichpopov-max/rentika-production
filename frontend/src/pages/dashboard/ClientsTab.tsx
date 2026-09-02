@@ -3022,17 +3022,26 @@ function BlacklistReasonModal({
  * тащить это в общий список клиентов, который и так может быть большим.
  *
  * С 37-го прохода — уже не полностью неприкосновенна: по итогам обсуждения
- * "нет возможности управлять записями" автор может удалить СВОЮ запись в
- * течение короткого окна после добавления (опечатался/добавил не то), не
- * задним числом. can_delete на каждой записи считается на backend
- * (_note_can_delete в app/api/routes/clients.py) — фронт просто следует
- * этому флагу, не дублируя логику "своя запись + окно по времени" у себя. */
+ * "нет возможности управлять записями" автор может изменить текст или
+ * удалить СВОЮ запись в течение короткого окна после добавления
+ * (опечатался/добавил не то), не задним числом. can_edit/can_delete на
+ * каждой записи считаются на backend (_note_can_modify в
+ * app/api/routes/clients.py) — фронт просто следует этим флагам, не
+ * дублируя логику "своя запись + окно по времени" у себя. */
 function ClientNotesJournal({ businessId, clientId }: { businessId: string; clientId: string }) {
   const [notes, setNotes] = useState<ClientNote[] | null>(null);
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Правка текста (37-й проход, продолжение — "Изменить" рядом с
+  // "Удалить") — editingId=null означает "ничего не редактируется",
+  // черновик текста держим отдельно от notes, чтобы не трогать список,
+  // пока правка не сохранена (тот же приём, что и editingLabelId/labelDraft
+  // в ClientDocumentsSection чуть ниже).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   useEffect(() => {
@@ -3066,6 +3075,32 @@ function ClientNotesJournal({ businessId, clientId }: { businessId: string; clie
       setError(err instanceof ApiError ? err.message : "Не удалось сохранить запись");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  function startEdit(note: ClientNote) {
+    setError(null);
+    setEditingId(note.id);
+    setDraft(note.text);
+  }
+
+  async function handleSaveEdit(note: ClientNote) {
+    if (!draft.trim()) return;
+    setError(null);
+    setSaving(true);
+    try {
+      const updated = await api.patch<ClientNote>(`/businesses/${businessId}/clients/${clientId}/notes/${note.id}`, {
+        text: draft.trim(),
+      });
+      setNotes((prev) => (prev ?? []).map((n) => (n.id === note.id ? updated : n)));
+      setEditingId(null);
+    } catch (err) {
+      // 403 сюда приходит только при гонке (окно истекло между рендером
+      // списка и кликом, либо запись изменил кто-то другой) — can_edit на
+      // кнопке уже отфильтровал все ожидаемые случаи заранее.
+      setError(err instanceof ApiError ? err.message : "Не удалось изменить запись");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -3107,30 +3142,78 @@ function ClientNotesJournal({ businessId, clientId }: { businessId: string; clie
       ) : notes.length === 0 ? (
         <div className="empty-note">Записей пока нет</div>
       ) : (
-        notes.map((n) => (
-          <div className="mini-item" key={n.id} style={{ alignItems: "flex-start" }}>
-            <span>{n.text}</span>
-            <span style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px" }}>
-              <span style={{ color: "var(--muted)", fontSize: "11.5px", whiteSpace: "nowrap" }}>
-                {n.employee_name ?? "—"} · {fmtDate(n.created_at.slice(0, 10))}
-              </span>
-              {/* Кнопка видна только когда can_delete=true — своя запись и
-                  ещё не вышло окно на удаление (либо владелец бизнеса,
-                  которому можно всегда, см. комментарий у компонента). */}
-              {n.can_delete && (
-                <button
-                  type="button"
-                  className="icon-btn mini-item-action"
-                  title="Удалить запись"
-                  disabled={deletingId === n.id}
-                  onClick={() => void handleDelete(n)}
-                >
-                  <IconTrash />
-                </button>
-              )}
-            </span>
-          </div>
-        ))
+        // journal-list — точка привязки для разделителей между записями
+        // (37-й проход: "нужно чтобы записи визуально разделялись друг с
+        // другом") и для .mini-item-action-hover в styles.css — см.
+        // комментарий там же про то, почему не переиспользуем .row-actions.
+        <div className="journal-list">
+          {notes.map((n) =>
+            editingId === n.id ? (
+              // Режим правки — целиком отдельная ветка разметки, а не
+              // условный рендер кусков внутри обычной строки: тут другая
+              // структура (textarea на всю ширину + кнопки Сохранить/
+              // Отмена под ней), пытаться уместить оба варианта в одну
+              // разметку было бы менее читаемо, чем два явных ветвления
+              // (тот же приём, что и editingLabelId в ClientDocumentsSection).
+              <div className="mini-item" key={n.id} style={{ alignItems: "stretch", flexDirection: "column", gap: "6px" }}>
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  rows={2}
+                  maxLength={2000}
+                  autoFocus
+                  disabled={saving}
+                  style={{ width: "100%", fontSize: "13px" }}
+                />
+                <div style={{ display: "flex", gap: "6px" }}>
+                  <button type="button" className="btn btn-sm" disabled={saving || !draft.trim()} onClick={() => void handleSaveEdit(n)}>
+                    {saving ? "Сохраняем…" : "Сохранить"}
+                  </button>
+                  <button type="button" className="btn btn-sm" disabled={saving} onClick={() => setEditingId(null)}>
+                    Отмена
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mini-item" key={n.id} style={{ alignItems: "flex-start" }}>
+                {/* Перенос длинного текста без пробелов (37-й проход:
+                    "если добавить длинную запись — выходит за границы
+                    экрана") — flex-элемент без min-width:0 по умолчанию не
+                    сжимается меньше содержимого, а нередактируемая строка
+                    без единого пробела (например, повторяющиеся символы)
+                    не имеет точек переноса вовсе — overflowWrap: "anywhere"
+                    разрешает перенос прямо посреди такого "слова", когда
+                    другого выхода нет. */}
+                <span style={{ flex: 1, minWidth: 0, wordBreak: "break-word", overflowWrap: "anywhere" }}>{n.text}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px", flexShrink: 0 }}>
+                  <span style={{ color: "var(--muted)", fontSize: "11.5px", whiteSpace: "nowrap" }}>
+                    {n.employee_name ?? "—"} · {fmtDate(n.created_at.slice(0, 10))}
+                  </span>
+                  {/* Обе кнопки видны только когда can_edit/can_delete=true —
+                      своя запись и ещё не вышло окно (либо владелец
+                      бизнеса, которому можно всегда, см. комментарий у
+                      компонента). */}
+                  {n.can_edit && (
+                    <button type="button" className="icon-btn mini-item-action" title="Изменить запись" onClick={() => startEdit(n)}>
+                      <IconEdit />
+                    </button>
+                  )}
+                  {n.can_delete && (
+                    <button
+                      type="button"
+                      className="icon-btn mini-item-action"
+                      title="Удалить запись"
+                      disabled={deletingId === n.id}
+                      onClick={() => void handleDelete(n)}
+                    >
+                      <IconTrash />
+                    </button>
+                  )}
+                </span>
+              </div>
+            )
+          )}
+        </div>
       )}
       {confirmDialog}
     </div>
