@@ -4,12 +4,17 @@ import { useData } from "../../context/DataContext";
 import type { Client, Equipment, Rental, RentalItem } from "../../api/types";
 import { money, fmtDate, dayDiff, todayISO, isoAddDays, spanDays } from "../../lib/format";
 import { RENTAL_META, Badge, rentalDisplayStatus, type StatusMeta } from "../../lib/statusMeta";
-import { IconPrinter, IconEdit, IconClose, IconAlert } from "../../lib/icons";
+import { IconPrinter, IconEdit, IconClose, IconAlert, IconCalendar } from "../../lib/icons";
 import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc } from "./documents";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
 import { Dropdown } from "../../components/Dropdown";
+import { MoreActionsMenu } from "../../components/MoreActionsMenu";
+import { clientDisplayRating } from "./clients/helpers";
+import { equipmentRateLabel, itemRateLabel } from "./rentals/helpers";
+import { exportRentalsCsv } from "./rentals/csv";
+import { RentalDetailPanel } from "./rentals/RentalDetailPanel";
 
 /**
  * Порт renderRentals()/addRentalForm()/editRentalForm()/issueRentalForm()/
@@ -25,10 +30,16 @@ import { Dropdown } from "../../components/Dropdown";
  * Это задокументированный, неизбежный разрыв с демо, а не недосмотр.
  *
  * Переключатель "Только рискованные" (ui.rentalRiskOnly в демо) — В ОТЛИЧИЕ
- * от фильтра по менеджеру, он держится не на ownerId, а на client.rating
+ * от фильтра по менеджеру, он держится не на ownerId, а на рейтинге клиента
  * ("на контроле"/"чёрный список"), которое в проде есть — по ошибке был
  * ранее записан в один список с фильтром по менеджеру и не перенесён.
- * Исправлено при третьей сверке с демо — реализован ниже (riskOnly).
+ * Исправлено при третьей сверке с демо — реализован ниже (riskOnly). 39-й
+ * проход, доработки по итогам обзора: сам riskOnly читал СЫРОЕ client.rating
+ * ("normal"/"blacklist" — только формальный чёрный список), а не живой
+ * clientDisplayRating (clients/helpers.tsx) — клиенты, у которых просрочка
+ * прямо сейчас, но которых никто вручную не заносил в чёрный список,
+ * фильтром не ловились. Исправлено — теперь используется clientDisplayRating,
+ * тот же расчёт, что и бейдж рейтинга во вкладке "Клиенты".
  */
 
 const FILTERS: { id: string; label: string }[] = [
@@ -106,41 +117,6 @@ function isUnderMaintenanceOn(eq: Equipment, dateIso: string): boolean {
   if (eq.status !== "maintenance") return false;
   if (!eq.maintenance_until) return true;
   return dateIso <= eq.maintenance_until;
-}
-
-/** periodPriceAfter теперь — цена за ОДИН ПОЛНЫЙ ИЛИ НАЧАТЫЙ шаг длиной
- * afterPeriodDays дней (двадцатый проход, п.4 обзора), а не цена, размазанная
- * линейно по дням — см. комментарий у EquipmentTab.tsx:rateLabel и
- * financeCalc.ts:itemCostForDays. afterPeriodDays==1 печатается как
- * "/сутки" для читаемости (самый частый случай — посуточная надбавка), любая
- * другая длина шага — как "/N дн". */
-function rateLabel(
-  dailyRate: number,
-  periodDays: number | null,
-  periodPrice: number | null,
-  periodPriceAfter: number | null,
-  afterPeriodDays: number | null
-): string {
-  if (periodDays && periodPrice) {
-    const afterDays = afterPeriodDays || 1;
-    const afterUnit = afterDays === 1 ? "сутки" : `${afterDays} дн`;
-    return `${money(periodPrice)}/${periodDays}дн` + (periodPriceAfter != null ? ` → ${money(periodPriceAfter)}/${afterUnit}` : "");
-  }
-  return `${money(dailyRate)}/сутки`;
-}
-
-function equipmentRateLabel(e: Equipment): string {
-  return rateLabel(e.daily_rate, e.period_days, e.period_price, e.period_price_after, e.after_period_days);
-}
-
-function itemRateLabel(it: RentalItem): string {
-  return rateLabel(
-    it.daily_rate_snapshot,
-    it.period_days_snapshot,
-    it.period_price_snapshot,
-    it.period_price_after_snapshot,
-    it.after_period_days_snapshot
-  );
 }
 
 /* ============================================================
@@ -758,11 +734,17 @@ export function RentalsTab({
   search,
   filter,
   setFilter,
+  onOpenClient,
 }: {
   businessId: string;
   search: string;
   filter: string;
   setFilter: (f: string) => void;
+  // Открыть карточку клиента с дашборд-уровня (39-й проход) — тот же
+  // кросс-вкладочный механизм dashClientId/setDashClientId, что уже
+  // используют DashboardTab и ClientsTab (см. Dashboard.tsx), нужен здесь
+  // для кнопки "Карточка клиента" внутри RentalDetailPanel.
+  onOpenClient: (clientId: string) => void;
 }) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
   // usePersistedState — девятнадцатый проход, п.4 обзора «Оборудования»:
@@ -770,10 +752,17 @@ export function RentalsTab({
   // EquipmentTab, отдельно на каждый businessId).
   const [sort, setSort] = usePersistedState(`rentals-sort:${businessId}`, "date");
   const [riskOnly, setRiskOnly] = useState(false);
+  // "Истекает скоро" (39-й проход, доработки по итогам обзора) — тот же
+  // порог daysLeft<=2, что уже красит карточку жёлтым бейджем ниже
+  // (soonBadge), но раньше это можно было увидеть только пролистывая весь
+  // список "В работе" глазами; теперь это ещё и фильтруемый переключатель,
+  // тем же паттерном, что riskOnly.
+  const [expiringOnly, setExpiringOnly] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [editRental, setEditRental] = useState<Rental | null>(null);
   const [issueRental, setIssueRental] = useState<Rental | null>(null);
   const [returnRental, setReturnRental] = useState<Rental | null>(null);
+  const [openRentalId, setOpenRentalId] = useState<string | null>(null);
   const [docModal, setDocModal] = useState<{ title: string; node: ReactNode } | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const { notify } = useToast();
@@ -785,9 +774,22 @@ export function RentalsTab({
 
     const client = clients.find((c) => c.id === r.client_id);
     const names = r.items.map((it) => equipment.find((e) => e.id === it.equipment_id)?.name ?? "").join(" ");
-    if (search && !((client?.name ?? "") + " " + names).toLowerCase().includes(search.toLowerCase())) return false;
+    // Поиск теперь захватывает и заметки при выдаче/возврате (39-й проход,
+    // п.5 обзора) — раньше можно было найти аренду только по клиенту/
+    // оборудованию, хотя в заметках нередко записано что-то по-настоящему
+    // уникальное для конкретной сделки ("оставил в залог паспорт", "просил
+    // доставку к 9 утра").
+    const haystack = [client?.name ?? "", names, r.issue_notes ?? "", r.return_notes ?? ""].join(" ").toLowerCase();
+    if (search && !haystack.includes(search.toLowerCase())) return false;
 
-    if (riskOnly && (!client || client.rating === "normal")) return false;
+    // Живой рейтинг (клиент "на контроле" вычисляется по текущей
+    // просрочке — см. clientDisplayRating), а не сырое client.rating: до
+    // исправления в 39-м проходе фильтр ловил только формальный чёрный
+    // список, но не текущую просрочку, из-за чего реально рискованные
+    // клиенты в него не попадали.
+    if (riskOnly && (!client || clientDisplayRating(client, rentals) === "normal")) return false;
+
+    if (expiringOnly && !(st === "active" && dayDiff(r.end_date) <= 2)) return false;
 
     return true;
   });
@@ -849,6 +851,23 @@ export function RentalsTab({
           >
             <IconAlert /> Только рискованные
           </button>
+          <button
+            type="button"
+            className={"btn" + (expiringOnly ? " btn-primary" : "")}
+            title="Показать только аренды в работе, которые истекают в ближайшие 2 дня"
+            onClick={() => setExpiringOnly((v) => !v)}
+          >
+            <IconCalendar /> Истекает скоро
+          </button>
+          <MoreActionsMenu
+            actions={[
+              {
+                key: "export",
+                label: "Экспорт CSV",
+                onClick: () => exportRentalsCsv(sorted, clients, equipment),
+              },
+            ]}
+          />
           <button className="btn btn-primary" type="button" onClick={() => setShowCreate(true)}>
             + Новая аренда
           </button>
@@ -866,12 +885,14 @@ export function RentalsTab({
         const itemNames = r.items.map((it) => equipment.find((e) => e.id === it.equipment_id)?.name ?? "—").join(", ");
 
         return (
-          // TODO: демо делает всю карточку кликабельной → открывает деталку клиента.
-          // Требует общего механизма "открыть клиента" между вкладками (пока
-          // ClientDetailPanel живёт только внутри ClientsTab) — не подключено в
-          // этом проходе. Класс "clickable" и обработчик клика на карточке
-          // сознательно не добавлены.
-          <div className="rental-card" key={r.id}>
+          // Карточка кликабельна целиком — открывает RentalDetailPanel (39-й
+          // проход; раньше это было отложено TODO'шкой, ждавшей общего
+          // механизма "открыть клиента" между вкладками — он появился ещё в
+          // 25-м проходе для ClientsTab/DashboardTab, здесь просто наконец
+          // подключён). Кнопки внутри .rental-actions останавливают
+          // всплытие (stopPropagation ниже), чтобы клик по ним не открывал
+          // панель поверх уже выполняемого действия.
+          <div className="rental-card clickable" key={r.id} onClick={() => setOpenRentalId(r.id)}>
             <div className="rental-main">
               <div className="rental-top">
                 <span className="rental-client">{client?.name ?? "Клиент удалён"}</span>
@@ -891,11 +912,11 @@ export function RentalsTab({
             {/* Клик по кнопкам не должен всплывать до карточки — в демо это было
                 бесплатно за счёт делегирования через closest() на уровне всего
                 документа (обработчик разбирал event.target независимо от того,
-                где именно во вложенной разметке произошёл клик). В React у
-                карточки сейчас нет собственного onClick (см. TODO выше), но
-                stopPropagation оставлен здесь заранее — как только клик по
-                карточке будет подключён, кнопки внутри .rental-actions не
-                должны его триггерить. */}
+                где именно во вложенной разметке произошёл клик). Теперь у
+                самой карточки есть onClick (открывает RentalDetailPanel, см.
+                выше) — stopPropagation здесь обязателен, иначе, например,
+                клик по "Отменить" ещё и открывал бы панель деталей поверх
+                диалога подтверждения. */}
             <div className="rental-actions" onClick={(e) => e.stopPropagation()}>
               {r.status === "booked" && (
                 <>
@@ -1017,6 +1038,21 @@ export function RentalsTab({
       <DocModal title={docModal?.title ?? ""} open={!!docModal} onClose={() => setDocModal(null)}>
         {docModal?.node}
       </DocModal>
+
+      {/* Слайдовер деталей аренды (39-й проход) — тот же приём, что и
+          слайдовер клиента/оборудования с дашборда: затемнённый фон + панель
+          поверх текущей вкладки, закрывается кликом по фону или крестиком. */}
+      {openRentalId && <div className="slideover-backdrop" onClick={() => setOpenRentalId(null)} />}
+      {openRentalId && (
+        <RentalDetailPanel
+          rentalId={openRentalId}
+          onClose={() => setOpenRentalId(null)}
+          onOpenClient={(clientId) => {
+            setOpenRentalId(null);
+            onOpenClient(clientId);
+          }}
+        />
+      )}
 
       {confirmDialog}
     </div>

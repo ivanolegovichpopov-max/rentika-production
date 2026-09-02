@@ -443,6 +443,7 @@ function DashboardShell({
                   search={search}
                   filter={rentalFilter}
                   setFilter={setRentalFilter}
+                  onOpenClient={setDashClientId}
                 />
               )}
               {view === "calendar" && <CalendarTab businessId={businessId} search={search} />}
