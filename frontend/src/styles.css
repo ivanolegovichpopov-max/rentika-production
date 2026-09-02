@@ -458,6 +458,14 @@ tbody tr[data-clickable="true"]:hover { background: var(--surface-2); }
 .rental-items { font-size: 13px; margin-bottom: 6px; }
 .rental-meta { display: flex; align-items: center; gap: 14px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
 .rental-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+/* Шеврон-намёк "карточка кликабельна" (40-й проход, по итогам обзора) —
+   раньше единственным сигналом был hover-эффект самой карточки, заметный,
+   только когда пользователь уже навёлся. margin-left: auto прижимает его к
+   правому краю .rental-top, не трогая grid-раскладку карточки; на hover
+   карточки чуть темнеет вместе с остальным фоном (см. .clickable:hover
+   выше), а сам шеврон дополнительно подсвечивается акцентным цветом. */
+.rental-open-hint { margin-left: auto; display: inline-flex; align-items: center; color: var(--muted); flex: none; }
+.rental-card.clickable:hover .rental-open-hint { color: var(--accent); }
 
 /* ---------- Календарь занятости ---------- */
 /* max-height + overflow-y: auto делают .cal-wrap собственной прокручиваемой панелью:

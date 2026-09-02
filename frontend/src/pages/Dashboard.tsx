@@ -444,6 +444,7 @@ function DashboardShell({
                   filter={rentalFilter}
                   setFilter={setRentalFilter}
                   onOpenClient={setDashClientId}
+                  onOpenEquipment={setDashEquipmentId}
                 />
               )}
               {view === "calendar" && <CalendarTab businessId={businessId} search={search} />}

@@ -4,7 +4,7 @@ import { useData } from "../../context/DataContext";
 import type { Client, Equipment, Rental, RentalItem } from "../../api/types";
 import { money, fmtDate, dayDiff, todayISO, isoAddDays, spanDays } from "../../lib/format";
 import { RENTAL_META, Badge, rentalDisplayStatus, type StatusMeta } from "../../lib/statusMeta";
-import { IconPrinter, IconEdit, IconClose, IconAlert, IconCalendar } from "../../lib/icons";
+import { IconPrinter, IconEdit, IconClose, IconAlert, IconCalendar, IconChevronRight } from "../../lib/icons";
 import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc } from "./documents";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
@@ -735,6 +735,7 @@ export function RentalsTab({
   filter,
   setFilter,
   onOpenClient,
+  onOpenEquipment,
 }: {
   businessId: string;
   search: string;
@@ -745,6 +746,10 @@ export function RentalsTab({
   // используют DashboardTab и ClientsTab (см. Dashboard.tsx), нужен здесь
   // для кнопки "Карточка клиента" внутри RentalDetailPanel.
   onOpenClient: (clientId: string) => void;
+  // То же самое для оборудования (40-й проход, по итогам обзора панели
+  // деталей аренды) — dashEquipmentId/setDashEquipmentId, нужен для клика
+  // по позиции в разделе "Оборудование" внутри RentalDetailPanel.
+  onOpenEquipment: (equipmentId: string) => void;
 }) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
   // usePersistedState — девятнадцатый проход, п.4 обзора «Оборудования»:
@@ -898,6 +903,15 @@ export function RentalsTab({
                 <span className="rental-client">{client?.name ?? "Клиент удалён"}</span>
                 <Badge meta={RENTAL_META[st]} />
                 {soonBadge && <Badge meta={soonBadge} />}
+                {/* Намёк, что карточка целиком кликабельна (40-й проход, по
+                    итогам обзора: раньше это было незаметно — только
+                    hover-эффект самой карточки, который пользователь мог
+                    заметить, только уже наведясь). margin-left: auto
+                    прижимает шеврон к правому краю строки, не трогая
+                    grid-раскладку самой карточки. */}
+                <span className="rental-open-hint" title="Открыть детали аренды">
+                  <IconChevronRight />
+                </span>
               </div>
               <div className="rental-items">{itemNames}</div>
               <div className="rental-meta">
@@ -939,31 +953,45 @@ export function RentalsTab({
                   <button className="btn btn-sm" type="button" onClick={() => setEditRental(r)}>
                     <IconEdit /> Изменить
                   </button>
-                  <button
-                    className="btn btn-sm"
-                    type="button"
-                    onClick={() => openDoc("Акт приёма-передачи", buildIssueDoc(r, client, equipment))}
-                  >
-                    <IconPrinter /> Акт выдачи
-                  </button>
                 </>
               )}
-              {r.status === "returned" && (
-                <button
-                  className="btn btn-sm"
-                  type="button"
-                  onClick={() => openDoc("Акт возврата", buildReturnDoc(r, client, equipment))}
-                >
-                  <IconPrinter /> Акт возврата
-                </button>
-              )}
-              <button
-                className="btn btn-sm"
-                type="button"
-                onClick={() => openDoc("Договор аренды", buildContractDoc(r, client, equipment))}
-              >
-                <IconPrinter /> Договор
-              </button>
+              {/* Печать (акты/договор) — под "Ещё" (40-й проход, по итогам
+                  обзора: раньше три отдельные кнопки-принтера растягивали
+                  столбец действий заметно выше основного текста карточки).
+                  "Договор" доступен всегда, вне зависимости от статуса —
+                  тот же список, что был раньше безусловной кнопкой ниже
+                  всех остальных. */}
+              <MoreActionsMenu
+                align="right"
+                actions={[
+                  ...(r.status === "active"
+                    ? [
+                        {
+                          key: "issue-doc",
+                          label: "Акт выдачи",
+                          icon: <IconPrinter />,
+                          onClick: () => openDoc("Акт приёма-передачи", buildIssueDoc(r, client, equipment)),
+                        },
+                      ]
+                    : []),
+                  ...(r.status === "returned"
+                    ? [
+                        {
+                          key: "return-doc",
+                          label: "Акт возврата",
+                          icon: <IconPrinter />,
+                          onClick: () => openDoc("Акт возврата", buildReturnDoc(r, client, equipment)),
+                        },
+                      ]
+                    : []),
+                  {
+                    key: "contract-doc",
+                    label: "Договор",
+                    icon: <IconPrinter />,
+                    onClick: () => openDoc("Договор аренды", buildContractDoc(r, client, equipment)),
+                  },
+                ]}
+              />
             </div>
           </div>
         );
@@ -1050,6 +1078,10 @@ export function RentalsTab({
           onOpenClient={(clientId) => {
             setOpenRentalId(null);
             onOpenClient(clientId);
+          }}
+          onOpenEquipment={(equipmentId) => {
+            setOpenRentalId(null);
+            onOpenEquipment(equipmentId);
           }}
         />
       )}

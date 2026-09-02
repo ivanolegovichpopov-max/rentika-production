@@ -10,14 +10,15 @@
  *
  * Открывается кликом по самой карточке (см. RentalsTab.tsx: класс
  * .rental-card.clickable + onClick на карточке, кнопки действий внутри
- * останавливают всплытие). Намеренно ПОЛНОСТЬЮ read-only: у карточки в
- * списке уже есть все нужные кнопки действий (Выдать/Принять возврат/
- * Изменить/Отменить/печать) — дублировать их здесь значило бы поддерживать
- * два места с одной и той же логикой ради того, что и так на расстоянии
- * одного клика. Единственное действие панели — открыть карточку клиента
- * (onOpenClient), тот же кросс-вкладочный механизм dashClientId/
- * setDashClientId, что уже используют DashboardTab и ClientsTab (см.
- * Dashboard.tsx).
+ * останавливают всплытие). Намеренно ПОЛНОСТЬЮ read-only в части действий
+ * над самой арендой: у карточки в списке уже есть все нужные кнопки
+ * (Выдать/Принять возврат/Изменить/Отменить/печать) — дублировать их здесь
+ * значило бы поддерживать два места с одной и той же логикой ради того, что
+ * и так на расстоянии одного клика. Панель умеет открывать связанные
+ * карточки — клиента (onOpenClient) и позиции оборудования
+ * (onOpenEquipment, добавлено в 40-м проходе по итогам обзора) — тем же
+ * кросс-вкладочным механизмом dashClientId/dashEquipmentId, что уже
+ * используют DashboardTab и ClientsTab (см. Dashboard.tsx).
  */
 import type { Rental } from "../../../api/types";
 import { useData } from "../../../context/DataContext";
@@ -30,10 +31,12 @@ export function RentalDetailPanel({
   rentalId,
   onClose,
   onOpenClient,
+  onOpenEquipment,
 }: {
   rentalId: string;
   onClose: () => void;
   onOpenClient: (clientId: string) => void;
+  onOpenEquipment: (equipmentId: string) => void;
 }) {
   const { equipment, clients, rentals } = useData();
   const rental: Rental | undefined = rentals.find((r) => r.id === rentalId);
@@ -72,7 +75,12 @@ export function RentalDetailPanel({
         {rental.items.map((it) => {
           const eq = equipment.find((e) => e.id === it.equipment_id);
           return (
-            <div className="mini-item" key={it.equipment_id}>
+            <div
+              className={"mini-item" + (eq ? " clickable" : "")}
+              key={it.equipment_id}
+              onClick={eq ? () => onOpenEquipment(eq.id) : undefined}
+              title={eq ? "Открыть карточку оборудования" : undefined}
+            >
               <span>{eq?.name ?? "—"}</span>
               <span className="mono">{itemRateLabel(it)}</span>
             </div>
