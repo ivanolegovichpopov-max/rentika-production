@@ -21,7 +21,6 @@ import {
   IconRestore,
   IconPhone,
   IconSend,
-  IconMail,
   IconFile,
   IconGift,
   IconSliders,
@@ -2310,8 +2309,18 @@ export function ClientDetailPanel({
           наверх, не заставлять листать всю карточку до конца ради простого
           удаления") — раньше были самым последним блоком слайдовера, теперь
           сразу под шапкой, тем же принципом, что и заголовок/аватар выше:
-          самое частое взаимодействие с карточкой не должно требовать скролла. */}
-      <div className="slideover-section" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          самое частое взаимодействие с карточкой не должно требовать скролла.
+          35-й проход, обзор "карточка перегружена" — в основном ряду
+          остались только действия на каждый день (аренда/правка/удаление);
+          "Объединить с другим клиентом" и отправка сводки (редкие действия)
+          перенесены в "Ещё" (MoreActionsMenu, тот же приём, что и в шапке
+          списка клиентов/оборудования). Отдельный ряд кнопок
+          "Позвонить"/WhatsApp/"Почта" под этим блоком убран целиком — те же
+          действия теперь иконками прямо у "Телефон"/Email в блоке "Контакты"
+          ниже, рядом со значением, к которому относятся, вместо того чтобы
+          дублировать один и тот же номер тремя разными элементами на экране
+          (текст в шапке → кнопка здесь → ссылка в "Контактах"). */}
+      <div className="slideover-section" style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
         {/* "+ Новая аренда" прямо из карточки (25-й проход, п.1 обзора) —
             открывает глобальную модалку выше по дереву (см. комментарий у
             onCreateRental в сигнатуре компонента), доступна везде, где
@@ -2326,14 +2335,6 @@ export function ClientDetailPanel({
             Изменить
           </button>
         )}
-        {/* Слияние дублей (24-й проход, п.7 обзора) — доступно только там же,
-            где и полноценное редактирование (см. комментарий у onEdit выше),
-            и только если в бизнесе есть с кем объединять. */}
-        {onEdit && clients.length > 1 && (
-          <button className="btn" onClick={() => setShowMerge(true)}>
-            Объединить с другим клиентом
-          </button>
-        )}
         <button
           className="btn btn-danger-ghost"
           onClick={() => {
@@ -2342,69 +2343,59 @@ export function ClientDetailPanel({
         >
           Удалить
         </button>
+        {((onEdit && clients.length > 1) || (summaryRental && (client.phone || client.email))) && (
+          <MoreActionsMenu
+            actions={[
+              // Слияние дублей (24-й проход, п.7 обзора) — доступно только
+              // там же, где и полноценное редактирование, и только если в
+              // бизнесе есть с кем объединять.
+              ...(onEdit && clients.length > 1
+                ? [{ key: "merge", label: "Объединить с другим клиентом", onClick: () => setShowMerge(true) }]
+                : []),
+              // Сводка по аренде (26-й проход, «глазами обычного
+              // пользователя», п.5) — ТОЛЬКО текстом: ни wa.me, ни mailto: не
+              // умеют вкладывать файл, это ограничение самих протоколов, не
+              // проекта. Договор целиком по-прежнему открывается по клику на
+              // строку истории — это просто быстрый способ переслать
+              // клиенту суть.
+              ...(summaryRental && client.phone
+                ? [
+                    {
+                      key: "summary-wa",
+                      label: "Сводка в WhatsApp",
+                      onClick: () =>
+                        window.open(
+                          `https://wa.me/${normalizePhoneDigits(client.phone!)}?text=${encodeURIComponent(
+                            buildRentalSummaryText(summaryRental, client, equipment)
+                          )}`,
+                          "_blank",
+                          "noreferrer"
+                        ),
+                    },
+                  ]
+                : []),
+              ...(summaryRental && client.email
+                ? [
+                    {
+                      key: "summary-email",
+                      label: "Сводка на почту",
+                      onClick: () => {
+                        window.location.href = `mailto:${client.email}?subject=${encodeURIComponent(
+                          "Информация по аренде"
+                        )}&body=${encodeURIComponent(buildRentalSummaryText(summaryRental, client, equipment))}`;
+                      },
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        )}
       </div>
 
       {incompleteProfile && (
         <div className="slideover-section">
           <div className="form-error">
             Неполный профиль: не указан ни телефон, ни документ — стоит дозаполнить перед выдачей техники.
-          </div>
-        </div>
-      )}
-
-      {(client.phone || client.email) && (
-        <div className="slideover-section" style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          {client.phone && (
-            <a className="btn btn-sm" href={`tel:${client.phone}`}>
-              <IconPhone /> Позвонить
-            </a>
-          )}
-          {client.phone && (
-            <a className="btn btn-sm" href={`https://wa.me/${normalizePhoneDigits(client.phone)}`} target="_blank" rel="noreferrer">
-              <IconSend /> WhatsApp
-            </a>
-          )}
-          {client.email && (
-            <a className="btn btn-sm" href={`mailto:${client.email}`}>
-              <IconMail /> Почта
-            </a>
-          )}
-        </div>
-      )}
-
-      {/* Отправить клиенту сводку по аренде (26-й проход, «глазами обычного
-          пользователя», п.5) — ТОЛЬКО текстом: ни wa.me, ни mailto: не умеют
-          вкладывать файл, это ограничение самих протоколов, не проекта.
-          Договор целиком по-прежнему открывается по клику на строку истории
-          (см. ниже) — это просто быстрый способ переслать клиенту суть.  */}
-      {summaryRental && (client.phone || client.email) && (
-        <div className="slideover-section">
-          <div className="field-hint" style={{ marginBottom: "8px" }}>
-            Отправить клиенту сводку по аренде (текстом):
-          </div>
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            {client.phone && (
-              <a
-                className="btn btn-sm"
-                href={`https://wa.me/${normalizePhoneDigits(client.phone)}?text=${encodeURIComponent(
-                  buildRentalSummaryText(summaryRental, client, equipment)
-                )}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Сводка в WhatsApp
-              </a>
-            )}
-            {client.email && (
-              <a
-                className="btn btn-sm"
-                href={`mailto:${client.email}?subject=${encodeURIComponent("Информация по аренде")}&body=${encodeURIComponent(
-                  buildRentalSummaryText(summaryRental, client, equipment)
-                )}`}
-              >
-                Сводка на почту
-              </a>
-            )}
           </div>
         </div>
       )}
@@ -2425,17 +2416,30 @@ export function ClientDetailPanel({
         <>
           <div className="slideover-section">
             <h4>Надёжность</h4>
-            <div style={{ marginBottom: "10px", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-              <Badge meta={RATING_META[displayRating]} />
-              {/* Постоянная пометка "когда-то был в чёрном списке" (29-й
-                  проход, п.8 обзора) — не сбрасывается автоматически, видна
-                  и после того, как клиента реабилитировали. */}
-              {client.was_blacklisted && client.rating !== "blacklist" && (
-                <span title="Раньше уже был в чёрном списке" style={{ display: "inline-block" }}>
-                  <Badge meta={{ label: "Был в чёрном списке", tone: "muted" }} />
-                </span>
-              )}
-            </div>
+            {/* Бейдж статуса (35-й проход, обзор "карточка перегружена")
+                показан теперь только для displayRating === "watch" — для
+                normal/blacklist подсветка активной кнопки в переключателе
+                ниже уже однозначно и без дублирования показывает то же самое
+                состояние, отдельный бейдж над ним был чистым повтором.
+                "Watch" переключатель показать не может: кнопок в нём всего
+                две (Надёжный/Чёрный список — "На контроле" из них намеренно
+                убран ещё в 29-м проходе, п.6, см. комментарий ниже), а
+                "На контроле" — не третье ручное состояние, а вычисляется
+                поверх "Надёжного" при текущей просрочке, поэтому здесь
+                бейдж — единственное место, где это вообще видно. */}
+            {(displayRating === "watch" || (client.was_blacklisted && client.rating !== "blacklist")) && (
+              <div style={{ marginBottom: "10px", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                {displayRating === "watch" && <Badge meta={RATING_META[displayRating]} />}
+                {/* Постоянная пометка "когда-то был в чёрном списке" (29-й
+                    проход, п.8 обзора) — не сбрасывается автоматически, видна
+                    и после того, как клиента реабилитировали. */}
+                {client.was_blacklisted && client.rating !== "blacklist" && (
+                  <span title="Раньше уже был в чёрном списке" style={{ display: "inline-block" }}>
+                    <Badge meta={{ label: "Был в чёрном списке", tone: "muted" }} />
+                  </span>
+                )}
+              </div>
+            )}
             {client.rating === "blacklist" && client.blacklist_reason && (
               <div className="field-hint" style={{ marginBottom: "10px" }}>
                 Причина: {client.blacklist_reason}
@@ -2497,10 +2501,27 @@ export function ClientDetailPanel({
               {/* Телефон отдельной строкой в блоке "Контакты" (29-й проход,
                   п.1 обзора: раньше номер был виден только под именем в
                   шапке, а сам блок "Контакты" его не показывал вовсе) —
-                  кликабельная tel:-ссылка, тем же принципом, что и кнопка
-                  "Позвонить" выше. */}
+                  кликабельная tel:-ссылка. Иконка WhatsApp рядом (35-й
+                  проход, обзор "карточка перегружена") — раньше это был
+                  отдельный ряд кнопок "Позвонить"/WhatsApp/"Почта" наверху
+                  карточки, дублировавший номер, который и так виден здесь;
+                  теперь оба способа связаться стоят прямо у значения, к
+                  которому относятся, а не оторваны в свой блок. */}
               <span className="k">Телефон</span>
-              <span>{client.phone ? <a href={`tel:${client.phone}`}>{formatPhoneInput(client.phone)}</a> : "—"}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                {client.phone ? <a href={`tel:${client.phone}`}>{formatPhoneInput(client.phone)}</a> : "—"}
+                {client.phone && (
+                  <a
+                    className="icon-btn"
+                    href={`https://wa.me/${normalizePhoneDigits(client.phone)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Написать в WhatsApp"
+                  >
+                    <IconSend />
+                  </a>
+                )}
+              </span>
               <span className="k">Email</span>
               <span>{client.email ? <a href={`mailto:${client.email}`}>{client.email}</a> : "—"}</span>
               <span className="k">Документ</span>

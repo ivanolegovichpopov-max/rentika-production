@@ -139,8 +139,17 @@ a { color: var(--accent); }
 .btn-danger:hover { background: var(--critical-hover); border-color: var(--critical-hover); color: #fff; }
 .btn-sm { padding: 5px 10px; font-size: 12.5px; border-radius: 16px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-button.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border-radius: 50%; border: none; background: none; color: var(--ink-secondary); cursor: pointer; }
-button.icon-btn:hover { background: var(--surface-2); }
+/* Селектор ослаблен с button.icon-btn до .icon-btn (35-й проход, обзор
+   "карточка перегружена") — до этого класс оформлял кнопку только на
+   <button>, а .icon-btn на <a> (уже была пара таких ссылок — звонок доп.
+   контакту в "Контактах", и новая иконка WhatsApp там же) оставался без
+   стилей: без кружка, без hover-фона, без фиксированного размера, просто
+   голая иконка не по центру. border/background/cursor не специфичны для
+   button — переносятся на .icon-btn без потерь; text-decoration: none нужен
+   только для <a>, но безвреден и на <button>, которая подчёркивания и так
+   не имеет. */
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border-radius: 50%; border: none; background: none; color: var(--ink-secondary); cursor: pointer; text-decoration: none; }
+.icon-btn:hover { background: var(--surface-2); }
 
 /* ---------- Формы ---------- */
 input, select, textarea {
