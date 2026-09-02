@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { IconChevronDown } from "../lib/icons";
+import { IconChevronDown, IconMore } from "../lib/icons";
 
 export interface MoreAction {
   key: string;
@@ -42,6 +42,7 @@ export function MoreActionsMenu({
   actions,
   label = "Ещё",
   align = "left",
+  iconOnly = false,
 }: {
   actions: MoreAction[];
   label?: string;
@@ -55,6 +56,15 @@ export function MoreActionsMenu({
    * (min-width: 220px) за пределы экрана, т.к. слева от триггера почти нет
    * места, а справа — совсем. */
   align?: "left" | "right";
+  /** Компактный триггер — круглая icon-btn с точками (IconMore) вместо
+   * текста "Ещё" + шеврона (36-й проход, обзор карточки клиента: в узком
+   * ряду кнопок карточки клиента текстовый вариант не помещался в строку
+   * и переносился на отдельную, из-за чего смотрелся отдельно повисшим
+   * элементом — компактный вариант на ~30-40px уже, обычно этого хватает,
+   * чтобы уместиться в общий ряд без переноса). `label` в этом режиме
+   * используется только как `title` кнопки для доступности/подсказки, на
+   * экране не показывается. */
+  iconOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -70,10 +80,16 @@ export function MoreActionsMenu({
 
   return (
     <div className="cat-filter" ref={ref}>
-      <button type="button" className="more-menu-btn" onClick={() => setOpen((v) => !v)}>
-        <span>{label}</span>
-        <IconChevronDown />
-      </button>
+      {iconOnly ? (
+        <button type="button" className="icon-btn" title={label} onClick={() => setOpen((v) => !v)}>
+          <IconMore />
+        </button>
+      ) : (
+        <button type="button" className="more-menu-btn" onClick={() => setOpen((v) => !v)}>
+          <span>{label}</span>
+          <IconChevronDown />
+        </button>
+      )}
       {open && (
         <div className={"cat-filter-panel" + (align === "right" ? " cat-filter-panel-right" : "")}>
           {actions.map((a) => (

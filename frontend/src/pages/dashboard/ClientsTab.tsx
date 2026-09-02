@@ -2353,6 +2353,7 @@ export function ClientDetailPanel({
           <div style={{ marginLeft: "auto" }}>
           <MoreActionsMenu
             align="right"
+            iconOnly
             actions={[
               // Слияние дублей (24-й проход, п.7 обзора) — доступно только
               // там же, где и полноценное редактирование, и только если в
@@ -2432,41 +2433,36 @@ export function ClientDetailPanel({
         <>
           <div className="slideover-section">
             <h4>Надёжность</h4>
-            {/* Бейдж статуса (35-й проход, обзор "карточка перегружена")
-                показан теперь только для displayRating === "watch" — для
-                normal/blacklist подсветка активной кнопки в переключателе
-                ниже уже однозначно и без дублирования показывает то же самое
-                состояние, отдельный бейдж над ним был чистым повтором.
-                "Watch" переключатель показать не может: кнопок в нём всего
-                две (Надёжный/Чёрный список — "На контроле" из них намеренно
-                убран ещё в 29-м проходе, п.6, см. комментарий ниже), а
-                "На контроле" — не третье ручное состояние, а вычисляется
-                поверх "Надёжного" при текущей просрочке, поэтому здесь
-                бейдж — единственное место, где это вообще видно. */}
-            {(displayRating === "watch" || (client.was_blacklisted && client.rating !== "blacklist")) && (
-              <div style={{ marginBottom: "10px", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                {displayRating === "watch" && <Badge meta={RATING_META[displayRating]} />}
-                {/* Постоянная пометка "когда-то был в чёрном списке" (29-й
-                    проход, п.8 обзора) — не сбрасывается автоматически, видна
-                    и после того, как клиента реабилитировали. */}
-                {client.was_blacklisted && client.rating !== "blacklist" && (
-                  <span title="Раньше уже был в чёрном списке" style={{ display: "inline-block" }}>
-                    <Badge meta={{ label: "Был в чёрном списке", tone: "muted" }} />
-                  </span>
-                )}
-              </div>
-            )}
-            {client.rating === "blacklist" && client.blacklist_reason && (
-              <div className="field-hint" style={{ marginBottom: "10px" }}>
-                Причина: {client.blacklist_reason}
-              </div>
-            )}
+            {/* Бейдж(и) статуса и кнопки выбора — в одном ряду (37-й проход,
+                обзор "На контроле как будто просится в один ряд с
+                остальными статусами"): раньше бейдж рисовался отдельным
+                блоком над переключателем, из-за чего визуально выглядел
+                самостоятельным полем, а не тем же статусом. Бейдж
+                displayRating === "watch" показан по той же причине, что и
+                раньше (35-й проход) — normal/blacklist подсветка активной
+                кнопки в переключателе уже однозначно показывает то же самое
+                состояние без дублирования, а "Watch" переключатель показать
+                не может: кнопок в нём всего две (Надёжный/Чёрный список —
+                "На контроле" из них намеренно убран ещё в 29-м проходе, п.6,
+                см. комментарий ниже), а "На контроле" — не третье ручное
+                состояние, а вычисляется поверх "Надёжного" при текущей
+                просрочке, поэтому бейдж — единственное место, где это вообще
+                видно. */}
             {/* "На контроле" убран из кнопок выбора (29-й проход, п.6 обзора)
                 — это больше не ручное состояние, а вычисляется само по
                 текущей просрочке (см. clientDisplayRating/displayRating
-                выше), поэтому выбирать осталось только между "Надёжный" и
+                выше), поэтому выбирать остаётся только между "Надёжный" и
                 "Чёрный список". */}
-            <div className="rating-picker">
+            <div className="rating-picker" style={{ alignItems: "center" }}>
+              {displayRating === "watch" && <Badge meta={RATING_META[displayRating]} />}
+              {/* Постоянная пометка "когда-то был в чёрном списке" (29-й
+                  проход, п.8 обзора) — не сбрасывается автоматически, видна
+                  и после того, как клиента реабилитировали. */}
+              {client.was_blacklisted && client.rating !== "blacklist" && (
+                <span title="Раньше уже был в чёрном списке" style={{ display: "inline-block" }}>
+                  <Badge meta={{ label: "Был в чёрном списке", tone: "muted" }} />
+                </span>
+              )}
               <button
                 className={"btn btn-sm" + (client.rating === "normal" ? " btn-primary" : "")}
                 onClick={() => void setRating("normal")}
@@ -2480,6 +2476,11 @@ export function ClientDetailPanel({
                 Чёрный список
               </button>
             </div>
+            {client.rating === "blacklist" && client.blacklist_reason && (
+              <div className="field-hint" style={{ marginTop: "8px" }}>
+                Причина: {client.blacklist_reason}
+              </div>
+            )}
             {displayRating === "watch" && client.rating !== "blacklist" && (
               <div className="field-hint" style={{ marginTop: "8px" }}>
                 Статус «На контроле» выставляется автоматически, пока у клиента есть просрочка прямо сейчас — вручную

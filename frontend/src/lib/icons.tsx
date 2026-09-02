@@ -105,6 +105,18 @@ export const IconCalendar = (p: SVGProps<SVGSVGElement>) => (
 export const IconChevronDown = (p: SVGProps<SVGSVGElement>) => (
   <Svg strokeWidth={2.4} {...p}><polyline points="6 9 12 15 18 9" /></Svg>
 );
+/* Три закрашенных точки — иконка "ещё" для компактного варианта
+ * MoreActionsMenu (36-й проход, обзор карточки клиента, iconOnly). Не
+ * штриховая, как остальные иконки файла (Svg по умолчанию fill="none"),
+ * а закрашенная — fill/stroke переопределены на самих <circle>, иначе
+ * точки нулевого радиуса были бы просто невидимы (обводить нечего). */
+export const IconMore = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}>
+    <circle cx="5" cy="12" r="1.8" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="12" r="1.8" fill="currentColor" stroke="none" />
+  </Svg>
+);
 export const IconEye = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></Svg>
 );
