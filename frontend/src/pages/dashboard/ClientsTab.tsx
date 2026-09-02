@@ -2352,6 +2352,7 @@ export function ClientDetailPanel({
         {((onEdit && clients.length > 1) || (summaryRental && (client.phone || client.email))) && (
           <div style={{ marginLeft: "auto" }}>
           <MoreActionsMenu
+            align="right"
             actions={[
               // Слияние дублей (24-й проход, п.7 обзора) — доступно только
               // там же, где и полноценное редактирование, и только если в

@@ -906,6 +906,11 @@ tbody tr[data-clickable="true"]:hover .row-actions { background: var(--surface-2
   overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: var(--shadow-lg); padding: 6px;
 }
+/* Вариант раскрытия от правого края триггера (36-й проход, MoreActionsMenu
+   align="right") — см. комментарий у align в MoreActionsMenu.tsx: нужен,
+   когда сам триггер стоит у правого края узкого контейнера и раскрытие по
+   умолчанию (left: 0) уводит панель за экран. */
+.cat-filter-panel-right { left: auto; right: 0; }
 .cat-filter-option {
   /* flex-direction: row обязателен явно — .cat-filter-option это <label>, а
      базовый селектор `label` в этом файле задаёт flex-direction: column (для

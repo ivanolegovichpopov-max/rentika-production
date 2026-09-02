@@ -38,7 +38,24 @@ export interface MoreAction {
  * .cat-filter-panel/.cat-filter-option, чтобы не плодить лишний CSS для
  * того, что и так выглядит правильно.
  */
-export function MoreActionsMenu({ actions, label = "Ещё" }: { actions: MoreAction[]; label?: string }) {
+export function MoreActionsMenu({
+  actions,
+  label = "Ещё",
+  align = "left",
+}: {
+  actions: MoreAction[];
+  label?: string;
+  /** Сторона, от которой раскрывается панель (36-й проход, обзор карточки
+   * клиента) — по умолчанию "left" (левый край панели совпадает с левым
+   * краем кнопки-триггера), как было всегда и как по-прежнему нужно в
+   * широких тулбарах списков «Клиенты»/«Оборудование». "right" — для
+   * случая, когда сам триггер прижат к правому краю узкого контейнера
+   * (например, слайдовер карточки клиента, кнопка "Ещё" с margin-left:
+   * auto) — там раскрытие "от левого края кнопки вправо" уводит панель
+   * (min-width: 220px) за пределы экрана, т.к. слева от триггера почти нет
+   * места, а справа — совсем. */
+  align?: "left" | "right";
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -58,7 +75,7 @@ export function MoreActionsMenu({ actions, label = "Ещё" }: { actions: MoreAc
         <IconChevronDown />
       </button>
       {open && (
-        <div className="cat-filter-panel">
+        <div className={"cat-filter-panel" + (align === "right" ? " cat-filter-panel-right" : "")}>
           {actions.map((a) => (
             <button
               type="button"
