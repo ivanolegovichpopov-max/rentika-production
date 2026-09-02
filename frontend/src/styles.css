@@ -323,6 +323,18 @@ div.due-item, div.mini-item { display: flex; align-items: center; justify-conten
 
 .mini-item { font-size: 13px; }
 .mini-item-actions { display: flex; align-items: center; gap: 8px; }
+/* Значки удаления/редактирования в строке "Документы"/"Журнал" карточки
+   клиента (37-й проход, по образцу .row-actions .icon-btn в таблицах
+   Клиенты/Оборудование — тот же принцип: редко нужное действие не должно
+   постоянно соревноваться за внимание с самим содержимым строки). Класс
+   вешается ТОЛЬКО на сами кнопки удаления/редактирования, а не на всю
+   строку метаданных рядом с ними (дата, автор) — те остаются видны всегда,
+   прячутся именно значки-действия. @media (hover: none) — тот же фолбэк
+   для тач-экранов, что и у .row-actions: наводить нечем, значит скрывать
+   нечем компенсировать. */
+.mini-item-action { opacity: 0; transition: opacity 0.12s; }
+.mini-item:hover .mini-item-action, .mini-item:focus-within .mini-item-action { opacity: 1; }
+@media (hover: none) { .mini-item-action { opacity: 1; } }
 
 /* ---------- Кастомизация дашборда (скрыть/переставить блок) ----------
    Своей аналогии в демо нет — новая возможность. dash-block-cell оборачивает

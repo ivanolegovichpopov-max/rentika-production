@@ -3120,7 +3120,7 @@ function ClientNotesJournal({ businessId, clientId }: { businessId: string; clie
               {n.can_delete && (
                 <button
                   type="button"
-                  className="icon-btn"
+                  className="icon-btn mini-item-action"
                   title="Удалить запись"
                   disabled={deletingId === n.id}
                   onClick={() => void handleDelete(n)}
@@ -3479,7 +3479,7 @@ function ClientDocumentsSection({ businessId, clientId }: { businessId: string; 
                 >
                   Скачать
                 </button>
-                <button type="button" className="icon-btn" title="Удалить" onClick={() => void handleDelete(d)}>
+                <button type="button" className="icon-btn mini-item-action" title="Удалить" onClick={() => void handleDelete(d)}>
                   <IconTrash />
                 </button>
               </span>
@@ -3515,7 +3515,7 @@ function ClientDocumentsSection({ businessId, clientId }: { businessId: string; 
                 <span style={{ fontSize: "12.5px", color: d.label ? "var(--text)" : "var(--muted)", fontStyle: d.label ? "normal" : "italic" }}>
                   {d.label || "Без подписи"}
                 </span>
-                <button type="button" className="icon-btn" title="Изменить подпись" onClick={() => startEditLabel(d)}>
+                <button type="button" className="icon-btn mini-item-action" title="Изменить подпись" onClick={() => startEditLabel(d)}>
                   <IconEdit />
                 </button>
               </div>
