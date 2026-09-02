@@ -589,3 +589,171 @@ def test_rental_create_explicit_discount_overrides_client_default(client):
     )
     assert rental_resp.status_code == 201
     assert rental_resp.json()["discount"] == 0
+
+
+def test_partial_return_frees_equipment_and_closes_rental_when_last_item_returned(client):
+    """41-й проход — частичный возврат по позициям: две позиции одной
+    аренды, возвращаются по отдельности. Проверяет три вещи разом: (1)
+    возврат ОДНОЙ позиции освобождает именно её оборудование для новой брони,
+    не дожидаясь возврата второй; (2) аренда остаётся "active", пока не все
+    позиции возвращены; (3) возврат ПОСЛЕДНЕЙ позиции автоматически
+    закрывает аренду целиком, тем же way, что и обычный /return."""
+    owner = register_business(client, email="partial-return@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Клиент частичного возврата"}, headers=headers
+    ).json()["id"]
+
+    tent_id = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Палатка", "category": "Туризм", "daily_rate": 300, "deposit": 1000},
+        headers=headers,
+    ).json()["id"]
+    generator_id = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Генератор", "category": "Электрика", "daily_rate": 700, "deposit": 5000},
+        headers=headers,
+    ).json()["id"]
+
+    rental = client.post(
+        f"/api/businesses/{business_id}/rentals",
+        json={
+            "client_id": client_id,
+            "equipment_ids": [tent_id, generator_id],
+            "start_date": _future(1),
+            "end_date": _future(5),
+        },
+        headers=headers,
+    ).json()
+    rental_id = rental["id"]
+    client.post(f"/api/businesses/{business_id}/rentals/{rental_id}/issue", headers=headers)
+
+    # Пока обе позиции у клиента — палатка занята, новая бронь на её даты невозможна.
+    other_client_id = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Другой клиент"}, headers=headers
+    ).json()["id"]
+    still_busy = client.post(
+        f"/api/businesses/{business_id}/rentals",
+        json={"client_id": other_client_id, "equipment_ids": [tent_id], "start_date": _future(2), "end_date": _future(4)},
+        headers=headers,
+    )
+    assert still_busy.status_code == 400
+
+    # Возвращаем только палатку.
+    partial = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/return-items",
+        json={"equipment_ids": [tent_id], "actual_return": _future(3)},
+        headers=headers,
+    )
+    assert partial.status_code == 200
+    partial_body = partial.json()
+    assert partial_body["status"] == "active"  # генератор ещё у клиента — аренда не закрыта
+    items_by_eq = {it["equipment_id"]: it for it in partial_body["items"]}
+    assert items_by_eq[tent_id]["returned_at"] == _future(3)
+    assert items_by_eq[generator_id]["returned_at"] is None
+
+    # Палатка физически на складе — статус оборудования снова "available".
+    eq_list = {e["id"]: e for e in client.get(f"/api/businesses/{business_id}/equipment", headers=headers).json()}
+    assert eq_list[tent_id]["status"] == "available"
+    assert eq_list[generator_id]["status"] == "rented"
+
+    # Теперь новая бронь на эти же даты для палатки проходит без конфликта.
+    now_free = client.post(
+        f"/api/businesses/{business_id}/rentals",
+        json={"client_id": other_client_id, "equipment_ids": [tent_id], "start_date": _future(2), "end_date": _future(4)},
+        headers=headers,
+    )
+    assert now_free.status_code == 201
+
+    # Повторный возврат уже возвращённой позиции отклоняется.
+    already = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/return-items",
+        json={"equipment_ids": [tent_id]},
+        headers=headers,
+    )
+    assert already.status_code == 400
+
+    # Возвращаем генератор — последнюю позицию — аренда закрывается целиком.
+    closing = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/return-items",
+        json={"equipment_ids": [generator_id], "actual_return": _future(5), "damage_fee": 200},
+        headers=headers,
+    )
+    assert closing.status_code == 200
+    closing_body = closing.json()
+    assert closing_body["status"] == "returned"
+    assert closing_body["actual_return"] == _future(5)
+    assert closing_body["damage_fee"] == 200
+
+    eq_final = {e["id"]: e for e in client.get(f"/api/businesses/{business_id}/equipment", headers=headers).json()}
+    assert eq_final[generator_id]["status"] == "available"
+
+
+def test_rental_photos_upload_list_delete(client):
+    """41-й проход — фотофиксация состояния оборудования при выдаче/возврате."""
+    owner = register_business(client, email="rental-photos@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Клиент с фото"}, headers=headers
+    ).json()["id"]
+    eq_id = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Перфоратор", "category": "Инструмент", "daily_rate": 400, "deposit": 1500},
+        headers=headers,
+    ).json()["id"]
+    rental_id = client.post(
+        f"/api/businesses/{business_id}/rentals",
+        json={"client_id": client_id, "equipment_ids": [eq_id], "start_date": _future(1), "end_date": _future(3)},
+        headers=headers,
+    ).json()["id"]
+
+    empty = client.get(f"/api/businesses/{business_id}/rentals/{rental_id}/photos", headers=headers)
+    assert empty.status_code == 200
+    assert empty.json() == []
+
+    issue_files = {"file": ("before.jpg", b"\xff\xd8\xff\xe0fake-jpeg", "image/jpeg")}
+    uploaded = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/photos",
+        files=issue_files,
+        data={"stage": "issue"},
+        headers=headers,
+    )
+    assert uploaded.status_code == 201
+    photo = uploaded.json()
+    assert photo["stage"] == "issue"
+    assert photo["filename"] == "before.jpg"
+    assert photo["employee_name"] is not None
+
+    return_files = {"file": ("after.jpg", b"\xff\xd8\xff\xe0another-fake", "image/jpeg")}
+    client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/photos",
+        files=return_files,
+        data={"stage": "return"},
+        headers=headers,
+    )
+
+    listed = client.get(f"/api/businesses/{business_id}/rentals/{rental_id}/photos", headers=headers).json()
+    assert len(listed) == 2
+    assert {p["stage"] for p in listed} == {"issue", "return"}
+
+    # Слишком большой файл отклоняется — тот же лимит, что и у документов клиента.
+    too_big = {"file": ("big.jpg", b"x" * (5 * 1024 * 1024 + 1), "image/jpeg")}
+    rejected = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/photos",
+        files=too_big,
+        data={"stage": "issue"},
+        headers=headers,
+    )
+    assert rejected.status_code == 400
+
+    delete_resp = client.delete(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/photos/{photo['id']}", headers=headers
+    )
+    assert delete_resp.status_code == 204
+    after_delete = client.get(f"/api/businesses/{business_id}/rentals/{rental_id}/photos", headers=headers).json()
+    assert len(after_delete) == 1
+    assert after_delete[0]["stage"] == "return"

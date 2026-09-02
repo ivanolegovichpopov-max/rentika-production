@@ -125,24 +125,54 @@ def compute_rental_breakdown(
     `today` передаётся явно (а не date.today() внутри) — вызывающий код сам
     решает, что считать "сегодня" (см. app/api/routes/rentals.py), функция
     остаётся чистой и не зависит от системных часов.
+
+    Каждый элемент `items` может дополнительно нести свой собственный
+    `returned_at` (date | None) — 41-й проход, частичный возврат по позициям
+    (см. RentalItem.returned_at в app/models/inventory.py): если клиент
+    вернул часть оборудования раньше остальных, у РАЗНЫХ позиций аренды
+    оказываются РАЗНЫЕ фактические сроки. Раньше actual_days был одним
+    числом на всю аренду — теперь считается ПО КАЖДОЙ позиции отдельно (её
+    собственный returned_at, а если его нет — тот же общий `actual_return`/
+    "сегодня"/end_date, что и раньше), и в сумму на факт. дни каждая позиция
+    входит со своим числом дней. Если ни у одной позиции returned_at не
+    задан (все обычные, не частично возвращённые аренды — подавляющее
+    большинство, включая все аренды до этого прохода), это математически
+    ТО ЖЕ САМОЕ значение для каждой позиции, что и раньше — обратная
+    совместимость гарантирована, а не просто предполагается (см.
+    tests/test_pricing.py:test_partial_return_uses_per_item_actual_days и
+    неизменный test_tiered_pricing_matches_original_spec_example рядом).
     """
     planned_days = span_days(start_date, end_date)
 
     if actual_return is not None:
-        calc_end_date = actual_return
+        fallback_end_date = actual_return
     elif end_date < today:
-        calc_end_date = today
+        fallback_end_date = today
     else:
-        calc_end_date = end_date
+        fallback_end_date = end_date
 
-    actual_days = span_days(start_date, calc_end_date)
-    late_days = max(0, actual_days - planned_days)
+    def _item_actual_days(it: dict) -> int:
+        item_end = it.get("returned_at") or fallback_end_date
+        return span_days(start_date, item_end)
 
-    def _cost_for(days: int) -> float:
+    def _cost_for_planned() -> float:
         return sum(
             item_cost_for_days(
                 daily_rate=it["daily_rate"],
-                days=days,
+                days=planned_days,
+                period_days=it.get("period_days"),
+                period_price=it.get("period_price"),
+                period_price_after=it.get("period_price_after"),
+                after_period_days=it.get("after_period_days"),
+            )
+            for it in items
+        )
+
+    def _cost_for_actual() -> float:
+        return sum(
+            item_cost_for_days(
+                daily_rate=it["daily_rate"],
+                days=_item_actual_days(it),
                 period_days=it.get("period_days"),
                 period_price=it.get("period_price"),
                 period_price_after=it.get("period_price_after"),
@@ -154,9 +184,16 @@ def compute_rental_breakdown(
     # base и actual_cost округляются отдельно, каждый до целого рубля — так
     # late_fee (их разность) тоже получается целым числом рублей для показа
     # в интерфейсе.
-    base = round(_cost_for(planned_days))
-    actual_cost = round(_cost_for(actual_days))
+    base = round(_cost_for_planned())
+    actual_cost = round(_cost_for_actual())
     late_fee = max(0, actual_cost - base)
+
+    # actual_days/late_days для интерфейса — по САМОЙ ДОЛГО отсутствующей
+    # позиции (если все позиции делят один и тот же факт. срок, как раньше,
+    # max по одинаковым числам даёт то же самое число — снова обратная
+    # совместимость "бесплатно", без отдельной ветки кода на этот случай).
+    actual_days = max((_item_actual_days(it) for it in items), default=planned_days)
+    late_days = max(0, actual_days - planned_days)
 
     total = max(0, base + late_fee + damage_fee - discount)
 

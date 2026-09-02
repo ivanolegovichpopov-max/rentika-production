@@ -211,6 +211,27 @@ export interface RentalItem {
   // См. Equipment.after_period_days — снимок того же поля на момент
   // оформления аренды (двадцатый проход).
   after_period_days_snapshot: number | null;
+  // Частичный возврат по позициям (41-й проход) — фактическая дата возврата
+  // ИМЕННО этой позиции, если она вернулась раньше остальных. null — позиция
+  // ещё у клиента (или аренда вообще не активна). См. app/models/inventory.py.
+  returned_at: string | null;
+}
+
+// Фото состояния оборудования при выдаче/возврате (41-й проход) — GET/POST
+// .../rentals/{id}/photos, DELETE .../photos/{photoId}. Тот же принцип
+// хранения, что и у ClientDocument (base64 в TEXT-колонке, без отдельного
+// файлового хранилища).
+export interface RentalPhoto {
+  id: string;
+  rental_id: string;
+  employee_id: string | null;
+  employee_name: string | null;
+  stage: "issue" | "return";
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  data_base64: string;
+  created_at: string;
 }
 
 export interface Rental {

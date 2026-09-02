@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.models.inventory import ClientRating, ClientType, EquipmentStatus, RentalStatus
+from app.models.inventory import ClientRating, ClientType, EquipmentStatus, RentalPhotoStage, RentalStatus
 
 
 def _strip_or_raise(value: str) -> str:
@@ -531,6 +531,9 @@ class RentalItemOut(BaseModel):
     period_price_snapshot: float | None
     period_price_after_snapshot: float | None
     after_period_days_snapshot: int | None
+    # Частичный возврат по позициям (41-й проход) — см. RentalItem.returned_at
+    # в app/models/inventory.py. None = позиция ещё у клиента.
+    returned_at: date | None = None
 
     model_config = {"from_attributes": True}
 
@@ -593,3 +596,38 @@ class RentalEdit(BaseModel):
     end_date: date | None = None
     equipment_ids: list[uuid.UUID] | None = None
     discount: float | None = Field(default=None, ge=0)
+
+
+class RentalReturnItems(BaseModel):
+    """Частичный возврат — возвращаются ТОЛЬКО перечисленные позиции аренды,
+    остальные остаются у клиента, аренда в целом остаётся активной (если
+    только этим запросом не закрываются как раз ПОСЛЕДНИЕ невозвращённые
+    позиции — тогда см. app/api/routes/rentals.py:return_rental_items,
+    аренда автоматически закрывается тем же путём, что и обычный полный
+    возврат). equipment_ids — минимум одна позиция; damage_fee здесь
+    СКЛАДЫВАЕТСЯ с уже накопленным на аренде (а не заменяет его) — ущерб
+    может обнаружиться по частям, при разных заездах клиента за товаром."""
+
+    equipment_ids: list[uuid.UUID] = Field(min_length=1)
+    actual_return: date | None = None
+    return_notes: str | None = Field(default=None, max_length=1000)
+    damage_fee: float = Field(ge=0, default=0)
+
+
+class RentalPhotoOut(BaseModel):
+    """Фото состояния оборудования при выдаче/возврате (41-й проход) — см.
+    RentalPhoto в app/models/inventory.py, та же простая схема хранения, что
+    и ClientDocumentOut."""
+
+    id: uuid.UUID
+    rental_id: uuid.UUID
+    employee_id: uuid.UUID | None
+    employee_name: str | None = None
+    stage: RentalPhotoStage
+    filename: str
+    content_type: str
+    size_bytes: int
+    data_base64: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

@@ -188,3 +188,10 @@ export const IconGift = (p: SVGProps<SVGSVGElement>) => (
 export const IconRestore = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}><path d="M3 12a9 9 0 1 0 3-6.7" /><polyline points="3 3 3 8 8 8" /></Svg>
 );
+// "Повторить аренду" (карточка/панель деталей аренды, 41-й проход) —
+// стандартный глиф "повтор" (две встречные стрелки по кругу), отличается от
+// IconRestore (та рисует только ОДНУ стрелку "назад по кругу" — для "Из
+// корзины") и от IconReset (просто разворот без круга, "Сбросить настройки").
+export const IconRepeat = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}><polyline points="17 1 21 5 17 9" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><polyline points="7 23 3 19 7 15" /><path d="M21 13v2a4 4 0 0 1-4 4H3" /></Svg>
+);

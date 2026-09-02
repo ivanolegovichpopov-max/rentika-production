@@ -145,6 +145,66 @@ def test_breakdown_uses_actual_return_over_today_when_present():
     assert breakdown["total"] == 1287
 
 
+# --- returned_at по позиции: частичный возврат (41-й проход) ----------------
+
+
+def test_partial_return_uses_per_item_actual_days():
+    """Две позиции одной аренды, возвращённые в РАЗНЫЕ дни (одна вовремя,
+    другая на 3 дня позже) — late_fee должен считаться по факт. дням КАЖДОЙ
+    позиции отдельно, а не по одному общему числу дней на всю аренду."""
+    breakdown = compute_rental_breakdown(
+        items=[
+            {"daily_rate": 100, "returned_at": date(2026, 9, 5)},  # вовремя, 5 дней
+            {"daily_rate": 200, "returned_at": date(2026, 9, 8)},  # на 3 дня позже, 8 дней
+        ],
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 9, 5),
+        actual_return=None,
+        today=date(2026, 9, 10),
+        damage_fee=0,
+        discount=0,
+    )
+    assert breakdown["planned_days"] == 5
+    assert breakdown["base"] == 100 * 5 + 200 * 5  # 1500, по плановым дням — как раньше
+    assert breakdown["actual_days"] == 8  # по самой долго отсутствовавшей позиции
+    assert breakdown["late_days"] == 3
+    # actual_cost = 100*5 (вовремя) + 200*8 (на 3 дня позже) = 500 + 1600 = 2100
+    assert breakdown["late_fee"] == (100 * 5 + 200 * 8) - breakdown["base"]
+    assert breakdown["late_fee"] == 600
+    assert breakdown["total"] == breakdown["base"] + breakdown["late_fee"]
+
+
+def test_partial_return_missing_returned_at_falls_back_like_before():
+    """Позиция без своего returned_at считается по общему actual_return/today —
+    ТОЧНО так же, как до появления частичного возврата (обратная
+    совместимость: перемешанный список, где у одной позиции returned_at
+    есть, а у другой нет, потому что вторую вернули обычным полным
+    возвратом, который бэкафиллит returned_at всем сразу — см.
+    app/api/routes/rentals.py:return_rental)."""
+    with_partial = compute_rental_breakdown(
+        items=[
+            {"daily_rate": 100, "returned_at": date(2026, 9, 6)},
+            {"daily_rate": 100},  # нет своего returned_at — использует actual_return ниже
+        ],
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 9, 5),
+        actual_return=date(2026, 9, 6),
+        today=date(2026, 9, 10),
+        damage_fee=0,
+        discount=0,
+    )
+    without_partial = compute_rental_breakdown(
+        items=[{"daily_rate": 100}, {"daily_rate": 100}],
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 9, 5),
+        actual_return=date(2026, 9, 6),
+        today=date(2026, 9, 10),
+        damage_fee=0,
+        discount=0,
+    )
+    assert with_partial == without_partial
+
+
 # --- after_period_days: блочная ("любая часть шага сверху") надбавка --------
 #
 # Двадцатый проход, п.4 обзора: "190₽ за любую часть недели сверху" — вместо

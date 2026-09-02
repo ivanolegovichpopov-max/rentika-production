@@ -221,6 +221,10 @@ export function EquipmentFormModal({
         // Длина шага "после" — двадцатый проход, свободна от periodDays (см.
         // Equipment.after_period_days).
         after_period_days_snapshot: form.after_period_days ? Number(form.after_period_days) : null,
+        // Частичный возврат по позициям (41-й проход) — здесь это не
+        // реальная позиция аренды, а черновик для превью тарифа, поэтому
+        // всегда null (позиция ещё "у клиента" по определению превью).
+        returned_at: null,
       },
       days
     );

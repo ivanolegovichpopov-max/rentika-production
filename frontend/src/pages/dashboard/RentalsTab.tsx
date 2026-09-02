@@ -12,7 +12,7 @@ import { usePersistedState } from "../../lib/persist";
 import { Dropdown } from "../../components/Dropdown";
 import { MoreActionsMenu } from "../../components/MoreActionsMenu";
 import { clientDisplayRating } from "./clients/helpers";
-import { equipmentRateLabel, itemRateLabel } from "./rentals/helpers";
+import { equipmentRateLabel, itemRateLabel, isEquipmentFreeForRange, conflictEndFor } from "./rentals/helpers";
 import { exportRentalsCsv } from "./rentals/csv";
 import { RentalDetailPanel } from "./rentals/RentalDetailPanel";
 
@@ -65,53 +65,13 @@ const SORTS: { id: string; label: string }[] = [
 const DEFAULT_ISSUE_NOTES = "Комплектация полная, состояние исправное.";
 const DEFAULT_RETURN_NOTES = "Без повреждений, комплектация полная.";
 
-/* ============================================================
-   Доступность оборудования на произвольный диапазон дат — порт
-   isEquipmentFree/nextFreeDate демо (addRentalForm/editRentalForm).
-   lib/statusMeta.tsx уже экспортирует nextFreeDate, но та версия отвечает на
-   другой вопрос — "когда освобождается ТЕКУЩАЯ активная аренда этой позиции"
-   (для колонки "своб. с" на вкладке Оборудование). Здесь нужно проверить
-   пересечение ЛЮБОГО booked/active бронирования с произвольным [start, end],
-   который ещё не сохранён (черновик формы) — другая задача, поэтому портируется
-   отдельно, а не переиспользуется.
-   ============================================================ */
-function rangesOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
-  return aStart <= bEnd && bStart <= aEnd;
-}
-
-function isEquipmentFreeForRange(
-  equipmentId: string,
-  start: string,
-  end: string,
-  rentals: Rental[],
-  excludeRentalId?: string
-): boolean {
-  if (!start || !end) return true;
-  return !rentals.some((r) => {
-    if (r.id === excludeRentalId) return false;
-    if (r.status !== "booked" && r.status !== "active") return false;
-    if (!r.items.some((it) => it.equipment_id === equipmentId)) return false;
-    return rangesOverlap(r.start_date, r.end_date, start, end);
-  });
-}
-
-function conflictEndFor(
-  equipmentId: string,
-  start: string,
-  end: string,
-  rentals: Rental[],
-  excludeRentalId?: string
-): string | null {
-  const blocking = rentals
-    .filter((r) => {
-      if (r.id === excludeRentalId) return false;
-      if (r.status !== "booked" && r.status !== "active") return false;
-      if (!r.items.some((it) => it.equipment_id === equipmentId)) return false;
-      return rangesOverlap(r.start_date, r.end_date, start, end);
-    })
-    .sort((a, b) => (a.end_date < b.end_date ? 1 : -1));
-  return blocking.length ? blocking[0].end_date : null;
-}
+// rangesOverlap/isEquipmentFreeForRange/conflictEndFor (проверка
+// пересечения ЛЮБОГО booked/active бронирования с произвольным диапазоном
+// дат — порт isEquipmentFree/nextFreeDate демо) вынесены в rentals/helpers.ts
+// (41-й проход) — понадобились ещё и в ExtendRentalModal (проверка
+// конфликта при быстром продлении) и CreateRentalModal (фильтр
+// предзаполненных позиций при "Повторить аренду"), дублировать три функции
+// ради этого было бы ошибкой.
 
 function isUnderMaintenanceOn(eq: Equipment, dateIso: string): boolean {
   if (eq.status !== "maintenance") return false;
@@ -335,6 +295,7 @@ export function CreateRentalModal({
   equipment,
   rentals,
   initialClientId,
+  initialEquipmentIds,
   onClose,
   onCreated,
 }: {
@@ -348,13 +309,22 @@ export function CreateRentalModal({
   // Поле выбора клиента при этом остаётся редактируемым (не блокируется) —
   // предзаполнение не должно мешать передумать прямо в форме.
   initialClientId?: string;
+  // Предзаполненные позиции оборудования (41-й проход — "Повторить аренду"
+  // из RentalDetailPanel: та же техника, что клиент брал в прошлый раз).
+  // Отмечаются галочкой только те, что реально свободны на дефолтный
+  // диапазон дат (todayISO()..+2, см. ниже) — а не все переданные вслепую:
+  // иначе чекбокс был бы виден отмеченным, но disabled (занято), что и
+  // выглядит как баг, и не даёт пользователю понять, что вообще произошло.
+  initialEquipmentIds?: string[];
   onClose: () => void;
   onCreated: () => Promise<void>;
 }) {
   const [clientId, setClientId] = useState(initialClientId ?? "");
   const [startDate, setStartDate] = useState(todayISO());
   const [endDate, setEndDate] = useState(isoAddDays(todayISO(), 2));
-  const [checkedIds, setCheckedIds] = useState<string[]>([]);
+  const [checkedIds, setCheckedIds] = useState<string[]>(() =>
+    (initialEquipmentIds ?? []).filter((id) => isEquipmentFreeForRange(id, todayISO(), isoAddDays(todayISO(), 2), rentals))
+  );
   const [discount, setDiscount] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -590,6 +560,88 @@ function EditRentalModal({
   );
 }
 
+/* ---------- Быстрое продление (41-й проход) ---------- */
+/**
+ * Отдельная от EditRentalModal форма — там правится ВСЁ сразу (даты,
+ * состав оборудования, скидка) и это осознанный полный набор полей "Изменить
+ * аренду". Для самого частого случая — "клиент попросил ещё на пару дней" —
+ * не нужно открывать весь этот набор и заново отмечать те же чекбоксы
+ * оборудования: RentalEdit на backend'е (app/schemas/inventory.py) — все
+ * поля опциональны, так что PATCH с одним end_date полностью безопасен и не
+ * трогает остальные поля аренды. Открывается из RentalDetailPanel.tsx (кнопка
+ * "Продлить") и из "Ещё" на самой карточке — RentalDetailPanel специально
+ * НЕ делает сам PATCH-запрос (см. докстринг файла), а делегирует сюда через
+ * onExtend, чтобы вся логика правки аренды жила в одном месте.
+ */
+function ExtendRentalModal({
+  businessId,
+  rental,
+  client,
+  rentals,
+  onClose,
+  onSaved,
+}: {
+  businessId: string;
+  rental: Rental;
+  client: Client | undefined;
+  rentals: Rental[];
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [endDate, setEndDate] = useState(isoAddDays(rental.end_date, 7));
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (endDate <= rental.end_date) {
+      setError("Новая дата окончания должна быть позже текущей.");
+      return;
+    }
+    const conflict = rental.items
+      .map((it) => conflictEndFor(it.equipment_id, rental.start_date, endDate, rentals, rental.id))
+      .find((until) => until != null);
+    if (conflict) {
+      setError(`Часть оборудования уже забронирована на новый период (занято до ${fmtDate(conflict)}) — выберите более раннюю дату.`);
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.patch(`/businesses/${businessId}/rentals/${rental.id}`, { end_date: endDate });
+      await onSaved();
+      onClose();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Не удалось продлить аренду");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <FormModal
+      title={`Продлить аренду — ${client?.name ?? "—"}`}
+      open
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      submitLabel={saving ? "Сохранение…" : "Продлить"}
+      error={error}
+    >
+      <div className="field">
+        <label>Текущая дата окончания</label>
+        <div style={{ padding: "9px 11px", background: "var(--surface-2)", borderRadius: 8, fontSize: 13.5, fontWeight: 600 }}>
+          {fmtDate(rental.end_date)}
+        </div>
+      </div>
+      <div className="field">
+        <label>Новая дата окончания</label>
+        <input type="date" value={endDate} min={isoAddDays(rental.end_date, 1)} onChange={(e) => setEndDate(e.target.value)} />
+      </div>
+      <div className="field-hint">Состав оборудования и скидка не меняются — только дата.</div>
+    </FormModal>
+  );
+}
+
 /* ---------- Выдать оборудование ---------- */
 function IssueRentalModal({
   businessId,
@@ -764,9 +816,14 @@ export function RentalsTab({
   // тем же паттерном, что riskOnly.
   const [expiringOnly, setExpiringOnly] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  // Предзаполнение "Новой аренды" клиентом+позициями текущей (41-й проход,
+  // "Повторить аренду" из RentalDetailPanel) — null при обычном открытии
+  // кнопкой "+ Новая аренда", тогда форма пустая, как раньше.
+  const [repeatDraft, setRepeatDraft] = useState<{ clientId: string; equipmentIds: string[] } | null>(null);
   const [editRental, setEditRental] = useState<Rental | null>(null);
   const [issueRental, setIssueRental] = useState<Rental | null>(null);
   const [returnRental, setReturnRental] = useState<Rental | null>(null);
+  const [extendRental, setExtendRental] = useState<Rental | null>(null);
   const [openRentalId, setOpenRentalId] = useState<string | null>(null);
   const [docModal, setDocModal] = useState<{ title: string; node: ReactNode } | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
@@ -924,6 +981,16 @@ export function RentalsTab({
             ? { label: daysLeft <= 0 ? "Истекает сегодня" : `Осталось ${daysLeft} дн.`, tone: "warning" }
             : null;
         const itemNames = r.items.map((it) => equipment.find((e) => e.id === it.equipment_id)?.name ?? "—").join(", ");
+        // Прогресс частичного возврата (41-й проход) — видно на самой
+        // карточке, не открывая панель деталей: если часть позиций уже
+        // вернулась отдельно (RentalDetailPanel → "Вернуть выбранное"), а
+        // часть всё ещё у клиента, аренда по-прежнему "В аренде"/"Просрочено"
+        // целиком — без этого бейджа непонятно, что возврат уже частично идёт.
+        const returnedCount = r.items.filter((it) => it.returned_at).length;
+        const partialBadge: StatusMeta | null =
+          r.status === "active" && returnedCount > 0 && returnedCount < r.items.length
+            ? { label: `Возвращено ${returnedCount}/${r.items.length}`, tone: "info" }
+            : null;
 
         return (
           // Карточка кликабельна целиком — открывает RentalDetailPanel (39-й
@@ -939,6 +1006,7 @@ export function RentalsTab({
                 <span className="rental-client">{client?.name ?? "Клиент удалён"}</span>
                 <Badge meta={RENTAL_META[st]} />
                 {soonBadge && <Badge meta={soonBadge} />}
+                {partialBadge && <Badge meta={partialBadge} />}
                 {/* Намёк, что карточка целиком кликабельна (40-й проход, по
                     итогам обзора: раньше это было незаметно — только
                     hover-эффект самой карточки, который пользователь мог
@@ -1000,6 +1068,20 @@ export function RentalsTab({
               <MoreActionsMenu
                 align="right"
                 actions={[
+                  // Быстрое продление (41-й проход) — под "Ещё", а не отдельной
+                  // кнопкой в основном ряду: тот же принцип декомпозиции, что
+                  // уже применён к печати актов ниже — часто нужны только
+                  // Выдать/Принять возврат/Изменить, продление реже.
+                  ...(r.status === "active"
+                    ? [
+                        {
+                          key: "extend",
+                          label: "Продлить",
+                          icon: <IconEdit />,
+                          onClick: () => setExtendRental(r),
+                        },
+                      ]
+                    : []),
                   ...(r.status === "active"
                     ? [
                         {
@@ -1049,7 +1131,12 @@ export function RentalsTab({
           clients={clients}
           equipment={equipment}
           rentals={rentals}
-          onClose={() => setShowCreate(false)}
+          initialClientId={repeatDraft?.clientId}
+          initialEquipmentIds={repeatDraft?.equipmentIds}
+          onClose={() => {
+            setShowCreate(false);
+            setRepeatDraft(null);
+          }}
           onCreated={async () => {
             await Promise.all([reloadRentals(), reloadEquipment()]);
           }}
@@ -1099,6 +1186,19 @@ export function RentalsTab({
         />
       )}
 
+      {extendRental && (
+        <ExtendRentalModal
+          businessId={businessId}
+          rental={extendRental}
+          client={clients.find((c) => c.id === extendRental.client_id)}
+          rentals={rentals}
+          onClose={() => setExtendRental(null)}
+          onSaved={async () => {
+            await reloadRentals();
+          }}
+        />
+      )}
+
       <DocModal title={docModal?.title ?? ""} open={!!docModal} onClose={() => setDocModal(null)}>
         {docModal?.node}
       </DocModal>
@@ -1109,6 +1209,7 @@ export function RentalsTab({
       {openRentalId && <div className="slideover-backdrop" onClick={() => setOpenRentalId(null)} />}
       {openRentalId && (
         <RentalDetailPanel
+          businessId={businessId}
           rentalId={openRentalId}
           onClose={() => setOpenRentalId(null)}
           onOpenClient={(clientId) => {
@@ -1118,6 +1219,21 @@ export function RentalsTab({
           onOpenEquipment={(equipmentId) => {
             setOpenRentalId(null);
             onOpenEquipment(equipmentId);
+          }}
+          // Продление (41-й проход) НЕ закрывает панель — быстрое действие,
+          // после которого логично остаться на месте и увидеть обновлённые
+          // даты в самой панели (rentals перечитываются из контекста).
+          onExtend={(rentalId) => {
+            const r = rentals.find((x) => x.id === rentalId);
+            if (r) setExtendRental(r);
+          }}
+          // "Повторить аренду" — навигационное действие (открывает другую
+          // форму на весь экран), поэтому панель закрывается первой — тот же
+          // принцип, что и у onOpenClient/onOpenEquipment выше.
+          onRepeat={(clientId, equipmentIds) => {
+            setOpenRentalId(null);
+            setRepeatDraft({ clientId, equipmentIds });
+            setShowCreate(true);
           }}
         />
       )}

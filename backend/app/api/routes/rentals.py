@@ -1,17 +1,39 @@
+import base64
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import log_action
 from app.core.deps import BusinessContext, require_permission
 from app.database import get_db
-from app.models.business import PermissionLevel, ResourceType
-from app.models.inventory import Client, Equipment, EquipmentStatus, Rental, RentalItem, RentalStatus
-from app.schemas.inventory import RentalCreate, RentalEdit, RentalIssue, RentalOut, RentalReturn
+from app.models.business import Employee, PermissionLevel, ResourceType
+from app.models.inventory import (
+    Client,
+    Equipment,
+    EquipmentStatus,
+    Rental,
+    RentalItem,
+    RentalPhoto,
+    RentalPhotoStage,
+    RentalStatus,
+)
+from app.schemas.inventory import (
+    RentalCreate,
+    RentalEdit,
+    RentalIssue,
+    RentalOut,
+    RentalPhotoOut,
+    RentalReturn,
+    RentalReturnItems,
+)
 from app.services.pricing import compute_rental_breakdown, item_cost_for_days, span_days
+
+# Лимит размера файла фото аренды (41-й проход) — то же значение и то же
+# обоснование, что и MAX_CLIENT_DOCUMENT_BYTES в app/api/routes/clients.py.
+MAX_RENTAL_PHOTO_BYTES = 5 * 1024 * 1024
 
 router = APIRouter(prefix="/businesses/{business_id}/rentals", tags=["rentals"])
 
@@ -39,6 +61,10 @@ def _to_out(db: Session, rental: Rental) -> RentalOut:
                 if it.period_price_after_snapshot is not None
                 else None,
                 "after_period_days": it.after_period_days_snapshot,
+                # Частичный возврат по позициям (41-й проход) — своя дата
+                # факт. возврата у КАЖДОЙ позиции, см. докстринг
+                # compute_rental_breakdown в app/services/pricing.py.
+                "returned_at": it.returned_at,
             }
             for it in items
         ],
@@ -223,11 +249,29 @@ async def return_rental(
 
     rental.status = RentalStatus.returned
     rental.actual_return = body.actual_return or date.today()
-    rental.damage_fee = body.damage_fee
+    # Складывается, а не заменяет — если часть повреждений уже была
+    # зафиксирована раньше через частичный возврат (POST .../return-items),
+    # этот запрос закрывает ОСТАВШИЕСЯ позиции и может нести доплату за НИХ;
+    # тот же принцип, что и у RentalReturnItems.damage_fee (см. схему).
+    rental.damage_fee = float(rental.damage_fee) + body.damage_fee
     rental.discount = body.discount
-    rental.return_notes = body.return_notes or DEFAULT_RETURN_NOTES
+    # Если частичный возврат раньше уже что-то записал в return_notes —
+    # дописываем новый текст следом, а не затираем (та же логика, что и в
+    # return_rental_items ниже).
+    if body.return_notes:
+        rental.return_notes = f"{rental.return_notes}\n{body.return_notes}" if rental.return_notes else body.return_notes
+    elif not rental.return_notes:
+        rental.return_notes = DEFAULT_RETURN_NOTES
 
     for it in db.scalars(select(RentalItem).where(RentalItem.rental_id == rental.id)):
+        # Частичный возврат по позициям (41-й проход) — позиция могла уже
+        # быть возвращена раньше отдельным запросом; у неё returned_at не
+        # трогаем (сохраняем ЕЁ фактическую дату), у остальных проставляем
+        # ЭТУ дату закрытия — так "Принять возврат" остаётся рабочим
+        # способом закрыть аренду одним действием, даже если ей ни разу не
+        # пользовались частичным возвратом.
+        if it.returned_at is None:
+            it.returned_at = rental.actual_return
         equipment = db.get(Equipment, it.equipment_id)
         if equipment and equipment.status == EquipmentStatus.rented:
             equipment.status = EquipmentStatus.available
@@ -240,6 +284,80 @@ async def return_rental(
         resource="rental",
         resource_id=str(rental_id),
         meta={"damage_fee": body.damage_fee, "discount": body.discount},
+    )
+    db.commit()
+    db.refresh(rental)
+    return _to_out(db, rental)
+
+
+@router.post("/{rental_id}/return-items", response_model=RentalOut)
+async def return_rental_items(
+    rental_id: uuid.UUID,
+    body: RentalReturnItems,
+    ctx: BusinessContext = Depends(edit_dep),
+    db: Session = Depends(get_db),
+):
+    """Частичный возврат по позициям (41-й проход) — см. докстринг
+    RentalReturnItems. В отличие от return_rental выше, закрывает аренду
+    целиком, только если этим же запросом возвращаются ПОСЛЕДНИЕ ещё не
+    возвращённые позиции — иначе аренда остаётся "в работе" с частью
+    оборудования уже физически на складе."""
+    rental = _get_rental_or_404(db, ctx, rental_id)
+    if rental.status not in (RentalStatus.active, RentalStatus.overdue):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Вернуть позиции можно только для аренды в работе")
+
+    items_by_equipment = {
+        it.equipment_id: it for it in db.scalars(select(RentalItem).where(RentalItem.rental_id == rental.id)).all()
+    }
+
+    requested_ids = list(dict.fromkeys(body.equipment_ids))  # de-dup, сохраняя порядок
+    for eq_id in requested_ids:
+        item = items_by_equipment.get(eq_id)
+        if item is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Позиция {eq_id} не относится к этой аренде")
+        if item.returned_at is not None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Позиция {eq_id} уже была возвращена раньше")
+
+    actual_return = body.actual_return or date.today()
+
+    for eq_id in requested_ids:
+        item = items_by_equipment[eq_id]
+        item.returned_at = actual_return
+        equipment = db.get(Equipment, eq_id)
+        # Та же проверка "не занято ли ГДЕ-ТО ЕЩЁ", что и при снятии позиции
+        # с редактируемой аренды в edit_rental — оборудование освобождается,
+        # только если его не держит какая-то ДРУГАЯ бронь/активная аренда.
+        if (
+            equipment is not None
+            and equipment.status == EquipmentStatus.rented
+            and not _equipment_locked_elsewhere(
+                db, business_id=ctx.business_id, equipment_id=eq_id, exclude_rental_id=rental.id
+            )
+        ):
+            equipment.status = EquipmentStatus.available
+
+    rental.damage_fee = float(rental.damage_fee) + body.damage_fee
+    if body.return_notes:
+        rental.return_notes = f"{rental.return_notes}\n{body.return_notes}" if rental.return_notes else body.return_notes
+
+    still_out = any(it.returned_at is None for it in items_by_equipment.values())
+    closed_now = not still_out
+    if closed_now:
+        # Этим запросом вернулись ПОСЛЕДНИЕ позиции — закрываем аренду
+        # целиком, тем же итоговым состоянием, что и обычный return_rental.
+        rental.status = RentalStatus.returned
+        rental.actual_return = max(it.returned_at for it in items_by_equipment.values())
+        if not rental.return_notes:
+            rental.return_notes = DEFAULT_RETURN_NOTES
+
+    log_action(
+        db,
+        business_id=ctx.business_id,
+        user_id=ctx.user.id,
+        action="return_items",
+        resource="rental",
+        resource_id=str(rental_id),
+        meta={"equipment_ids": [str(x) for x in requested_ids], "damage_fee": body.damage_fee, "closed": closed_now},
     )
     db.commit()
     db.refresh(rental)
@@ -259,13 +377,20 @@ def _find_blocking_rental(
     оборудование считается, если пересекается по датам с любой ЧУЖОЙ бронью
     или активной арендой (отменённые/возвращённые не блокируют). Возвращает
     саму блокирующую аренду (для сообщения "занято до …"), либо None, если
-    оборудование свободно на весь запрошенный диапазон."""
+    оборудование свободно на весь запрошенный диапазон.
+
+    RentalItem.returned_at.is_(None) — 41-й проход: позиция, возвращённая
+    раньше остальных через частичный возврат, освобождает СВОЁ оборудование
+    сразу, даже если сама аренда формально ещё "active" (другие позиции той
+    же аренды ещё не возвращены) — иначе весь смысл частичного возврата
+    (пустить оборудование в новую бронь пораньше) терялся бы именно здесь."""
     query = (
         select(Rental)
         .join(RentalItem, RentalItem.rental_id == Rental.id)
         .where(
             Rental.business_id == business_id,
             RentalItem.equipment_id == equipment_id,
+            RentalItem.returned_at.is_(None),
             Rental.status.in_((RentalStatus.booked, RentalStatus.active)),
             Rental.start_date <= end_date,
             Rental.end_date >= start_date,
@@ -288,6 +413,7 @@ def _equipment_locked_elsewhere(
         .where(
             Rental.business_id == business_id,
             RentalItem.equipment_id == equipment_id,
+            RentalItem.returned_at.is_(None),
             Rental.status.in_((RentalStatus.booked, RentalStatus.active)),
             Rental.id != exclude_rental_id,
         )
@@ -402,3 +528,80 @@ async def edit_rental(
     db.commit()
     db.refresh(rental)
     return _to_out(db, rental)
+
+
+# ============================================================
+# Фото состояния оборудования при выдаче/возврате (41-й проход) — по образцу
+# документов клиента (app/api/routes/clients.py), но привязано к Rental
+# целиком и с полем stage вместо label. См. RentalPhoto в
+# app/models/inventory.py.
+# ============================================================
+
+
+def _photo_out(photo: RentalPhoto, employee_name: str | None) -> RentalPhotoOut:
+    out = RentalPhotoOut.model_validate(photo)
+    out.employee_name = employee_name
+    return out
+
+
+@router.get("/{rental_id}/photos", response_model=list[RentalPhotoOut])
+async def list_rental_photos(
+    rental_id: uuid.UUID, ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)
+):
+    rental = _get_rental_or_404(db, ctx, rental_id)
+    rows = db.execute(
+        select(RentalPhoto, Employee.name)
+        .join(Employee, Employee.id == RentalPhoto.employee_id, isouter=True)
+        .where(RentalPhoto.rental_id == rental.id, RentalPhoto.business_id == ctx.business_id)
+        .order_by(RentalPhoto.created_at.desc())
+    ).all()
+    return [_photo_out(photo, employee_name) for photo, employee_name in rows]
+
+
+@router.post("/{rental_id}/photos", response_model=RentalPhotoOut, status_code=status.HTTP_201_CREATED)
+async def upload_rental_photo(
+    rental_id: uuid.UUID,
+    file: UploadFile,
+    stage: RentalPhotoStage = Form(...),
+    ctx: BusinessContext = Depends(edit_dep),
+    db: Session = Depends(get_db),
+):
+    rental = _get_rental_or_404(db, ctx, rental_id)
+
+    raw = await file.read()
+    if len(raw) == 0:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Пустой файл")
+    if len(raw) > MAX_RENTAL_PHOTO_BYTES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Файл слишком большой (максимум 5 МБ)")
+
+    photo = RentalPhoto(
+        business_id=ctx.business_id,
+        rental_id=rental.id,
+        employee_id=ctx.employee.id if ctx.employee is not None else None,
+        stage=stage,
+        filename=file.filename or "фото",
+        content_type=file.content_type or "application/octet-stream",
+        size_bytes=len(raw),
+        data_base64=base64.b64encode(raw).decode("ascii"),
+    )
+    db.add(photo)
+    log_action(
+        db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="rental_photo", resource_id=str(rental_id)
+    )
+    db.commit()
+    db.refresh(photo)
+    return _photo_out(photo, ctx.employee.name if ctx.employee is not None else None)
+
+
+@router.delete("/{rental_id}/photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_rental_photo(
+    rental_id: uuid.UUID, photo_id: uuid.UUID, ctx: BusinessContext = Depends(edit_dep), db: Session = Depends(get_db)
+):
+    photo = db.get(RentalPhoto, photo_id)
+    if photo is None or photo.business_id != ctx.business_id or photo.rental_id != rental_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Фото не найдено")
+    db.delete(photo)
+    log_action(
+        db, business_id=ctx.business_id, user_id=ctx.user.id, action="delete", resource="rental_photo", resource_id=str(photo_id)
+    )
+    db.commit()

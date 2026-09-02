@@ -8,7 +8,7 @@
  * дублировать формулу (см. периодную/блочную надбавку — двадцатый проход,
  * п.4) во втором файле было бы ошибкой, а не решением.
  */
-import type { Equipment, RentalItem } from "../../../api/types";
+import type { Equipment, Rental, RentalItem } from "../../../api/types";
 import { money } from "../../../lib/format";
 
 /** periodPriceAfter — цена за ОДИН ПОЛНЫЙ ИЛИ НАЧАТЫЙ шаг длиной
@@ -43,4 +43,51 @@ export function itemRateLabel(it: RentalItem): string {
     it.period_price_after_snapshot,
     it.after_period_days_snapshot
   );
+}
+
+/* ============================================================
+   Доступность оборудования на произвольный диапазон дат — порт
+   isEquipmentFree/nextFreeDate демо (addRentalForm/editRentalForm). Раньше
+   жило только внутри RentalsTab.tsx (EquipmentPicklist) — вынесено сюда
+   (41-й проход) для повторного использования в ExtendRentalModal (проверка
+   конфликта при быстром продлении аренды) и CreateRentalModal (фильтрация
+   предзаполненных позиций при "Повторить аренду" — только реально свободные
+   на новый период сразу отмечаются галочкой).
+   ============================================================ */
+export function rangesOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
+  return aStart <= bEnd && bStart <= aEnd;
+}
+
+export function isEquipmentFreeForRange(
+  equipmentId: string,
+  start: string,
+  end: string,
+  rentals: Rental[],
+  excludeRentalId?: string
+): boolean {
+  if (!start || !end) return true;
+  return !rentals.some((r) => {
+    if (r.id === excludeRentalId) return false;
+    if (r.status !== "booked" && r.status !== "active") return false;
+    if (!r.items.some((it) => it.equipment_id === equipmentId)) return false;
+    return rangesOverlap(r.start_date, r.end_date, start, end);
+  });
+}
+
+export function conflictEndFor(
+  equipmentId: string,
+  start: string,
+  end: string,
+  rentals: Rental[],
+  excludeRentalId?: string
+): string | null {
+  const blocking = rentals
+    .filter((r) => {
+      if (r.id === excludeRentalId) return false;
+      if (r.status !== "booked" && r.status !== "active") return false;
+      if (!r.items.some((it) => it.equipment_id === equipmentId)) return false;
+      return rangesOverlap(r.start_date, r.end_date, start, end);
+    })
+    .sort((a, b) => (a.end_date < b.end_date ? 1 : -1));
+  return blocking.length ? blocking[0].end_date : null;
 }

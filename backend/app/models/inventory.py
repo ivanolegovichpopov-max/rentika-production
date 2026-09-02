@@ -37,6 +37,16 @@ class ClientRating(str, enum.Enum):
     blacklist = "blacklist"  # «чёрный список»
 
 
+class RentalPhotoStage(str, enum.Enum):
+    """Этап аренды, к которому относится фото состояния оборудования (41-й
+    проход) — то же деление, что и у issue_notes/return_notes на Rental,
+    только для вложений. "return" как значение enum, но не как имя атрибута
+    Python (зарезервированное слово) — атрибут называется return_."""
+
+    issue = "issue"
+    return_ = "return"
+
+
 class ClientType(str, enum.Enum):
     """Физлицо или организация (25-й проход, обзор «глазами обычного
     пользователя», п.2) — у организации другой набор реквизитов для
@@ -377,3 +387,57 @@ class RentalItem(Base):
     # См. Equipment.after_period_days — снимок того же поля на момент
     # оформления аренды (двадцатый проход).
     after_period_days_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Частичный возврат по позициям (41-й проход) — NULL, пока конкретная
+    # единица оборудования ещё не возвращена; заполняется либо точечным
+    # POST .../return-items (часть позиций аренды возвращена раньше
+    # остальных — например клиент вернул палатку сегодня, а генератор
+    # оставил себе ещё на неделю), либо обычным POST .../return (закрывает
+    # СРАЗУ ВСЕ ещё не возвращённые позиции той же датой — см.
+    # app/api/routes/rentals.py:return_rental). Оборудование освобождается
+    # для новой брони сразу по факту простановки этого поля, не дожидаясь,
+    # пока вернутся остальные позиции аренды (см. _find_blocking_rental) —
+    # это и есть весь смысл доработки: раньше аренда занимала оборудование
+    # оптом до момента, пока ПОСЛЕДНЯЯ позиция не будет закрыта.
+    returned_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+
+class RentalPhoto(Base):
+    """Фото состояния оборудования при выдаче/возврате (41-й проход) — то же
+    хранение, что и ClientDocument (base64 в TEXT-колонке, см. её докстринг
+    про отсутствие объектного хранилища в проекте), но привязано к Rental
+    целиком, а не к отдельной позиции: на практике сотрудник фотографирует
+    комплект как есть (например, весь груз в кузове), а не каждую единицу
+    оборудования по отдельности."""
+
+    __tablename__ = "rental_photos"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rental_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), ForeignKey("rentals.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    employee_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
+    )
+    # values_callable обязателен здесь: SQLAlchemy по умолчанию хранит В БД
+    # ИМЯ атрибута enum'а (.name), а не его значение (.value) — для всех
+    # остальных enum'ов проекта это неразличимо, потому что там имя и
+    # значение совпадают (RentalStatus.active == "active" и т.п.). У этого
+    # enum'а — нет: имя атрибута return_ (return — зарезервированное слово
+    # Python), а значение "return". Без values_callable в БД легла бы строка
+    # "return_", которая разошлась бы с тем, что отдаёт/принимает Pydantic
+    # (использует .value, то есть "return") — эндпоинты просто перестали бы
+    # находить совпадение при фильтрации по stage.
+    stage: Mapped[RentalPhotoStage] = mapped_column(
+        Enum(RentalPhotoStage, name="rental_photo_stage", values_callable=lambda enum_cls: [e.value for e in enum_cls]),
+        nullable=False,
+    )
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    data_base64: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now()
+    )
