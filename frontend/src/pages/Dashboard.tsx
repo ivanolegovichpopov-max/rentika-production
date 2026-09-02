@@ -15,7 +15,7 @@ import { EmployeesTab } from "./dashboard/EmployeesTab";
 import { MessagesTab } from "./dashboard/MessagesTab";
 import { AccountSettings } from "./AccountSettings";
 import { rentalDisplayStatus } from "../lib/statusMeta";
-import { colorFromId, initials } from "../lib/format";
+import { initials } from "../lib/format";
 import { periodFor, type FinancePeriod } from "../lib/financeCalc";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
@@ -354,7 +354,7 @@ function DashboardShell({
                   title={isSelf ? "Открыть мой профиль" : `Открыть ${emp.name} в разделе «Сотрудники»`}
                   onClick={() => (isSelf ? navigate("profile") : navigate("employees", { highlightEmployeeId: emp.id }))}
                 >
-                  <span className="avatar" style={{ background: colorFromId(emp.id) }}>{initials(emp.name)}</span>
+                  <span className="avatar">{initials(emp.name)}</span>
                   <span className="team-name">{emp.name}</span>
                 </button>
               );

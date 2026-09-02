@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import type { ChatMessage, Conversation, ConversationType, DirectoryEmployee, MessagingPermission } from "../../api/types";
-import { colorFromId, initials } from "../../lib/format";
+import { initials } from "../../lib/format";
 import { IconClose, IconMessages, IconPlus, IconSend } from "../../lib/icons";
 import { useToast } from "../../components/Toast";
 
@@ -134,7 +134,7 @@ function NewConversationModal({ open, directory, canCreateGroup, onClose, onCrea
                     className={"directory-row" + (isSelected ? " selected" : "")}
                     onClick={() => (tab === "dm" ? setSelected([e.id]) : toggleSelected(e.id))}
                   >
-                    <span className="avatar" style={{ background: colorFromId(e.id) }}>
+                    <span className="avatar">
                       {initials(e.name)}
                     </span>
                     <span className="directory-name">
@@ -327,7 +327,7 @@ export function MessagesTab({
                 className={"conv-item" + (c.id === activeId ? " active" : "")}
                 onClick={() => setActiveId(c.id)}
               >
-                <span className="avatar" style={{ background: colorFromId(c.id) }}>
+                <span className="avatar">
                   {initials(c.display_name)}
                 </span>
                 <span className="conv-item-body">

@@ -9,7 +9,7 @@ import { useRef, useState } from "react";
 import { api, ApiError, setAccessToken } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import type { Business, Employee } from "../api/types";
-import { colorFromId, initials } from "../lib/format";
+import { initials } from "../lib/format";
 import { TwoFactorSettings } from "./TwoFactorSettings";
 
 // Ограничение на исходный файл ДО кодирования в base64 (сама data: URL
@@ -208,7 +208,7 @@ export function AccountSettings({
       <div className="card">
         <h2>Профиль</h2>
         <div className="profile-head">
-          <span className="avatar profile-avatar" style={{ background: colorFromId(myEmployee?.id ?? user?.id ?? "") }}>
+          <span className="avatar profile-avatar">
             {initials(myEmployee?.name ?? user?.email ?? "?")}
           </span>
           <div>

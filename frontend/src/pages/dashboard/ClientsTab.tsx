@@ -12,7 +12,7 @@ import type {
   TrashedClient,
 } from "../../api/types";
 import { RATING_META, RENTAL_META, Badge, rentalDisplayStatus } from "../../lib/statusMeta";
-import { money, fmtDate, colorFromId, initials, formatPhoneInput } from "../../lib/format";
+import { money, fmtDate, initials, formatPhoneInput } from "../../lib/format";
 import {
   IconClose,
   IconEdit,
@@ -1347,7 +1347,7 @@ function ClientTrashModal({
           items.map((c) => (
             <div className="mini-item" key={c.id}>
               <span>
-                <span className="avatar" style={{ background: colorFromId(c.id), width: 18, height: 18, fontSize: "9px", marginRight: "6px" }}>
+                <span className="avatar" style={{ width: 18, height: 18, fontSize: "9px", marginRight: "6px" }}>
                   {initials(c.name)}
                 </span>
                 {c.name}
@@ -2114,10 +2114,11 @@ export function ClientsTab({
                     </td>
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        {/* Цветной аватар из инициалов — тот же приём, что и у
-                            сотрудников в сайдбаре (colorFromId/initials из
-                            lib/format.ts), 25-й проход, п.3 обзора. */}
-                        <span className="avatar" style={{ background: colorFromId(c.id) }}>{initials(c.name)}</span>
+                        {/* Аватар из инициалов, нейтральный цвет — тот же приём,
+                            что и у сотрудников в сайдбаре (initials из
+                            lib/format.ts), 25-й проход, п.3 обзора; цвет сделан
+                            единым (37-й проход) — см. .avatar в styles.css. */}
+                        <span className="avatar">{initials(c.name)}</span>
                         <div>
                           {/* cell-name-wrap (32-й проход — обзор оформления,
                               п. "Удалить съезжает за край экрана"): у клиента с
@@ -2413,7 +2414,7 @@ export function ClientDetailPanel({
     <div className="slideover">
       <div className="slideover-head">
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span className="avatar" style={{ background: colorFromId(client.id), width: 36, height: 36, fontSize: "14px" }}>
+          <span className="avatar" style={{ width: 36, height: 36, fontSize: "14px" }}>
             {initials(client.name)}
           </span>
           <div>

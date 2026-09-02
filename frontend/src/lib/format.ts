@@ -53,25 +53,6 @@ export function fmtDateLong(iso: string): string {
   return parseLocal(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 }
 
-/** Детерминированный цвет по строке (для аватаров сотрудников — в проде нет
- * поля "цвет" у сотрудника, как в демо с хардкод-палитрой участников, поэтому
- * цвет генерируется из id, а не берётся из данных — визуально то же самое,
- * но отличается конкретными оттенками между демо и продом). Палитра сужена
- * до сине-фиолетово-бирюзового спектра (34-й проход, обзор колонки "Имя") —
- * старая версия включала зелёные (#4A7A3E, #2E8E7A) и коричнево-оранжевые
- * (#8E5A2E, #7A5A3E) оттенки, которые визуально спорили с тональными цветами
- * статусов в соседних колонках (--good — зелёный, "Надёжный"/"Свободно";
- * --warning — оранжево-коричневый, "На контроле"/"Обслуживание") — случайный
- * цвет аватара мог случайно совпасть по оттенку с реальным статусным
- * сигналом рядом, хотя связи между ними нет. Общая для аватаров клиентов,
- * сотрудников (сайдбар, AccountSettings) и переписки (MessagesTab). */
-const AVATAR_PALETTE = ["#2E6F8E", "#3E5A7A", "#5A3E7A", "#7A3E6E", "#3D4A8C", "#2E8299", "#6C3D8E", "#4A4A8E"];
-export function colorFromId(id: string): string {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
-}
-
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
