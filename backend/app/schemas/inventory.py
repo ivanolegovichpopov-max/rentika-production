@@ -568,6 +568,9 @@ class RentalOut(BaseModel):
     # поэтому deposit_total читается "вживую" из Equipment.deposit на момент
     # ответа и может измениться, если залог у оборудования потом поменяют.
     deposit_total: float
+    # Депозит возвращён клиенту (42-й проход) — отдельный факт от закрытия
+    # аренды, см. Rental.deposit_returned_at в app/models/inventory.py.
+    deposit_returned_at: date | None = None
     items: list[RentalItemOut] = []
 
     model_config = {"from_attributes": True}
@@ -619,6 +622,8 @@ class RentalPhotoOut(BaseModel):
     RentalPhoto в app/models/inventory.py, та же простая схема хранения, что
     и ClientDocumentOut."""
 
+    model_config = {"from_attributes": True}
+
     id: uuid.UUID
     rental_id: uuid.UUID
     employee_id: uuid.UUID | None
@@ -628,6 +633,28 @@ class RentalPhotoOut(BaseModel):
     content_type: str
     size_bytes: int
     data_base64: str
+    created_at: datetime
+
+
+class RentalDepositReturn(BaseModel):
+    """Отметка "депозит возвращён клиенту" (42-й проход) — см.
+    Rental.deposit_returned_at. returned=true проставляет дату (сегодня, если
+    свою не передали), returned=false снимает отметку (на случай ошибки)."""
+
+    returned: bool
+    returned_at: date | None = None
+
+
+class RentalHistoryEntry(BaseModel):
+    """Одна запись журнала изменений аренды (42-й проход) — читает
+    существующий AuditLog (app/models/audit.py), который и раньше писал
+    события create/issue/edit/return/return_items/cancel по каждой аренде
+    (см. log_action(...) по всему rentals.py), просто до этого прохода
+    нигде не читался обратно в интерфейс."""
+
+    action: str
+    employee_name: str | None = None
+    meta: dict | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

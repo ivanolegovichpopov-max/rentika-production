@@ -261,7 +261,26 @@ export interface Rental {
   total: number;
   amount: number; // алиас total, для обратной совместимости
   deposit_total: number; // сумма ТЕКУЩИХ deposit оборудования в позициях (не снимок на момент брони — см. заметки о деплое)
+  // Дата, когда депозит фактически отдан клиенту обратно (42-й проход) —
+  // независимый факт от закрытия самой аренды: deposit_total выше считается
+  // "вживую" по текущим Equipment.deposit позиций и никогда не хранится
+  // суммой на аренде, поэтому "возвращён" — отдельная дата, не производная
+  // от status==="returned". null = ещё не отмечен возвращённым.
+  deposit_returned_at: string | null;
   items: RentalItem[];
+}
+
+// Одна запись журнала изменений аренды (42-й проход) — GET
+// .../rentals/{id}/history, переиспользует существующий AuditLog (пишется
+// всеми действиями по аренде — create/issue/edit/return/return_items/cancel/
+// deposit_return, см. log_action(...) в app/api/routes/rentals.py). meta —
+// произвольный набор полей "было/стало", зависящий от action, интерпретация
+// каждого — в RentalHistorySection.tsx.
+export interface RentalHistoryEntry {
+  action: string;
+  employee_name: string | null;
+  meta: Record<string, unknown> | null;
+  created_at: string;
 }
 
 // Личная настройка дашборда текущего сотрудника — GET/PUT

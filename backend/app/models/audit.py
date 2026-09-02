@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import JSON, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -25,4 +25,15 @@ class AuditLog(Base):
     resource_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Журнал аренды (42-й проход, rental_history) сортируется от новых к
+    # старым, и ВАЖНА стабильная сортировка внутри одной секунды — несколько
+    # действий подряд обычное дело (а с массовыми действиями по списку аренд
+    # это станет и вовсе типичным случаем: пачка record'ов пишется в цикле
+    # за миллисекунды). Секундного разрешения server_default=func.now() на
+    # SQLite (в тестах) не хватает; тот же приём, что уже применён у
+    # ClientNote.created_at и RentalPhoto.created_at — клиентский default с
+    # микросекундной точностью, server_default остаётся подстраховкой на
+    # случай прямой SQL-вставки в обход ORM.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=func.now()
+    )

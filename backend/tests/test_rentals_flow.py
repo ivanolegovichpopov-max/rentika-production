@@ -757,3 +757,79 @@ def test_rental_photos_upload_list_delete(client):
     after_delete = client.get(f"/api/businesses/{business_id}/rentals/{rental_id}/photos", headers=headers).json()
     assert len(after_delete) == 1
     assert after_delete[0]["stage"] == "return"
+
+
+def test_deposit_return_toggle_sets_and_clears_date(client):
+    """42-й проход, п.1: отметка "депозит возвращён" — отдельный факт от
+    закрытия самой аренды, независимо переключаемый в любую сторону."""
+    owner = register_business(client, email="deposit-return@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    _, _, rental = _setup_rental(client, headers, business_id)
+    rental_id = rental["id"]
+    assert rental["deposit_returned_at"] is None
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/deposit-return",
+        json={"returned": True},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deposit_returned_at"] == date.today().isoformat()
+
+    # Явно переданная дата используется вместо "сегодня".
+    explicit_date = _future(1)
+    resp2 = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/deposit-return",
+        json={"returned": True, "returned_at": explicit_date},
+        headers=headers,
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["deposit_returned_at"] == explicit_date
+
+    # Откат — снова снимается (returned=false), несмотря на переданную дату.
+    resp3 = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/deposit-return",
+        json={"returned": False, "returned_at": explicit_date},
+        headers=headers,
+    )
+    assert resp3.status_code == 200
+    assert resp3.json()["deposit_returned_at"] is None
+
+
+def test_rental_history_lists_lifecycle_actions_with_meta(client):
+    """42-й проход, п.2: журнал аренды переиспользует существующий AuditLog —
+    проверяем, что create/issue/edit попадают в список в правильном порядке
+    (новые сверху) и что meta правки содержит фактическое изменение даты."""
+    owner = register_business(client, email="rental-history@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    _, _, rental = _setup_rental(client, headers, business_id)
+    rental_id = rental["id"]
+    original_end = rental["end_date"]
+
+    client.post(f"/api/businesses/{business_id}/rentals/{rental_id}/issue", headers=headers)
+
+    new_end = _future(40)
+    client.patch(
+        f"/api/businesses/{business_id}/rentals/{rental_id}",
+        json={"end_date": new_end},
+        headers=headers,
+    )
+
+    history_resp = client.get(f"/api/businesses/{business_id}/rentals/{rental_id}/history", headers=headers)
+    assert history_resp.status_code == 200
+    entries = history_resp.json()
+
+    actions = [e["action"] for e in entries]
+    assert actions == ["edit", "issue", "create"]  # новые сверху
+    for entry in entries:
+        assert entry["employee_name"] is not None
+
+    edit_entry = entries[0]
+    assert edit_entry["meta"]["end_date_before"] == original_end
+    assert edit_entry["meta"]["end_date_after"] == new_end
+    assert "start_date_before" not in edit_entry["meta"]  # дата начала не менялась

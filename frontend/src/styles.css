@@ -734,6 +734,12 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
   .modal-head, .modal-foot .btn:not(.print-btn) { display: none !important; }
   .modal-body { max-height: none; overflow: visible; padding: 0; }
   .print-btn { display: none !important; }
+  /* Массовая печать договоров пачкой (42-й проход, п.3 обзора) — несколько
+     .doc-page друг за другом в одном DocModal (buildBulkContractsDoc,
+     documents.tsx): без разрыва страниц договоры печатались бы одним
+     потоком внахлёст. Последнему :not(:last-child) разрыв не нужен — иначе
+     после него осталась бы пустая страница. */
+  .doc-page:not(:last-child) { page-break-after: always; break-after: page; }
 }
 
 /* ---------- Диапазон дат «Финансы» ---------- */

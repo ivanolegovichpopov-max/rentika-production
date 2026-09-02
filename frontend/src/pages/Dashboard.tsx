@@ -218,6 +218,11 @@ function DashboardShell({
   // тем же счётчиковым паттерном, чтобы повторный клик по уже подсвеченной
   // строке срабатывал снова.
   const [highlightEmployee, setHighlightEmployee] = useState<{ id: string; signal: number } | null>(null);
+  // Дата, на которую нужно перепрыгнуть при переходе на "Календарь" из
+  // карточки/панели аренды (42-й проход, п.5 обзора) — тот же счётчиковый
+  // паттерн, что и highlightEmployee выше (см. докстринг пропа focus в
+  // CalendarTab.tsx).
+  const [calendarFocus, setCalendarFocus] = useState<{ date: string; signal: number } | null>(null);
 
   /** Переход между разделами со сбросом поиска и (опционально) выставлением
    * фильтра — аналог обработчика "dash-stat"/"filter-by-category" в демо. */
@@ -229,6 +234,7 @@ function DashboardShell({
       search?: string;
       finance30?: boolean;
       highlightEmployeeId?: string;
+      calendarFocusDate?: string;
     }
   ) {
     setView(target);
@@ -237,6 +243,7 @@ function DashboardShell({
     if (opts?.rentalFilter) setRentalFilter(opts.rentalFilter);
     if (opts?.finance30) setFinancePeriod(periodFor("30", rentals));
     if (opts?.highlightEmployeeId) setHighlightEmployee((prev) => ({ id: opts.highlightEmployeeId!, signal: (prev?.signal ?? 0) + 1 }));
+    if (opts?.calendarFocusDate) setCalendarFocus((prev) => ({ date: opts.calendarFocusDate!, signal: (prev?.signal ?? 0) + 1 }));
   }
 
   const activeEmployees = employees.filter((e) => e.status !== "disabled");
@@ -445,9 +452,10 @@ function DashboardShell({
                   setFilter={setRentalFilter}
                   onOpenClient={setDashClientId}
                   onOpenEquipment={setDashEquipmentId}
+                  onOpenCalendar={(date) => navigate("calendar", { calendarFocusDate: date })}
                 />
               )}
-              {view === "calendar" && <CalendarTab businessId={businessId} search={search} />}
+              {view === "calendar" && <CalendarTab businessId={businessId} search={search} focus={calendarFocus} />}
               {view === "finance" && <FinanceTab period={financePeriod} setPeriod={setFinancePeriod} />}
               {view === "employees" && <EmployeesTab businessId={businessId} highlightEmployee={highlightEmployee} />}
               {view === "messages" && (

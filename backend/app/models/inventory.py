@@ -364,6 +364,15 @@ class Rental(Base):
         GUID(), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Депозит возвращён клиенту (42-й проход) — отдельный факт от самого
+    # закрытия аренды: deposit_total (см. RentalOut) считается "вживую" по
+    # ТЕКУЩЕМУ Equipment.deposit позиций и никогда не хранится как отдельная
+    # сумма на аренде, поэтому "возвращён" не может быть просто датой на уже
+    # существующем денежном поле — это независимый факт, который сотрудник
+    # проставляет сам (обычно после "Принять возврат", но не обязан
+    # совпадать по времени — иногда депозит отдают на следующий день).
+    # NULL = ещё не возвращён, дата = когда отметили.
+    deposit_returned_at: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
 class RentalItem(Base):

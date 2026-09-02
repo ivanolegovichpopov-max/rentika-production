@@ -37,18 +37,20 @@
  *    собственными запросами к backend (POST .../return-items, GET/POST/
  *    DELETE .../photos через RentalPhotosSection).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Rental } from "../../../api/types";
 import { useData } from "../../../context/DataContext";
 import { RENTAL_META, Badge, rentalDisplayStatus } from "../../../lib/statusMeta";
 import { money, fmtDate, todayISO } from "../../../lib/format";
-import { IconClose, IconUser, IconEdit, IconRepeat } from "../../../lib/icons";
+import { IconClose, IconUser, IconEdit, IconRepeat, IconCalendar } from "../../../lib/icons";
 import { itemRateLabel } from "./helpers";
 import { api, ApiError } from "../../../api/client";
 import { normalizePhoneDigits } from "../clients/helpers";
 import { buildRentalSummaryText } from "../clients/summary";
 import { MoreActionsMenu } from "../../../components/MoreActionsMenu";
 import { RentalPhotosSection } from "./RentalPhotosSection";
+import { RentalHistorySection } from "./RentalHistorySection";
+import { DocModal, buildPartialReturnDoc } from "../documents";
 
 /* ---------- Частичный возврат выбранных позиций ---------- */
 function ReturnItemsModal({
@@ -64,7 +66,10 @@ function ReturnItemsModal({
   equipmentIds: string[];
   equipmentNames: string;
   onClose: () => void;
-  onReturned: () => Promise<void>;
+  // Сообщает наверх параметры ИМЕННО этого возврата (не финальное состояние
+  // аренды после reload) — родитель строит по ним акт частичного возврата
+  // (42-й проход, п.4 обзора), см. buildPartialReturnDoc в documents.tsx.
+  onReturned: (info: { equipmentIds: string[]; damageFee: number; returnDate: string }) => Promise<void>;
 }) {
   const [actualReturn, setActualReturn] = useState(todayISO());
   const [notes, setNotes] = useState("");
@@ -87,14 +92,19 @@ function ReturnItemsModal({
     setError(null);
     setSaving(true);
     try {
+      const returnDate = actualReturn || todayISO();
+      const fee = Number(damageFee) || 0;
       await api.post(`/businesses/${businessId}/rentals/${rental.id}/return-items`, {
         equipment_ids: equipmentIds,
-        actual_return: actualReturn || todayISO(),
+        actual_return: returnDate,
         return_notes: notes.trim() || undefined,
-        damage_fee: Number(damageFee) || 0,
+        damage_fee: fee,
       });
-      await onReturned();
+      // Закрываем это модальное окно ПЕРЕД тем, как родитель откроет акт —
+      // оба используют один и тот же native <dialog id="modal">, и открытыми
+      // одновременно им быть не должно (см. общий idiom DocModal/FormModal).
       onClose();
+      await onReturned({ equipmentIds, damageFee: fee, returnDate });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Не удалось оформить возврат позиций");
     } finally {
@@ -157,6 +167,7 @@ export function RentalDetailPanel({
   onOpenEquipment,
   onExtend,
   onRepeat,
+  onOpenCalendar,
 }: {
   businessId: string;
   rentalId: string;
@@ -169,11 +180,43 @@ export function RentalDetailPanel({
   // Открыть "Новую аренду", предзаполненную клиентом и позициями текущей
   // аренды (CreateRentalModal тоже живёт в RentalsTab.tsx).
   onRepeat: (clientId: string, equipmentIds: string[]) => void;
+  // Перейти на вкладку "Календарь" с фокусом на дату начала этой аренды
+  // (42-й проход, п.5 обзора) — переключение View живёт в Dashboard.tsx,
+  // здесь просто передаём дату наверх.
+  onOpenCalendar: (date: string) => void;
 }) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
   const rental: Rental | undefined = rentals.find((r) => r.id === rentalId);
+  const [depositSaving, setDepositSaving] = useState(false);
+  const [depositError, setDepositError] = useState<string | null>(null);
+
+  // Возврат депозита клиенту (42-й проход) — отдельный факт от закрытия
+  // самой аренды, переключается в любую сторону (см. докстринг
+  // Rental.deposit_returned_at в api/types.ts). Дату не спрашиваем отдельным
+  // полем — POST .../deposit-return без returned_at сам подставляет
+  // "сегодня" (см. app/api/routes/rentals.py:set_deposit_returned), этого
+  // достаточно для галочки "вернули/не вернули".
+  async function toggleDepositReturned() {
+    if (!rental) return;
+    setDepositSaving(true);
+    setDepositError(null);
+    try {
+      await api.post(`/businesses/${businessId}/rentals/${rental.id}/deposit-return`, {
+        returned: !rental.deposit_returned_at,
+      });
+      await reloadRentals();
+    } catch (err) {
+      setDepositError(err instanceof ApiError ? err.message : "Не удалось изменить отметку о депозите");
+    } finally {
+      setDepositSaving(false);
+    }
+  }
   const [selectedReturnIds, setSelectedReturnIds] = useState<string[]>([]);
   const [returnModalOpen, setReturnModalOpen] = useState(false);
+  // Акт частичного возврата (42-й проход, п.4 обзора) — открывается сразу
+  // после успешного оформления, тот же принцип автопоказа, что и у
+  // openDoc("Акт возврата", ...) после полного возврата в RentalsTab.tsx.
+  const [returnDoc, setReturnDoc] = useState<ReactNode | null>(null);
 
   if (!rental) return null;
 
@@ -227,6 +270,9 @@ export function RentalDetailPanel({
           onClick={() => onRepeat(rental.client_id, rental.items.map((it) => it.equipment_id))}
         >
           <IconRepeat /> Повторить аренду
+        </button>
+        <button className="btn btn-sm" type="button" onClick={() => onOpenCalendar(rental.start_date)}>
+          <IconCalendar /> В календаре
         </button>
         {client && (client.phone || client.email) && (
           <MoreActionsMenu
@@ -345,8 +391,25 @@ export function RentalDetailPanel({
             {money(rental.total)}
           </span>
           <span className="k">Депозит на удержании</span>
-          <span className="mono">{money(rental.deposit_total)}</span>
+          <span className="mono" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "10px" }}>
+            {money(rental.deposit_total)}
+            {rental.deposit_total > 0 && (
+              <label
+                style={{ display: "flex", alignItems: "center", gap: "5px", fontWeight: 400, fontSize: "11.5px", color: "var(--muted)", cursor: depositSaving ? "wait" : "pointer" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!rental.deposit_returned_at}
+                  disabled={depositSaving}
+                  onChange={toggleDepositReturned}
+                  style={{ width: "14px", height: "14px" }}
+                />
+                {rental.deposit_returned_at ? `возвращён ${fmtDate(rental.deposit_returned_at)}` : "возвращён клиенту"}
+              </label>
+            )}
+          </span>
         </div>
+        {depositError && <div className="form-error">{depositError}</div>}
       </div>
 
       {(rental.issue_notes || rental.return_notes) && (
@@ -373,6 +436,8 @@ export function RentalDetailPanel({
 
       <RentalPhotosSection businessId={businessId} rentalId={rental.id} />
 
+      <RentalHistorySection businessId={businessId} rentalId={rental.id} />
+
       {returnModalOpen && (
         <ReturnItemsModal
           businessId={businessId}
@@ -380,12 +445,21 @@ export function RentalDetailPanel({
           equipmentIds={selectedReturnIds}
           equipmentNames={selectedNames}
           onClose={() => setReturnModalOpen(false)}
-          onReturned={async () => {
+          onReturned={async (info) => {
+            // Акт строим ДО reload'а, на снимке rental, который уже
+            // захвачен в этом замыкании — buildPartialReturnDoc сам
+            // выясняет "что осталось" через параметр equipmentIds,
+            // returned_at ещё не проставленных позиций для этого не нужен.
+            setReturnDoc(buildPartialReturnDoc(rental, client, equipment, info.equipmentIds, info.damageFee, info.returnDate));
             await Promise.all([reloadRentals(), reloadEquipment()]);
             setSelectedReturnIds([]);
           }}
         />
       )}
+
+      <DocModal title="Акт частичного возврата" open={!!returnDoc} onClose={() => setReturnDoc(null)}>
+        {returnDoc}
+      </DocModal>
     </div>
   );
 }

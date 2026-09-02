@@ -5,7 +5,7 @@ import type { Client, Equipment, Rental, RentalItem } from "../../api/types";
 import { money, fmtDate, dayDiff, todayISO, isoAddDays, spanDays } from "../../lib/format";
 import { RENTAL_META, Badge, rentalDisplayStatus, type StatusMeta } from "../../lib/statusMeta";
 import { IconPrinter, IconEdit, IconClose, IconAlert, IconCalendar, IconChevronRight } from "../../lib/icons";
-import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc } from "./documents";
+import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc, buildBulkContractsDoc } from "./documents";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
@@ -788,6 +788,7 @@ export function RentalsTab({
   setFilter,
   onOpenClient,
   onOpenEquipment,
+  onOpenCalendar,
 }: {
   businessId: string;
   search: string;
@@ -802,6 +803,11 @@ export function RentalsTab({
   // деталей аренды) — dashEquipmentId/setDashEquipmentId, нужен для клика
   // по позиции в разделе "Оборудование" внутри RentalDetailPanel.
   onOpenEquipment: (equipmentId: string) => void;
+  // Перейти на вкладку "Календарь" и сразу показать даты этой аренды
+  // (42-й проход, п.5 обзора) — навигация с переключением View живёт в
+  // Dashboard.tsx (navigate(...) + calendarFocus), сюда приходит только
+  // дата, на которую нужно перепрыгнуть.
+  onOpenCalendar: (date: string) => void;
 }) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
   // usePersistedState — девятнадцатый проход, п.4 обзора «Оборудования»:
@@ -826,8 +832,30 @@ export function RentalsTab({
   const [extendRental, setExtendRental] = useState<Rental | null>(null);
   const [openRentalId, setOpenRentalId] = useState<string | null>(null);
   const [docModal, setDocModal] = useState<{ title: string; node: ReactNode } | null>(null);
+  // Массовые действия по списку аренд (42-й проход, п.3 обзора) — карточки,
+  // в отличие от табличных ClientsTab/EquipmentTab, ЧЕКБОКСЫ ПОКАЗЫВАЮТ
+  // ТОЛЬКО в режиме выбора (selectMode), а не постоянно: список карточек и
+  // так плотный (даты/сумма/бейджи/кнопки), лишний чекбокс на каждой в
+  // обычном режиме просмотра был бы шумом без пользы большую часть времени.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const { notify } = useToast();
+
+  function toggleSelectMode() {
+    setSelectMode((v) => !v);
+    setSelectedIds(new Set());
+  }
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   const list = rentals.filter((r) => {
     const st = rentalDisplayStatus(r);
@@ -878,6 +906,61 @@ export function RentalsTab({
 
   function openDoc(title: string, node: ReactNode) {
     setDocModal({ title, node });
+  }
+
+  /** Печать договоров пачкой (42-й проход, п.3 обзора) — один DocModal,
+   * несколько .doc-page подряд с разрывом страницы между ними (см.
+   * page-break-after в styles.css), а не поочерёдная печать каждого
+   * договора отдельно. */
+  function handleBulkContracts() {
+    const chosen = sorted.filter((r) => selectedIds.has(r.id));
+    if (chosen.length === 0) return;
+    openDoc(
+      `Договоры (${chosen.length} шт.)`,
+      buildBulkContractsDoc(
+        chosen.map((r) => ({ rental: r, client: clients.find((c) => c.id === r.client_id) })),
+        equipment
+      )
+    );
+  }
+
+  /** Массовая отмена (42-й проход, п.3 обзора) — только для брони (status
+   * "booked"), тот же принцип, что и у одиночной кнопки "Отменить" на
+   * карточке выше: она тоже видна ТОЛЬКО у забронированных аренд, "В
+   * работе"/"Возвращена" через список массово не отменяются (для активной
+   * аренды отмена — редкое, требующее внимания действие с откатом статуса
+   * оборудования, для неё нарочно оставлена только одиночная кнопка на
+   * карточке в явном контексте, не пакетная операция вслепую по списку).
+   */
+  async function handleBulkCancel() {
+    const chosen = sorted.filter((r) => selectedIds.has(r.id));
+    const cancellable = chosen.filter((r) => r.status === "booked");
+    const skipped = chosen.length - cancellable.length;
+    if (cancellable.length === 0) return;
+    if (
+      !(await confirm(`Отменить ${cancellable.length} брон${cancellable.length === 1 ? "ь" : "и"}?`, {
+        danger: true,
+        confirmLabel: "Отменить",
+      }))
+    )
+      return;
+    setBulkBusy(true);
+    try {
+      const results = await Promise.allSettled(
+        cancellable.map((r) => api.post(`/businesses/${businessId}/rentals/${r.id}/cancel`))
+      );
+      const failed = results.filter((res) => res.status === "rejected").length;
+      await Promise.all([reloadRentals(), reloadEquipment()]);
+      setSelectedIds(new Set());
+      const parts = [
+        `Отменено ${cancellable.length - failed} из ${cancellable.length}.`,
+        skipped > 0 ? `Пропущено (не бронь): ${skipped}.` : "",
+        failed > 0 ? `Ошибок: ${failed}.` : "",
+      ].filter(Boolean);
+      notify(parts.join(" "), failed > 0 ? "error" : "info");
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   return (
@@ -940,11 +1023,56 @@ export function RentalsTab({
               },
             ]}
           />
+          {/* Массовые действия (42-й проход, п.3 обзора) — отдельный
+              переключаемый режим, а не постоянные чекбоксы на каждой
+              карточке, см. докстринг selectMode выше. */}
+          <button
+            type="button"
+            className={"btn btn-sm" + (selectMode ? " btn-primary" : "")}
+            onClick={toggleSelectMode}
+          >
+            {selectMode ? "Готово" : "Выбрать"}
+          </button>
           <button className="btn btn-primary" type="button" onClick={() => setShowCreate(true)}>
             + Новая аренда
           </button>
         </div>
       </div>
+
+      {selectMode && (
+        <div className="panel" style={{ marginBottom: "10px" }}>
+          <div className="panel-body" style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            <strong>Выбрано: {selectedIds.size}</strong>
+            <button
+              className="btn btn-sm"
+              type="button"
+              disabled={selectedIds.size === 0}
+              onClick={() => setSelectedIds(new Set(sorted.map((r) => r.id)))}
+            >
+              Выбрать все ({sorted.length})
+            </button>
+            <button
+              className="btn btn-sm"
+              type="button"
+              disabled={selectedIds.size === 0 || bulkBusy}
+              onClick={handleBulkContracts}
+            >
+              <IconPrinter /> Договоры пачкой
+            </button>
+            <button
+              className="btn btn-sm btn-danger-ghost"
+              type="button"
+              disabled={selectedIds.size === 0 || bulkBusy}
+              onClick={() => void handleBulkCancel()}
+            >
+              Отменить бронь (выбранные)
+            </button>
+            <button className="btn btn-sm" type="button" disabled={bulkBusy} onClick={() => setSelectedIds(new Set())}>
+              Снять выделение
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Напоминание о включённом переключателе (41-й проход, по итогам
           обзора) — раньше единственным признаком был подсвеченный
@@ -1000,9 +1128,22 @@ export function RentalsTab({
           // подключён). Кнопки внутри .rental-actions останавливают
           // всплытие (stopPropagation ниже), чтобы клик по ним не открывал
           // панель поверх уже выполняемого действия.
-          <div className="rental-card clickable" key={r.id} onClick={() => setOpenRentalId(r.id)}>
+          <div
+            className="rental-card clickable"
+            key={r.id}
+            onClick={() => (selectMode ? toggleSelected(r.id) : setOpenRentalId(r.id))}
+          >
             <div className="rental-main">
               <div className="rental-top">
+                {selectMode && (
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(r.id)}
+                    onChange={() => toggleSelected(r.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ width: "16px", height: "16px" }}
+                  />
+                )}
                 <span className="rental-client">{client?.name ?? "Клиент удалён"}</span>
                 <Badge meta={RENTAL_META[st]} />
                 {soonBadge && <Badge meta={soonBadge} />}
@@ -1234,6 +1375,12 @@ export function RentalsTab({
             setOpenRentalId(null);
             setRepeatDraft({ clientId, equipmentIds });
             setShowCreate(true);
+          }}
+          // Переход в "Календарь" — тоже уводит с вкладки "Аренды" целиком,
+          // тот же принцип закрытия панели, что и выше.
+          onOpenCalendar={(date) => {
+            setOpenRentalId(null);
+            onOpenCalendar(date);
           }}
         />
       )}

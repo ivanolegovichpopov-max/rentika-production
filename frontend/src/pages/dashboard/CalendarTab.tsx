@@ -142,7 +142,21 @@ interface QuickBookTarget {
   endDate: string;
 }
 
-export function CalendarTab({ businessId, search }: { businessId: string; search: string }) {
+export function CalendarTab({
+  businessId,
+  search,
+  focus,
+}: {
+  businessId: string;
+  search: string;
+  // Переход на конкретную дату из карточки/панели аренды (42-й проход, п.5
+  // обзора — "переход из карточки аренды в Календарь на её даты"). Тот же
+  // счётчиковый паттерн ({date, signal}), что и highlightEmployee в
+  // Dashboard.tsx: signal растёт на каждый клик, поэтому повторный переход
+  // на ТУ ЖЕ дату (например, вторая аренда в том же диапазоне) снова
+  // срабатывает, а не игнорируется как "date не изменился".
+  focus?: { date: string; signal: number } | null;
+}) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
   const { notify } = useToast();
 
@@ -167,6 +181,16 @@ export function CalendarTab({ businessId, search }: { businessId: string; search
 
   const calColDragRef = useRef<{ anchor: string; lastDate: string } | null>(null);
   const calColDragMovedRef = useRef(false);
+
+  // Переход по focus (см. докстринг пропа выше) — просто переставляет
+  // "сегодня" видимого диапазона (calOffset) на нужную дату; сам режим
+  // (7/14/30 дней/месяц) и фильтр категории не трогаем — пользователь мог их
+  // уже осмысленно настроить.
+  useEffect(() => {
+    if (!focus) return;
+    setCalOffset(dayDiff(focus.date));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus?.signal]);
 
   const usableAll = useMemo(() => equipment.filter((e) => e.status !== "retired"), [equipment]);
 

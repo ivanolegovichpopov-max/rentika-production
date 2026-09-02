@@ -7,7 +7,7 @@
  * planned_days/late_days — см. app/services/pricing.py compute_rental_breakdown)
  * вместо пересчёта на фронте, как в демо.
  */
-import { useEffect, useRef, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import type { Client, Equipment, Rental } from "../../api/types";
 import { fmtDate, money, todayISO } from "../../lib/format";
 import { IconClose, IconPrinter } from "../../lib/icons";
@@ -94,6 +94,30 @@ export function buildContractDoc(r: Rental, client: Client | undefined, equipmen
   );
 }
 
+/**
+ * Печать договоров пачкой (42-й проход, п.3 обзора — "массовые действия по
+ * списку аренд") — несколько buildContractDoc() подряд в одном DocModal,
+ * каждый как отдельная физическая страница при печати (см. .doc-page +
+ * page-break-after в styles.css). Fragment с key, а не обычный div-обёртка
+ * вокруг каждого документа: обёртка сделала бы .doc-page ЕДИНСТВЕННЫМ
+ * ребёнком своего родителя, из-за чего CSS-селектор
+ * .doc-page:not(:last-child) перестал бы находить сиблингов и разрывы
+ * страниц пропали бы — Fragment прозрачен для DOM/CSS, .doc-page остаются
+ * прямыми соседями друг друга.
+ */
+export function buildBulkContractsDoc(
+  items: { rental: Rental; client: Client | undefined }[],
+  equipment: Equipment[]
+): ReactNode {
+  return (
+    <>
+      {items.map(({ rental, client }) => (
+        <Fragment key={rental.id}>{buildContractDoc(rental, client, equipment)}</Fragment>
+      ))}
+    </>
+  );
+}
+
 export function buildIssueDoc(r: Rental, client: Client | undefined, equipment: Equipment[]): ReactNode {
   return (
     <div className="doc-page">
@@ -166,6 +190,90 @@ export function buildReturnDoc(r: Rental, client: Client | undefined, equipment:
           </tr>
         </tbody>
       </table>
+
+      <div className="doc-sign">
+        <div className="line">Принял / {COMPANY_NAME}</div>
+        <div className="line">Сдал / {client?.name ?? "—"}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Акт частичного возврата (42-й проход, п.4 обзора) — в отличие от
+ * buildReturnDoc (закрывает ВСЮ аренду, использует итоговую финансовую
+ * разбивку r.base/r.total целиком), здесь фиксируется только ЭТОТ конкретный
+ * возврат — какие именно позиции клиент вернул сейчас, доплата за
+ * повреждения именно этих позиций (сумма, введённая в ReturnItemsModal, а не
+ * накопленный r.damage_fee аренды) и остаются ли ещё позиции у клиента.
+ * Автопечать сразу после успешного POST .../return-items — см.
+ * RentalDetailPanel.tsx.
+ */
+export function buildPartialReturnDoc(
+  r: Rental,
+  client: Client | undefined,
+  equipment: Equipment[],
+  returnedEquipmentIds: string[],
+  damageFee: number,
+  returnDate: string
+): ReactNode {
+  const returnedItems = r.items.filter((it) => returnedEquipmentIds.includes(it.equipment_id));
+  const stillOut = r.items.filter((it) => !it.returned_at && !returnedEquipmentIds.includes(it.equipment_id));
+
+  return (
+    <div className="doc-page">
+      <h2>Акт частичного возврата оборудования</h2>
+      <div className="doc-sub">к договору № {docNumber(r)} · возврат {fmtDate(returnDate)}</div>
+
+      <div className="doc-grid">
+        <div className="k">Арендодатель</div>
+        <div>{COMPANY_NAME}</div>
+        <div className="k">Арендатор</div>
+        <div>{client?.name ?? "—"}</div>
+      </div>
+
+      <p><b>Возвращённые сейчас позиции:</b></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Оборудование</th>
+            <th>Инв. №</th>
+            <th>Ставка</th>
+          </tr>
+        </thead>
+        <tbody>
+          {returnedItems.map((it) => {
+            const eq = equipment.find((e) => e.id === it.equipment_id);
+            const rate = it.period_days_snapshot
+              ? `${money(it.period_price_snapshot ?? 0)} / ${it.period_days_snapshot} дн.`
+              : `${money(it.daily_rate_snapshot)}/день`;
+            return (
+              <tr key={it.equipment_id}>
+                <td>{eq?.name ?? "—"}</td>
+                <td>{eq?.code ?? "—"}</td>
+                <td>{rate}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {damageFee > 0 && (
+        <table>
+          <tbody>
+            <tr>
+              <td>Доплата за повреждения возвращённых позиций</td>
+              <td className="mono">{money(damageFee)}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+
+      <p>
+        {stillOut.length > 0
+          ? `Остальные позиции (${stillOut.length}) продолжают числиться за арендатором до полного возврата.`
+          : "Все позиции по договору возвращены — аренда закрыта."}
+      </p>
 
       <div className="doc-sign">
         <div className="line">Принял / {COMPANY_NAME}</div>

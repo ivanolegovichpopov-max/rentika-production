@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import log_action
 from app.core.deps import BusinessContext, require_permission
 from app.database import get_db
+from app.models.audit import AuditLog
 from app.models.business import Employee, PermissionLevel, ResourceType
 from app.models.inventory import (
     Client,
@@ -22,7 +23,9 @@ from app.models.inventory import (
 )
 from app.schemas.inventory import (
     RentalCreate,
+    RentalDepositReturn,
     RentalEdit,
+    RentalHistoryEntry,
     RentalIssue,
     RentalOut,
     RentalPhotoOut,
@@ -104,6 +107,7 @@ def _to_out(db: Session, rental: Rental) -> RentalOut:
         total=breakdown["total"],
         amount=breakdown["total"],
         deposit_total=deposit_total,
+        deposit_returned_at=rental.deposit_returned_at,
         items=items,
     )
 
@@ -519,12 +523,68 @@ async def edit_rental(
             if rental.status == RentalStatus.active:
                 equipment.status = EquipmentStatus.rented
 
+    # Снимок "было" ДО мутации — нужен для содержательной записи в журнале
+    # изменений (42-й проход, GET .../history): "edit" сам по себе ничего не
+    # говорит о том, ЧТО поменялось (даты продлили? состав? скидку?), а
+    # именно это интересно посмотреть в панели деталей аренды задним числом.
+    # В meta попадают ТОЛЬКО реально изменившиеся поля — не захламляем
+    # журнал записями вида "discount_before == discount_after".
+    history_meta: dict = {}
+    if new_start_date != rental.start_date:
+        history_meta["start_date_before"] = rental.start_date.isoformat()
+        history_meta["start_date_after"] = new_start_date.isoformat()
+    if new_end_date != rental.end_date:
+        history_meta["end_date_before"] = rental.end_date.isoformat()
+        history_meta["end_date_after"] = new_end_date.isoformat()
+    if body.equipment_ids is not None and set(body.equipment_ids) != set(existing_items.keys()):
+        history_meta["equipment_count_before"] = len(existing_items)
+        history_meta["equipment_count_after"] = len(set(body.equipment_ids))
+    if body.discount is not None and float(body.discount) != float(rental.discount):
+        history_meta["discount_before"] = float(rental.discount)
+        history_meta["discount_after"] = float(body.discount)
+
     rental.start_date = new_start_date
     rental.end_date = new_end_date
     if body.discount is not None:
         rental.discount = body.discount
 
-    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="edit", resource="rental", resource_id=str(rental_id))
+    log_action(
+        db,
+        business_id=ctx.business_id,
+        user_id=ctx.user.id,
+        action="edit",
+        resource="rental",
+        resource_id=str(rental_id),
+        meta=history_meta or None,
+    )
+    db.commit()
+    db.refresh(rental)
+    return _to_out(db, rental)
+
+
+@router.post("/{rental_id}/deposit-return", response_model=RentalOut)
+async def set_deposit_returned(
+    rental_id: uuid.UUID,
+    body: RentalDepositReturn,
+    ctx: BusinessContext = Depends(edit_dep),
+    db: Session = Depends(get_db),
+):
+    """Отметка "депозит возвращён клиенту" (42-й проход) — см. докстринг
+    Rental.deposit_returned_at. Не привязано к статусу аренды жёстко (можно
+    отметить и до формального "Принять возврат", и снять отметку по ошибке
+    в любой момент) — это отдельный факт бухгалтерии, не часть жизненного
+    цикла самой аренды."""
+    rental = _get_rental_or_404(db, ctx, rental_id)
+    rental.deposit_returned_at = (body.returned_at or date.today()) if body.returned else None
+
+    log_action(
+        db,
+        business_id=ctx.business_id,
+        user_id=ctx.user.id,
+        action="deposit_return" if body.returned else "deposit_return_undo",
+        resource="rental",
+        resource_id=str(rental_id),
+    )
     db.commit()
     db.refresh(rental)
     return _to_out(db, rental)
@@ -605,3 +665,45 @@ async def delete_rental_photo(
         db, business_id=ctx.business_id, user_id=ctx.user.id, action="delete", resource="rental_photo", resource_id=str(photo_id)
     )
     db.commit()
+
+
+# ============================================================
+# Журнал изменений аренды (42-й проход) — читает существующий AuditLog
+# (app/models/audit.py): события create/issue/edit/return/return_items/
+# cancel/deposit_return по этой аренде и раньше писались через log_action(...)
+# по всему файлу выше, просто до этого прохода нигде не читались обратно —
+# только "кто и когда удалил клиента" разбирали вручную через БД при
+# инцидентах. Здесь — обычное чтение по business_id+resource+resource_id,
+# без отдельной таблицы и без дублирования уже существующей записи событий.
+# ============================================================
+
+
+@router.get("/{rental_id}/history", response_model=list[RentalHistoryEntry])
+async def rental_history(rental_id: uuid.UUID, ctx: BusinessContext = Depends(view_dep), db: Session = Depends(get_db)):
+    _get_rental_or_404(db, ctx, rental_id)
+    rows = db.execute(
+        select(AuditLog, Employee.name)
+        # Условие на business_id — ПРЯМО в самом ON, не в WHERE: один и тот
+        # же пользователь может состоять в нескольких бизнесах (несколько
+        # строк Employee с одним user_id) — без этого условия LEFT JOIN
+        # задвоил бы строку истории на каждый такой бизнес. Так матчится
+        # только Employee ИМЕННО в текущем business_id, как и было задумано.
+        .join(Employee, (Employee.user_id == AuditLog.user_id) & (Employee.business_id == ctx.business_id), isouter=True)
+        .where(
+            AuditLog.business_id == ctx.business_id,
+            AuditLog.resource == "rental",
+            AuditLog.resource_id == str(rental_id),
+        )
+        .order_by(AuditLog.created_at.desc())
+    ).all()
+    entries = []
+    for log, employee_name in rows:
+        entries.append(
+            RentalHistoryEntry(
+                action=log.action,
+                employee_name=employee_name,
+                meta=log.meta,
+                created_at=log.created_at,
+            )
+        )
+    return entries
