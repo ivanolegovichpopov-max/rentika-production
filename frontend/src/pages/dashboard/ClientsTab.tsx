@@ -536,14 +536,9 @@ export function ClientsTab({
               "Не арендовали"/"Дни рождения" нужны реже — свёрнуты в
               дропдаун "Фильтры", данные и счётчики никуда не делись. */}
           <div style={{ display: "flex", gap: "10px" }}>
-            <button
-              type="button"
-              className={"btn" + (overdueOnly ? " btn-primary" : "")}
-              onClick={() => setOverdueOnly((v) => !v)}
-              title="Показать только клиентов с просрочкой прямо сейчас"
-            >
-              Просрочка сейчас ({overdueNowCount})
-            </button>
+            {/* Порядок "Фильтры" → "Просрочка сейчас" (45-й проход, ещё одна
+                правка по скриншоту) — раньше было наоборот; сам состав и
+                поведение обеих кнопок не изменились. */}
             <div className="cat-filter" ref={moreFiltersRef}>
               <button
                 type="button"
@@ -580,6 +575,14 @@ export function ClientsTab({
                 </div>
               )}
             </div>
+            <button
+              type="button"
+              className={"btn" + (overdueOnly ? " btn-primary" : "")}
+              onClick={() => setOverdueOnly((v) => !v)}
+              title="Показать только клиентов с просрочкой прямо сейчас"
+            >
+              Просрочка сейчас ({overdueNowCount})
+            </button>
           </div>
         </div>
         {/* Колонка кнопок в .tab-toolbar-grid (30-й проход — ещё один
