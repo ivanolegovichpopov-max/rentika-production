@@ -221,10 +221,12 @@ export function ClientsTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ratingFilter, overdueOnly, dormantOnly, birthdayOnly, search]);
 
-  // 5 вместо прежних 8 (29-й проход, ещё один повторный обзор — "Недавние"
-  // выглядели тяжеловесно) — это подсказка-ярлык для беглого взгляда, а не
-  // ещё один список, который стоит сканировать целиком.
-  const RECENT_CLIENTS_LIMIT = 5;
+  // 2 вместо прежних 5 (45-й проход, по итогам обзора верхней части
+  // "Клиенты" — "Недавние" переехали в первую строку тулбара, рядом с
+  // сегментами рейтинга, и делят с ними ширину, места заметно меньше, чем
+  // было в отдельной строке под всем тулбаром). Это подсказка-ярлык для
+  // беглого взгляда, а не ещё один список, который стоит сканировать целиком.
+  const RECENT_CLIENTS_LIMIT = 2;
   function openClient(id: string) {
     setOpenClientId(id);
     setRecentIds((prev) => [id, ...prev.filter((x) => x !== id)].slice(0, RECENT_CLIENTS_LIMIT));
@@ -462,25 +464,52 @@ export function ClientsTab({
   return (
     <div>
       <div className="tab-toolbar-grid">
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-          <div className="segmented">
-            {RATING_FILTERS.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                className={ratingFilter === f.id ? "active" : ""}
-                onClick={() => setRatingFilter(f.id)}
-              >
-                {f.label} ({ratingCounts[f.id] ?? 0})
-              </button>
-            ))}
+        {/* Левый кластер: две строки (45-й проход, по итогам обзора верхней
+            части "Аренды"/"Клиенты"/"Оборудование" разом) — граница между
+            "общими фильтрами" (сегмент рейтинга, + теперь рядом "Недавние" —
+            оба про то, "какой набор клиентов открыт сейчас на экране") и
+            "доп. фильтрами" ("Просрочка сейчас"+"Фильтры") зафиксирована как
+            строка, а не отдана на волю переноса по ширине, как раньше (44-й
+            проход, .toolbar-divider в одном общем ряду). "Недавние" были
+            отдельным третьим рядом ПОД всем тулбаром (26-й проход) — теперь
+            это часть первой строки тулбара, сокращены с 5 до 2 (в одном ряду
+            с сегментами места меньше, чем было под всем тулбаром). */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            <div className="segmented">
+              {RATING_FILTERS.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className={ratingFilter === f.id ? "active" : ""}
+                  onClick={() => setRatingFilter(f.id)}
+                >
+                  {f.label} ({ratingCounts[f.id] ?? 0})
+                </button>
+              ))}
+            </div>
+            {/* "Недавно просмотренные" (было — 26-й проход, «глазами обычного
+                пользователя», п.7) — быстрый доступ к последним открытым
+                карточкам, для сотрудника, который весь день переключается
+                между несколькими постоянными клиентами. Не показывается,
+                пока ничего ещё не открывали, и не зависит от текущего
+                поиска/фильтра — это ярлыки, а не ещё один список. Оформлены
+                заметно тише самих кнопок-действий (29-й проход; см.
+                .chip-quiet в styles.css). */}
+            {recentClients.length > 0 && (
+              <>
+                <div className="toolbar-divider" />
+                <div style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" }}>
+                  <span style={{ color: "var(--muted)", fontSize: "12.5px", marginRight: "2px" }}>Недавние:</span>
+                  {recentClients.map((c) => (
+                    <button key={c.id} type="button" className="chip-quiet" onClick={() => openClient(c.id)}>
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
-          {/* Разделитель между сегментом рейтинга и группой доп. фильтров
-              (32-й проход — обзор оформления: без него все три контрола в
-              ряду выглядели одинаковыми пилюлями, хотя ведут себя по-разному
-              — вкладки против независимых тумблеров/дропдауна). См.
-              .toolbar-divider в styles.css. */}
-          <div className="toolbar-divider" />
           {/* Группа "Просрочка сейчас" + "Фильтры" (31-й проход — "свежим
               взглядом" обзор всех кнопок разом): раньше "Просрочка сейчас"
               была на btn-sm (меньше и более округлая — пилюля 16px), а
@@ -646,25 +675,6 @@ export function ClientsTab({
               })}
             </div>
           </div>
-        </div>
-      )}
-
-      {/* "Недавно просмотренные" (26-й проход, «глазами обычного
-          пользователя», п.7) — быстрый доступ к последним открытым
-          карточкам, для сотрудника, который весь день переключается между
-          несколькими постоянными клиентами. Не показывается, пока ничего ещё
-          не открывали, и не зависит от текущего поиска/фильтра — это ярлыки,
-          а не ещё один список. Оформлены заметно тише самих кнопок-действий
-          (29-й проход, ещё один повторный обзор — были такими же по весу,
-          как настоящие кнопки; см. .chip-quiet в styles.css). */}
-      {recentClients.length > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap", marginBottom: "10px" }}>
-          <span style={{ color: "var(--muted)", fontSize: "12.5px", marginRight: "2px" }}>Недавние:</span>
-          {recentClients.map((c) => (
-            <button key={c.id} type="button" className="chip-quiet" onClick={() => openClient(c.id)}>
-              {c.name}
-            </button>
-          ))}
         </div>
       )}
 
