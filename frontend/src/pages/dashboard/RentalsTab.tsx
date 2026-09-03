@@ -1869,7 +1869,25 @@ export function RentalsTab({
     const haystack = [client?.name ?? "", names, r.issue_notes ?? "", r.return_notes ?? "", docNumber(r)]
       .join(" ")
       .toLowerCase();
-    if (search && !haystack.includes(search.toLowerCase())) return false;
+    // Поиск по телефону клиента (49-й проход, по итогам обзора списка
+    // "Аренды" — "звонит клиент, и первое, что есть под рукой — номер, а не
+    // имя"). Отдельная, цифровая проверка, а не просто добавление
+    // client.phone в haystack выше: телефон хранится с форматированием
+    // ("+7 900 000-00-00"), и посимвольный поиск не находил бы номер, если
+    // ввести его без пробелов/дефисов — normalizePhoneDigits (та же
+    // функция, что уже нормализует ввод в ClientsTab.tsx) сравнивает только
+    // цифры с обеих сторон. searchDigits.length > 0 обязателен — иначе
+    // пустая строка (когда в запросе вообще нет цифр, например "костыли")
+    // оказалась бы "подстрокой" любого номера и пропускала бы всё подряд.
+    let searchDigits = search.replace(/\D/g, "");
+    // Ведущая "8" → "7" — та же замена, что formatPhoneInput (lib/format.ts)
+    // уже делает при ВВОДЕ телефона в поле клиента, поэтому все сохранённые
+    // номера в базе начинаются на 7. Без этой же замены здесь поиск по
+    // привычному "8900…" (а не "+7900…") ничего бы не находил — цифры
+    // совпадали бы кроме самой первой.
+    if (searchDigits[0] === "8" && searchDigits.length <= 11) searchDigits = "7" + searchDigits.slice(1);
+    const matchesPhone = searchDigits.length > 0 && normalizePhoneDigits(client?.phone).includes(searchDigits);
+    if (search && !haystack.includes(search.toLowerCase()) && !matchesPhone) return false;
 
     return true;
   });
