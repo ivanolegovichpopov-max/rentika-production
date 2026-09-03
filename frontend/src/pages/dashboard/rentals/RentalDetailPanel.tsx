@@ -375,6 +375,23 @@ export function RentalDetailPanel({
             {fmtDate(rental.start_date)} — {fmtDate(rental.end_date)}
             {rental.actual_return ? ` · возврат ${fmtDate(rental.actual_return)}` : ""}
           </div>
+          {/* "Карточка клиента" перенесена сюда, к имени, из общего ряда
+              действий ниже (обратная связь пользователя по карточке аренды:
+              это ссылка про идентичность клиента, а не операция над самой
+              арендой — по смыслу ей место рядом с именем, а не в одном ряду
+              с "Выдать"/"Изменить"). .link-btn — тихая текстовая ссылка, а
+              не полноценная кнопка: вес как у подсказки под заголовком, не
+              как у действия. */}
+          {client && (
+            <button
+              type="button"
+              className="link-btn"
+              style={{ display: "inline-flex", alignItems: "center", gap: "4px", marginTop: "4px" }}
+              onClick={() => onOpenClient(client.id)}
+            >
+              <IconUser /> Карточка клиента
+            </button>
+          )}
           {/* Чёрный список клиента (повторный обзор — тот же контекст, что
               уже показывается в форме "Новая аренда" при выборе клиента, но
               раньше нигде не всплывал здесь, хотя карточка аренды — ровно то
@@ -385,9 +402,89 @@ export function RentalDetailPanel({
             </div>
           )}
         </div>
-        <button className="icon-btn" onClick={onClose}>
-          <IconClose />
-        </button>
+        {/* "Ещё" перенесена в шапку, рядом с крестиком закрытия — тот же
+            приём и та же причина, что и на ClientDetailPanel.tsx (37-й
+            проход, обзор "кнопка Ещё рвёт карточку клиента"): в общем ряду
+            действий кнопка не помещалась по ширине и переносилась на
+            отдельную строку. Здесь всегда достаточно места, а по смыслу
+            даже точнее: крестик и "Ещё" — управление самой карточкой
+            (закрыть / прочие действия над ней), а "Выдать"/"Принять
+            возврат"/"Изменить" в ряду ниже — операции с самой арендой, две
+            разные категории кнопок больше не смешаны в одном ряду. */}
+        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+          <MoreActionsMenu
+            align="right"
+            iconOnly
+            actions={[
+              ...(st === "booked" ? [{ key: "cancel", label: "Отменить", onClick: () => onCancel(rental.id) }] : []),
+              ...(st === "active" || st === "overdue"
+                ? [{ key: "extend", label: "Продлить", icon: <IconEdit />, onClick: () => onExtend(rental.id) }]
+                : []),
+              {
+                key: "repeat",
+                label: "Повторить аренду",
+                icon: <IconRepeat />,
+                onClick: () => onRepeat(rental.client_id, rental.items.map((it) => it.equipment_id)),
+              },
+              { key: "calendar", label: "В календаре", icon: <IconCalendar />, onClick: () => onOpenCalendar(rental.start_date) },
+              ...(st === "active" || st === "overdue"
+                ? [
+                    {
+                      key: "issue-doc",
+                      label: "Акт выдачи",
+                      onClick: () => setPrintDoc({ title: "Акт приёма-передачи", node: buildIssueDoc(rental, client, equipment) }),
+                    },
+                  ]
+                : []),
+              ...(st === "returned"
+                ? [
+                    {
+                      key: "return-doc",
+                      label: "Акт возврата",
+                      onClick: () => setPrintDoc({ title: "Акт возврата", node: buildReturnDoc(rental, client, equipment) }),
+                    },
+                  ]
+                : []),
+              {
+                key: "contract-doc",
+                label: "Договор",
+                onClick: () => setPrintDoc({ title: "Договор аренды", node: buildContractDoc(rental, client, equipment) }),
+              },
+              ...(client?.phone
+                ? [
+                    {
+                      key: "wa",
+                      label: "Сводка в WhatsApp",
+                      onClick: () =>
+                        window.open(
+                          `https://wa.me/${normalizePhoneDigits(client.phone)}?text=${encodeURIComponent(
+                            buildRentalSummaryText(rental, client, equipment)
+                          )}`,
+                          "_blank",
+                          "noreferrer"
+                        ),
+                    },
+                  ]
+                : []),
+              ...(client?.email
+                ? [
+                    {
+                      key: "email",
+                      label: "Сводка на почту",
+                      onClick: () => {
+                        window.location.href = `mailto:${client.email}?subject=${encodeURIComponent(
+                          "Информация по аренде"
+                        )}&body=${encodeURIComponent(buildRentalSummaryText(rental, client, equipment))}`;
+                      },
+                    },
+                  ]
+                : []),
+            ]}
+          />
+          <button className="icon-btn" onClick={onClose}>
+            <IconClose />
+          </button>
+        </div>
       </div>
 
       <div className="slideover-section" style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
@@ -396,17 +493,12 @@ export function RentalDetailPanel({
             списке, isUnpaid выше) — виден только когда реально не хватает
             денег, чтобы не грузить строку бейджей на каждой аренде подряд. */}
         {isUnpaid(rental) && <Badge meta={{ label: rental.paid_amount > 0 ? "Оплата частично" : "Не оплачено", tone: "warning" }} />}
-        {client && (
-          <button className="btn btn-sm" onClick={() => onOpenClient(client.id)}>
-            <IconUser /> Карточка клиента
-          </button>
-        )}
         {/* Главное действие по статусу + "Изменить" — единственные два
             действия, оставленные на виду (по итогам обзора "карточка
             перегружена" — 1:1 тот же приём, что и на ClientDetailPanel.tsx,
             35-й проход: в основном ряду только то, что нужно каждый день,
-            остальное — в "Ещё" ниже). st includes "overdue" отдельно от
-            "active" (см. rentalDisplayStatus), но по факту это та же
+            остальное — в "Ещё" в шапке выше). st includes "overdue" отдельно
+            от "active" (см. rentalDisplayStatus), но по факту это та же
             "active"-аренда в БД. */}
         {st === "booked" && (
           <button className="btn btn-primary btn-sm" type="button" onClick={() => onIssue(rental.id)}>
@@ -423,79 +515,6 @@ export function RentalDetailPanel({
             <IconEdit /> Изменить
           </button>
         )}
-        {/* "Ещё" — все остальные действия одним списком (повторный обзор —
-            раньше это были ТРИ отдельных источника кнопок: основной ряд
-            (Отменить/Продлить/Повторить/Календарь) + отдельный дропдаун
-            "Печать" + отдельный дропдаун "Написать клиенту". Собраны в один,
-            тем же принципом, что и "Объединить с другим клиентом"/"Сводка"
-            в одном "Ещё" на ClientDetailPanel.tsx. */}
-        <MoreActionsMenu
-          actions={[
-            ...(st === "booked" ? [{ key: "cancel", label: "Отменить", onClick: () => onCancel(rental.id) }] : []),
-            ...(st === "active" || st === "overdue"
-              ? [{ key: "extend", label: "Продлить", icon: <IconEdit />, onClick: () => onExtend(rental.id) }]
-              : []),
-            {
-              key: "repeat",
-              label: "Повторить аренду",
-              icon: <IconRepeat />,
-              onClick: () => onRepeat(rental.client_id, rental.items.map((it) => it.equipment_id)),
-            },
-            { key: "calendar", label: "В календаре", icon: <IconCalendar />, onClick: () => onOpenCalendar(rental.start_date) },
-            ...(st === "active" || st === "overdue"
-              ? [
-                  {
-                    key: "issue-doc",
-                    label: "Акт выдачи",
-                    onClick: () => setPrintDoc({ title: "Акт приёма-передачи", node: buildIssueDoc(rental, client, equipment) }),
-                  },
-                ]
-              : []),
-            ...(st === "returned"
-              ? [
-                  {
-                    key: "return-doc",
-                    label: "Акт возврата",
-                    onClick: () => setPrintDoc({ title: "Акт возврата", node: buildReturnDoc(rental, client, equipment) }),
-                  },
-                ]
-              : []),
-            {
-              key: "contract-doc",
-              label: "Договор",
-              onClick: () => setPrintDoc({ title: "Договор аренды", node: buildContractDoc(rental, client, equipment) }),
-            },
-            ...(client?.phone
-              ? [
-                  {
-                    key: "wa",
-                    label: "Сводка в WhatsApp",
-                    onClick: () =>
-                      window.open(
-                        `https://wa.me/${normalizePhoneDigits(client.phone)}?text=${encodeURIComponent(
-                          buildRentalSummaryText(rental, client, equipment)
-                        )}`,
-                        "_blank",
-                        "noreferrer"
-                      ),
-                  },
-                ]
-              : []),
-            ...(client?.email
-              ? [
-                  {
-                    key: "email",
-                    label: "Сводка на почту",
-                    onClick: () => {
-                      window.location.href = `mailto:${client.email}?subject=${encodeURIComponent(
-                        "Информация по аренде"
-                      )}&body=${encodeURIComponent(buildRentalSummaryText(rental, client, equipment))}`;
-                    },
-                  },
-                ]
-              : []),
-          ]}
-        />
       </div>
 
       {/* Вкладки (см. комментарий у panelTab выше). margin-bottom: 4px, а не
