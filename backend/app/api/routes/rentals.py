@@ -79,6 +79,7 @@ def _to_out(db: Session, rental: Rental) -> RentalOut:
         today=date.today(),
         damage_fee=float(rental.damage_fee),
         discount=float(rental.discount),
+        extra_fee=float(rental.extra_fee),
     )
 
     # deposit_total читается "вживую" из текущего Equipment.deposit — снимка
@@ -98,6 +99,8 @@ def _to_out(db: Session, rental: Rental) -> RentalOut:
         status=rental.status,
         damage_fee=float(rental.damage_fee),
         discount=float(rental.discount),
+        extra_fee=float(rental.extra_fee),
+        extra_fee_note=rental.extra_fee_note,
         issue_notes=rental.issue_notes,
         return_notes=rental.return_notes,
         created_at=rental.created_at,
@@ -175,6 +178,10 @@ async def create_rental(body: RentalCreate, ctx: BusinessContext = Depends(edit_
         status=RentalStatus.booked if body.start_date > date.today() else RentalStatus.active,
         created_by_employee_id=ctx.employee.id if ctx.employee else None,
         discount=discount,
+        # Доп. услуги (46-й проход) — необязательны при создании, можно
+        # добавить и позже через "Изменить" (edit_rental ниже).
+        extra_fee=body.extra_fee or 0,
+        extra_fee_note=(body.extra_fee_note.strip() or None) if body.extra_fee_note else None,
     )
     db.add(rental)
     db.flush()
@@ -564,11 +571,27 @@ async def edit_rental(
     if body.discount is not None and float(body.discount) != float(rental.discount):
         history_meta["discount_before"] = float(rental.discount)
         history_meta["discount_after"] = float(body.discount)
+    # Доп. услуги (46-й проход) — та же логика, что и discount выше: body.*
+    # is not None здесь means "поле реально пришло в теле запроса" (фронт
+    # либо отправляет ТЕКУЩЕЕ значение целиком при правке через
+    # EditRentalModal, либо не отправляет поле совсем — например
+    # ExtendRentalModal/BulkExtendModal шлют только end_date, и extra_fee
+    # тогда закономерно не трогается).
+    if body.extra_fee is not None and float(body.extra_fee) != float(rental.extra_fee):
+        history_meta["extra_fee_before"] = float(rental.extra_fee)
+        history_meta["extra_fee_after"] = float(body.extra_fee)
+    if body.extra_fee_note is not None and (body.extra_fee_note.strip() or None) != rental.extra_fee_note:
+        history_meta["extra_fee_note_before"] = rental.extra_fee_note
+        history_meta["extra_fee_note_after"] = body.extra_fee_note.strip() or None
 
     rental.start_date = new_start_date
     rental.end_date = new_end_date
     if body.discount is not None:
         rental.discount = body.discount
+    if body.extra_fee is not None:
+        rental.extra_fee = body.extra_fee
+    if body.extra_fee_note is not None:
+        rental.extra_fee_note = body.extra_fee_note.strip() or None
 
     log_action(
         db,

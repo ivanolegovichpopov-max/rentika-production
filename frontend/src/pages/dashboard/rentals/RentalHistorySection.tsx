@@ -45,6 +45,14 @@ function editDetails(meta: Record<string, unknown>): string[] {
   if ("discount_before" in meta) {
     lines.push(`скидка: ${money(Number(meta.discount_before))} → ${money(Number(meta.discount_after))}`);
   }
+  if ("extra_fee_before" in meta) {
+    lines.push(`доп. услуги: ${money(Number(meta.extra_fee_before))} → ${money(Number(meta.extra_fee_after))}`);
+  }
+  if ("extra_fee_note_before" in meta) {
+    const before = meta.extra_fee_note_before ? String(meta.extra_fee_note_before) : "—";
+    const after = meta.extra_fee_note_after ? String(meta.extra_fee_note_after) : "—";
+    lines.push(`за что (доп. услуги): ${before} → ${after}`);
+  }
   return lines;
 }
 

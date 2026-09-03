@@ -845,6 +845,90 @@ def test_payment_accumulates_clamps_at_zero_and_appears_in_history(client):
     assert payment_entries[0]["meta"]["paid_amount_after"] == 0
 
 
+def test_extra_fee_set_at_creation_edited_and_included_in_total(client):
+    """46-й проход: доп. услуги (extra_fee/extra_fee_note) — ОДНО значение,
+    заменяемое целиком (как discount), а не накопительная сумма; входит в
+    total; правки "мимо" этих полей (только end_date, как у
+    ExtendRentalModal) их не трогают; пустая строка explicitно очищает
+    подпись."""
+    owner = register_business(client, email="extra-fee@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    client_id = client.post(
+        f"/api/businesses/{business_id}/clients", json={"name": "Клиент доп. услуг"}, headers=headers
+    ).json()["id"]
+    eq = client.post(
+        f"/api/businesses/{business_id}/equipment",
+        json={"name": "Тестовая позиция", "category": "Инструмент", "daily_rate": 100},
+        headers=headers,
+    ).json()
+    start, end = _future(30), _future(32)  # 3 дня → base = 300
+
+    rental = client.post(
+        f"/api/businesses/{business_id}/rentals",
+        json={
+            "client_id": client_id,
+            "equipment_ids": [eq["id"]],
+            "start_date": start,
+            "end_date": end,
+            "extra_fee": 250,
+            "extra_fee_note": "Доставка",
+        },
+        headers=headers,
+    ).json()
+    rental_id = rental["id"]
+    assert rental["extra_fee"] == 250
+    assert rental["extra_fee_note"] == "Доставка"
+    assert rental["total"] == 300 + 250
+
+    # Правка — заменяет значение целиком (не складывает), и оба поля
+    # попадают в журнал изменений.
+    edit_resp = client.patch(
+        f"/api/businesses/{business_id}/rentals/{rental_id}",
+        json={
+            "start_date": start,
+            "end_date": end,
+            "equipment_ids": [eq["id"]],
+            "extra_fee": 400,
+            "extra_fee_note": "Доставка + накачка SUP",
+        },
+        headers=headers,
+    )
+    assert edit_resp.status_code == 200
+    edited = edit_resp.json()
+    assert edited["extra_fee"] == 400
+    assert edited["extra_fee_note"] == "Доставка + накачка SUP"
+    assert edited["total"] == 300 + 400
+
+    history = client.get(f"/api/businesses/{business_id}/rentals/{rental_id}/history", headers=headers).json()
+    edit_entry = history[0]
+    assert edit_entry["meta"]["extra_fee_before"] == 250
+    assert edit_entry["meta"]["extra_fee_after"] == 400
+    assert edit_entry["meta"]["extra_fee_note_before"] == "Доставка"
+    assert edit_entry["meta"]["extra_fee_note_after"] == "Доставка + накачка SUP"
+
+    # Продление (шлёт только end_date, как ExtendRentalModal) — доп. услуги
+    # не трогает.
+    new_end = _future(40)
+    extend_resp = client.patch(
+        f"/api/businesses/{business_id}/rentals/{rental_id}", json={"end_date": new_end}, headers=headers
+    )
+    assert extend_resp.status_code == 200
+    assert extend_resp.json()["extra_fee"] == 400
+    assert extend_resp.json()["extra_fee_note"] == "Доставка + накачка SUP"
+
+    # Пустая строка — явная очистка подписи (в отличие от отсутствия поля).
+    clear_resp = client.patch(
+        f"/api/businesses/{business_id}/rentals/{rental_id}",
+        json={"extra_fee_note": ""},
+        headers=headers,
+    )
+    assert clear_resp.status_code == 200
+    assert clear_resp.json()["extra_fee_note"] is None
+    assert clear_resp.json()["extra_fee"] == 400  # не тронуто
+
+
 def test_rental_history_lists_lifecycle_actions_with_meta(client):
     """42-й проход, п.2: журнал аренды переиспользует существующий AuditLog —
     проверяем, что create/issue/edit попадают в список в правильном порядке

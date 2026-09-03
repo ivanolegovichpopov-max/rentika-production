@@ -384,6 +384,21 @@ class Rental(Base):
     # может для активной/просроченной аренды меняться день ото дня, как и
     # сам total.
     paid_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    # Доп. услуги аренды (46-й проход, по итогам обсуждения "как принять
+    # доп. сумму за доставку/накачку SUP-борда") — В ОТЛИЧИЕ от paid_amount
+    # и damage_fee (накапливаются несколькими заходами), это ОДНО значение,
+    # заменяемое целиком — тот же принцип, что и discount: сотрудник
+    # вписывает сумму при создании аренды (RentalCreate.extra_fee) или
+    # правит её позже через "Изменить" (RentalEdit.extra_fee /
+    # app/api/routes/rentals.py:edit_rental), а не добавляет платёж поверх
+    # платежа. Входит в total наравне с damage_fee (см.
+    # app/services/pricing.py:compute_rental_breakdown). extra_fee_note —
+    # необязательная короткая подпись ("Доставка + накачка SUP"), чтобы в
+    # акте и в журнале изменений было видно, за что именно взяли деньги, а
+    # не голая цифра — сознательно свободный текст, а не отдельный
+    # справочник услуг (обсуждали — не нужен для MVP).
+    extra_fee: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    extra_fee_note: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 class RentalItem(Base):

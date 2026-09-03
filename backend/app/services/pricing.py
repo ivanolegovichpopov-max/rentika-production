@@ -103,6 +103,11 @@ def compute_rental_breakdown(
     today: date,
     damage_fee: float = 0,
     discount: float = 0,
+    # Доп. услуги (46-й проход, см. Rental.extra_fee) — ОДНО значение,
+    # заменяемое целиком (как discount), а не накопительная сумма (как
+    # damage_fee технически тоже одно поле, но пополняется несколькими
+    # заходами через return-items). Входит в total наравне с damage_fee.
+    extra_fee: float = 0,
 ) -> dict:
     """Полная финансовая раскладка аренды для карточки в интерфейсе (перенос
     логики прототипа — см. index.html/index-supabase.html, отрисовка
@@ -195,7 +200,7 @@ def compute_rental_breakdown(
     actual_days = max((_item_actual_days(it) for it in items), default=planned_days)
     late_days = max(0, actual_days - planned_days)
 
-    total = max(0, base + late_fee + damage_fee - discount)
+    total = max(0, base + late_fee + damage_fee + extra_fee - discount)
 
     return {
         "planned_days": planned_days,
@@ -204,6 +209,7 @@ def compute_rental_breakdown(
         "base": base,
         "late_fee": late_fee,
         "damage_fee": damage_fee,
+        "extra_fee": extra_fee,
         "discount": discount,
         "total": total,
     }

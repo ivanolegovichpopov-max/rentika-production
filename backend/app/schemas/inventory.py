@@ -522,6 +522,11 @@ class RentalCreate(BaseModel):
     # app/api/routes/rentals.py:create_rental). Явно переданное значение (в том
     # числе 0) всегда имеет приоритет над клиентской умолчательной скидкой.
     discount: float | None = Field(default=None, ge=0)
+    # Доп. услуги (46-й проход) — см. Rental.extra_fee. Необязательно, по
+    # умолчанию 0/без подписи — можно указать сразу при создании ИЛИ
+    # добавить позже через RentalEdit.
+    extra_fee: float | None = Field(default=None, ge=0)
+    extra_fee_note: str | None = Field(default=None, max_length=200)
 
 
 class RentalItemOut(BaseModel):
@@ -547,6 +552,11 @@ class RentalOut(BaseModel):
     status: RentalStatus
     damage_fee: float
     discount: float
+    # Доп. услуги (46-й проход) — см. Rental.extra_fee/extra_fee_note.
+    # Заменяемое целиком значение (как discount), входит в total наравне с
+    # damage_fee. extra_fee_note — необязательная подпись (за что именно).
+    extra_fee: float = 0
+    extra_fee_note: str | None = None
     # Свободный текст состояния при выдаче/возврате (демо: r.issueNotes /
     # r.returnNotes) — печатается на актах приёма-передачи и возврата.
     issue_notes: str | None
@@ -613,6 +623,17 @@ class RentalEdit(BaseModel):
     end_date: date | None = None
     equipment_ids: list[uuid.UUID] | None = None
     discount: float | None = Field(default=None, ge=0)
+    # Доп. услуги (46-й проход) — см. Rental.extra_fee. extra_fee_note
+    # намеренно БЕЗ ge=0/спец. семантики "не трогать" на пустой строке:
+    # фронт (RentalDetailPanel/EditRentalModal) всегда отправляет ТЕКУЩЕЕ
+    # значение поля целиком (тот же приём, что уже применяется к discount
+    # в этой форме) — пустая строка означает "убрать подпись", а не
+    # "пропустить"; None здесь бывает только когда поле вообще не пришло в
+    # теле запроса (другие вызовы PATCH .../rentals/{id}, которые эти поля
+    # не трогают, например ExtendRentalModal/BulkExtendModal — шлют только
+    # end_date).
+    extra_fee: float | None = Field(default=None, ge=0)
+    extra_fee_note: str | None = Field(default=None, max_length=200)
 
 
 class RentalReturnItems(BaseModel):

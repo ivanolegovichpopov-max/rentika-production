@@ -272,6 +272,13 @@ export interface Rental {
   // (total - paid_amount) не приходит отдельным полем — считается здесь же,
   // тем же принципом, что и deposit_total.
   paid_amount: number;
+  // Доп. услуги (46-й проход) — ОДНО значение, заменяемое целиком (как
+  // discount), а не накопительная сумма (как paid_amount/damage_fee). См.
+  // Rental.extra_fee в app/models/inventory.py. extra_fee_note — короткая
+  // подпись, за что взята сумма ("Доставка", "Накачка SUP") — может быть
+  // null, если extra_fee тоже 0 (или сумму взяли без подписи).
+  extra_fee: number;
+  extra_fee_note: string | null;
   items: RentalItem[];
 }
 

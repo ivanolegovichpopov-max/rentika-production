@@ -469,6 +469,12 @@ export function RentalDetailPanel({
               <span className="mono">{money(rental.damage_fee)}</span>
             </>
           )}
+          {rental.extra_fee > 0 && (
+            <>
+              <span className="k">{rental.extra_fee_note ? `Доп. услуги — ${rental.extra_fee_note}` : "Доп. услуги"}</span>
+              <span className="mono">{money(rental.extra_fee)}</span>
+            </>
+          )}
           {rental.discount > 0 && (
             <>
               <span className="k">Скидка</span>

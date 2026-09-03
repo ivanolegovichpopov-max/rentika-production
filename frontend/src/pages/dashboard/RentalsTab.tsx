@@ -140,6 +140,11 @@ interface FinancePreview {
   base: number;
   lateFee: number;
   damage: number;
+  // Доп. услуги (46-й проход) — фиксированное значение аренды, здесь не
+  // редактируется (это делает CreateRentalModal/EditRentalModal), просто
+  // должно попадать в итоговую сумму предпросмотра возврата — см. ниже.
+  extraFee: number;
+  extraFeeNote: string | null;
   discount: number;
   total: number;
 }
@@ -171,8 +176,19 @@ function previewReturnFinance(r: Rental, actualReturn: string, damageFee: number
   const actualCost = Math.round(itemsCostForDays(r.items, actualDays));
   const lateFee = Math.max(0, actualCost - base);
   const discount = r.discount || 0;
-  const total = Math.max(0, base + lateFee + damageFee - discount);
-  return { plannedDays, lateDays, base, lateFee, damage: damageFee, discount, total };
+  const extraFee = r.extra_fee || 0;
+  const total = Math.max(0, base + lateFee + damageFee + extraFee - discount);
+  return {
+    plannedDays,
+    lateDays,
+    base,
+    lateFee,
+    damage: damageFee,
+    extraFee,
+    extraFeeNote: r.extra_fee_note,
+    discount,
+    total,
+  };
 }
 
 function FinanceSummary({ fin, depositTotal }: { fin: FinancePreview; depositTotal: number }) {
@@ -192,6 +208,12 @@ function FinanceSummary({ fin, depositTotal }: { fin: FinancePreview; depositTot
         <div className="summary-row critical">
           <span>Компенсация повреждений</span>
           <span className="v">{money(fin.damage)}</span>
+        </div>
+      )}
+      {fin.extraFee > 0 && (
+        <div className="summary-row">
+          <span>{fin.extraFeeNote ? `Доп. услуги — ${fin.extraFeeNote}` : "Доп. услуги"}</span>
+          <span className="v">{money(fin.extraFee)}</span>
         </div>
       )}
       {fin.discount > 0 && (
@@ -472,6 +494,12 @@ export function CreateRentalModal({
     (initialEquipmentIds ?? []).filter((id) => isEquipmentFreeForRange(id, todayISO(), isoAddDays(todayISO(), 2), rentals))
   );
   const [discount, setDiscount] = useState("");
+  // Доп. услуги (46-й проход) — по образцу discount выше: одно поле суммы +
+  // короткая подпись, за что взяли деньги (см. Rental.extra_fee/
+  // extra_fee_note). В отличие от discount, у extra_fee нет "автоподстановки
+  // по умолчанию" — просто 0/пусто, если сотрудник ничего не вписал.
+  const [extraFee, setExtraFee] = useState("");
+  const [extraFeeNote, setExtraFeeNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -501,7 +529,8 @@ export function CreateRentalModal({
       : selectedClient?.default_discount_percent
         ? Math.round((previewBase * selectedClient.default_discount_percent) / 100)
         : 0;
-  const previewTotal = Math.max(0, previewBase - previewDiscount);
+  const previewExtraFee = Number(extraFee) || 0;
+  const previewTotal = Math.max(0, previewBase + previewExtraFee - previewDiscount);
 
   function toggle(id: string) {
     setCheckedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -535,6 +564,10 @@ export function CreateRentalModal({
         // нужно повторять расчёт по ступенчатому тарифу. Явное значение (в
         // том числе 0) отправляется как есть и имеет приоритет.
         discount: discount.trim() === "" ? undefined : Number(discount),
+        // Доп. услуги — необязательное поле, при пустом вводе не отправляем
+        // вовсе (backend оставит extra_fee=0 по умолчанию для новой аренды).
+        extra_fee: extraFee.trim() === "" ? undefined : Number(extraFee),
+        extra_fee_note: extraFeeNote.trim() === "" ? undefined : extraFeeNote.trim(),
       });
       await onCreated();
       onClose();
@@ -618,12 +651,34 @@ export function CreateRentalModal({
           <div className="field-hint">Если не указать — скидки не будет (если у клиента не задана скидка по умолчанию).</div>
         )}
       </div>
+      <div className="field-row">
+        <div className="field">
+          <label>Доп. услуги, ₽ (необязательно)</label>
+          <input type="number" min={0} value={extraFee} onChange={(e) => setExtraFee(e.target.value)} placeholder="0" />
+        </div>
+        <div className="field">
+          <label>За что</label>
+          <input
+            type="text"
+            maxLength={200}
+            value={extraFeeNote}
+            onChange={(e) => setExtraFeeNote(e.target.value)}
+            placeholder="Например, доставка"
+          />
+        </div>
+      </div>
       {previewDays > 0 && checkedIds.length > 0 && (
         <div className="summary-box">
           <div className="summary-row">
             <span>Аренда, {previewDays} дн.</span>
             <span className="v">{money(previewBase)}</span>
           </div>
+          {previewExtraFee > 0 && (
+            <div className="summary-row">
+              <span>{extraFeeNote.trim() ? `Доп. услуги — ${extraFeeNote.trim()}` : "Доп. услуги"}</span>
+              <span className="v">{money(previewExtraFee)}</span>
+            </div>
+          )}
           {previewDiscount > 0 && (
             <div className="summary-row">
               <span>Скидка</span>
@@ -664,6 +719,15 @@ function EditRentalModal({
   const [endDate, setEndDate] = useState(rental.end_date);
   const [checkedIds, setCheckedIds] = useState<string[]>(currentIds);
   const [discount, setDiscount] = useState(rental.discount ? String(rental.discount) : "");
+  // Доп. услуги (46-й проход) — предзаполняем текущим значением аренды.
+  // ВАЖНО: в отличие от полей выше, extra_fee/extra_fee_note ВСЕГДА
+  // отправляются в PATCH явно (см. handleSubmit) — backend не умеет отличить
+  // "поле не трогали" от "обнулили", если поле вообще не прислано, он его не
+  // трогает; но раз форма показывает и позволяет менять оба поля сразу,
+  // текущее значение должно уходить обратно даже если пользователь его не
+  // редактировал (тот же принцип, что уже применяется здесь для discount).
+  const [extraFee, setExtraFee] = useState(rental.extra_fee ? String(rental.extra_fee) : "");
+  const [extraFeeNote, setExtraFeeNote] = useState(rental.extra_fee_note ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -682,7 +746,8 @@ function EditRentalModal({
         }, 0)
       : 0;
   const previewDiscount = Number(discount) || 0;
-  const previewTotal = Math.max(0, previewBase - previewDiscount);
+  const previewExtraFee = Number(extraFee) || 0;
+  const previewTotal = Math.max(0, previewBase + previewExtraFee - previewDiscount);
 
   function toggle(id: string) {
     setCheckedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -709,6 +774,13 @@ function EditRentalModal({
         end_date: endDate,
         equipment_ids: checkedIds,
         discount: Number(discount) || 0,
+        // Доп. услуги — ВСЕГДА отправляем текущее значение полей формы явно
+        // (не undefined), включая случай "поле очищено" — extra_fee_note
+        // должно уйти как "" (не отсутствовать в теле запроса), чтобы
+        // backend понял, что подпись явно стёрли, а не просто не тронули
+        // (см. RentalEdit.extra_fee_note в app/schemas/inventory.py).
+        extra_fee: Number(extraFee) || 0,
+        extra_fee_note: extraFeeNote.trim(),
       });
       await onSaved();
       onClose();
@@ -775,12 +847,34 @@ function EditRentalModal({
         <label>Скидка, ₽ (по договорённости)</label>
         <input type="number" min={0} value={discount} placeholder="0" onChange={(e) => setDiscount(e.target.value)} />
       </div>
+      <div className="field-row">
+        <div className="field">
+          <label>Доп. услуги, ₽ (необязательно)</label>
+          <input type="number" min={0} value={extraFee} onChange={(e) => setExtraFee(e.target.value)} placeholder="0" />
+        </div>
+        <div className="field">
+          <label>За что</label>
+          <input
+            type="text"
+            maxLength={200}
+            value={extraFeeNote}
+            onChange={(e) => setExtraFeeNote(e.target.value)}
+            placeholder="Например, доставка"
+          />
+        </div>
+      </div>
       {previewDays > 0 && checkedIds.length > 0 && (
         <div className="summary-box">
           <div className="summary-row">
             <span>Аренда, {previewDays} дн.</span>
             <span className="v">{money(previewBase)}</span>
           </div>
+          {previewExtraFee > 0 && (
+            <div className="summary-row">
+              <span>{extraFeeNote.trim() ? `Доп. услуги — ${extraFeeNote.trim()}` : "Доп. услуги"}</span>
+              <span className="v">{money(previewExtraFee)}</span>
+            </div>
+          )}
           {previewDiscount > 0 && (
             <div className="summary-row">
               <span>Скидка</span>
