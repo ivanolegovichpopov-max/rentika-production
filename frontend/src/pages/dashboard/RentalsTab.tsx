@@ -1290,10 +1290,6 @@ export function RentalsTab({
 
     return true;
   });
-  const riskCount = bySearch.filter((r) => {
-    const client = clients.find((c) => c.id === r.client_id);
-    return client && clientDisplayRating(client, rentals) !== "normal";
-  }).length;
   const expiringCount = bySearch.filter((r) => rentalDisplayStatus(r) === "active" && dayDiff(r.end_date) <= 2).length;
   const depositDueCount = bySearch.filter(isDepositDue).length;
   const unpaidCount = bySearch.filter(isUnpaid).length;
@@ -1612,11 +1608,14 @@ export function RentalsTab({
             (скриншот) — эта же поправка нужна и в ClientsTab.tsx, там та
             же причина.
 
-            "Рискованные клиенты" — отдельная кнопка на первой строке, рядом
-            с сегментами статусов (через .toolbar-divider — тот же приём, что
-            и "Недавние" на ClientsTab.tsx). Дропдаун "Фильтры" (истекает
-            скоро/депозит/не оплачено) — на второй строке, рядом с
-            сортировкой (перестановка по просьбе пользователя, скриншот). */}
+            "Рискованные клиенты" — отдельная icon-only круглая кнопка на
+            первой строке, рядом с сегментами статусов (через
+            .toolbar-divider — тот же приём, что и "Недавние" на
+            ClientsTab.tsx), в точности как до 46-го прохода — только эта
+            кнопка вернулась к прежнему виду, остальные две (истекает скоро/
+            депозит) остались в дропдауне "Фильтры" по просьбе пользователя.
+            Дропдаун "Фильтры" — на второй строке, ПЕРЕД сортировкой
+            (перестановка по просьбе пользователя, скриншот). */}
         <div style={{ display: "flex", flexDirection: "column", gap: "10px", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
             <div className="segmented">
@@ -1627,31 +1626,26 @@ export function RentalsTab({
               ))}
             </div>
             <div className="toolbar-divider" />
+            {/* icon-only (41-й проход, возвращено в 46-м после короткого
+                эксперимента с текстовой кнопкой) — title/aria-label и так
+                объясняют смысл кнопки при наведении. */}
             <button
               type="button"
-              className={"btn" + (riskOnly ? " btn-primary" : "")}
+              className={"btn btn-icon-only" + (riskOnly ? " btn-primary" : "")}
+              title="Показать только клиентов «на контроле» или из чёрного списка"
+              aria-label="Только рискованные"
               onClick={() => setRiskOnly((v) => !v)}
-              title="Клиенты «на контроле» или из чёрного списка"
             >
-              Рискованные клиенты ({riskCount})
+              <IconAlert />
             </button>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-            <Dropdown
-              value={sort}
-              onChange={setSort}
-              placeholder={SORTS[0]?.label ?? ""}
-              options={SORTS.map((s) => ({ value: s.id, label: s.label }))}
-            />
-            {/* Дропдаун "Фильтры" (46-й проход, по итогам обзора — раньше
-                это были три отдельные круглые icon-only кнопки, единственное
-                место в приложении со своей стилизацией фильтров, не похожей
-                на "Фильтры" на ClientsTab.tsx/категории-склады на
-                EquipmentTab.tsx). Тот же .cat-filter*-idiom, счётчики — из
-                expiringCount/depositDueCount/unpaidCount выше (сколько
-                найдётся по базовому списку — статус+поиск, — если включить
-                именно этот переключатель). "Рискованные" сюда не входят —
-                у них теперь своя кнопка на первой строке. */}
+            {/* Дропдаун "Фильтры" (46-й проход) — тот же .cat-filter*-idiom,
+                счётчики — из expiringCount/depositDueCount/unpaidCount выше
+                (сколько найдётся по базовому списку — статус+поиск, — если
+                включить именно этот переключатель). "Рискованные" сюда не
+                входят — у них своя круглая кнопка на первой строке. Порядок
+                "Фильтры" → сортировка (по просьбе пользователя, скриншот). */}
             <div className="cat-filter" ref={moreFiltersRef}>
               <button
                 type="button"
@@ -1700,6 +1694,12 @@ export function RentalsTab({
                 </div>
               )}
             </div>
+            <Dropdown
+              value={sort}
+              onChange={setSort}
+              placeholder={SORTS[0]?.label ?? ""}
+              options={SORTS.map((s) => ({ value: s.id, label: s.label }))}
+            />
           </div>
         </div>
         {/* Колонка кнопок в .tab-toolbar-grid — тот же фикс, что и в
