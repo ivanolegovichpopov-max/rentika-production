@@ -474,7 +474,7 @@ function EquipmentPicklist({
                   >
                     <IconChevronDown />
                     {e.category}
-                    <span className="eq-pick-group-count">{categoryCounts.get(e.category)}</span>
+                    <span className="eq-pick-group-count">({categoryCounts.get(e.category)})</span>
                   </button>
                 )}
                 {!isCollapsed && (
@@ -718,7 +718,7 @@ export function CreateRentalModal({
         </div>
       </div>
       {previewDays > 0 && checkedIds.length > 0 && (
-        <div className="summary-box">
+        <div className="summary-box summary-box-outcome">
           <div className="summary-row">
             <span>Аренда, {previewDays} дн.</span>
             <span className="v">{money(previewBase)}</span>
@@ -915,7 +915,7 @@ function EditRentalModal({
         </div>
       </div>
       {previewDays > 0 && checkedIds.length > 0 && (
-        <div className="summary-box">
+        <div className="summary-box summary-box-outcome">
           <div className="summary-row">
             <span>Аренда, {previewDays} дн.</span>
             <span className="v">{money(previewBase)}</span>

@@ -748,12 +748,19 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    заголовок кликабелен (сворачивает/разворачивает содержимое категории —
    тот же принцип, что и .cat-filter-option: <button> со сброшенными
    браузерными стилями, а не голый div). */
+/* Без заливки в состоянии покоя (третий обзор той же формы, "слишком
+   много серого") — раньше .eq-pick-group был залит тем же var(--surface-2),
+   что и поле поиска/чипы/сами инпуты формы, и на фоне повторяющихся
+   заголовков категорий (особенно при многих категориях) это делало всю
+   форму одним сплошным серым полем без структуры. Серый оставлен только
+   как обратная связь на наведение (:hover) — там, где он действительно
+   значит "сюда можно кликнуть", а не как фон структурного заголовка. */
 .eq-pick-group {
   display: flex; align-items: center; gap: 6px; width: 100%; border: none; text-align: left; font: inherit;
   padding: 6px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em;
-  color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--border); cursor: pointer;
+  color: var(--muted); background: none; border-bottom: 1px solid var(--border); cursor: pointer;
 }
-.eq-pick-group:hover { background: var(--border); }
+.eq-pick-group:hover { background: var(--surface-2); }
 .eq-pick-group svg { width: 12px; height: 12px; transition: transform 0.1s; flex: none; }
 .eq-pick-group.collapsed svg { transform: rotate(-90deg); }
 /* Счётчик позиций в свёрнутой/развёрнутой категории (повторный обзор формы
@@ -811,6 +818,20 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    скроллится вообще), а этот блок вернулся к обычному, не прилипающему
    виду (просто .summary-box). Класс .sticky-summary больше не
    используется, оставлять его как мёртвый CSS смысла нет. */
+/* Превью суммы в CreateRentalModal/EditRentalModal (третий обзор той же
+   формы) — тот же .summary-box, что и разбивка в форме возврата, но там
+   она законно выглядит карточкой (единственный такой блок на форме). Здесь
+   же, идя сразу за полями "Скидка"/"Доп. услуги" с тем же серым фоном, она
+   читалась как продолжение списка полей, а не как отдельный итог. Модификатор
+   — только для ЭТИХ двух мест (через явный второй класс на элементе,
+   .summary-box не трогаем — от него зависят форма возврата/выдачи и
+   массовое напоминание, менять там ничего не просили): снимает заливку и
+   рамку карточки, оставляет только верхнюю границу-разделитель и отступ
+   сверху — глаз успевает "переключиться" с формы на результат, а сама
+   сводка не соревнуется за серый вес с инпутами над ней. */
+.summary-box.summary-box-outcome {
+  background: none; border: none; border-radius: 0; padding: 14px 0 0; margin-top: 18px; border-top: 1px solid var(--border-strong);
+}
 
 .doc-page { background: #fff; color: #17202A; padding: 34px 38px; font-family: "Roboto", sans-serif; font-size: 13px; line-height: 1.55; border-radius: 3px; border: 1px solid var(--border); }
 .doc-page h2 { font-family: "Roboto", system-ui, sans-serif; font-weight: 600; font-size: 18px; margin-bottom: 4px; color: #17202A; }
