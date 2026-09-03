@@ -725,8 +725,18 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .eq-pick-conflict { font-size: 11px; color: var(--critical); }
 /* Заголовок группы по категории (46-й проход) — раньше список шёл в
    порядке, в котором позиции лежат в базе (фактически случайном для
-   пользователя); теперь отсортирован и разбит на подписанные группы. */
-.eq-pick-group { padding: 6px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--border); }
+   пользователя); теперь отсортирован, разбит на подписанные группы и сам
+   заголовок кликабелен (сворачивает/разворачивает содержимое категории —
+   тот же принцип, что и .cat-filter-option: <button> со сброшенными
+   браузерными стилями, а не голый div). */
+.eq-pick-group {
+  display: flex; align-items: center; gap: 6px; width: 100%; border: none; text-align: left; font: inherit;
+  padding: 6px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em;
+  color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.eq-pick-group:hover { background: var(--border); }
+.eq-pick-group svg { width: 12px; height: 12px; transition: transform 0.1s; flex: none; }
+.eq-pick-group.collapsed svg { transform: rotate(-90deg); }
 
 /* ---------- Сводка финансов аренды (форма возврата) ---------- */
 .summary-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }

@@ -308,7 +308,17 @@ function FormModal({
  *  - ставка сопровождается title-подсказкой (equipmentRateLabelTitle) —
  *    расшифровка ступенчатого тарифа полным предложением при наведении;
  *  - строка поиска по названию/номеру/категории — тот же .search-box, что
- *    в общем поиске шапки (Dashboard.tsx).
+ *    в общем поиске шапки (Dashboard.tsx);
+ *  - заголовок каждой группы кликабелен — сворачивает/разворачивает её
+ *    содержимое (по просьбе пользователя — сезонное оборудование, которое
+ *    не нужно видеть полгода). Состояние "что свёрнуто" запоминается
+ *    насовсем на конкретный бизнес (usePersistedState — тот же приём, что
+ *    уже хранит сортировку/колонки на "Оборудовании"), иначе пришлось бы
+ *    заново сворачивать категорию при каждом открытии формы. Пока идёт
+ *    активный поиск — сворачивание игнорируется (см. visible ниже): прятать
+ *    от пользователя совпадения его же собственного запроса было бы хуже,
+ *    чем просто временно проигнорировать его же ранее сохранённые настройки
+ *    свёрнутости.
  */
 function EquipmentPicklist({
   items,
@@ -319,6 +329,7 @@ function EquipmentPicklist({
   checkedIds,
   onToggle,
   alwaysShowIds,
+  businessId,
 }: {
   items: Equipment[];
   start: string;
@@ -328,8 +339,14 @@ function EquipmentPicklist({
   checkedIds: string[];
   onToggle: (id: string) => void;
   alwaysShowIds?: string[];
+  businessId: string;
 }) {
   const [query, setQuery] = useState("");
+  const [collapsed, setCollapsed] = usePersistedState<string[]>(`eq-picklist-collapsed:${businessId}`, []);
+
+  function toggleCollapsed(category: string) {
+    setCollapsed((prev) => (prev.includes(category) ? prev.filter((c) => c !== category) : [...prev, category]));
+  }
 
   const base = items.filter(
     (e) => (alwaysShowIds?.includes(e.id) ?? false) || (e.status !== "retired" && !isUnderMaintenanceOn(e, start))
@@ -345,6 +362,9 @@ function EquipmentPicklist({
   const visible = q
     ? sorted.filter((e) => (e.name + " " + e.category + " " + (e.code ?? "")).toLowerCase().includes(q))
     : sorted;
+  // Во время поиска сворачивание не действует (см. докстринг выше) —
+  // применяем сохранённое collapsed только когда поле поиска пустое.
+  const collapseActive = !q;
 
   let lastCategory: string | null = null;
 
@@ -371,6 +391,7 @@ function EquipmentPicklist({
             const checked = checkedIds.includes(e.id);
             const showGroup = e.category !== lastCategory;
             lastCategory = e.category;
+            const isCollapsed = collapseActive && collapsed.includes(e.category);
             return (
               // Fragment, а не оборачивающий <div> — .eq-pick-row:last-child
               // (снимает нижнюю границу у последней строки списка) полагается
@@ -378,21 +399,32 @@ function EquipmentPicklist({
               // обёртка сделала бы каждую строку "последним ребёнком" своего
               // персонального div и убрала бы разделители между позициями.
               <Fragment key={e.id}>
-                {showGroup && <div className="eq-pick-group">{e.category}</div>}
-                <label className={`eq-pick-row${free ? "" : " disabled"}`}>
-                  <input type="checkbox" checked={checked} disabled={!free} onChange={() => onToggle(e.id)} />
-                  <span className="eq-pick-info">
-                    <span className="eq-pick-name">{e.name}</span>
-                    <span className="eq-pick-sub">
-                      № {e.code ?? "—"}
-                      {e.warehouse ? ` · ${e.warehouse}` : ""}
+                {showGroup && (
+                  <button
+                    type="button"
+                    className={"eq-pick-group" + (isCollapsed ? " collapsed" : "")}
+                    onClick={() => toggleCollapsed(e.category)}
+                  >
+                    <IconChevronDown />
+                    {e.category}
+                  </button>
+                )}
+                {!isCollapsed && (
+                  <label className={`eq-pick-row${free ? "" : " disabled"}`}>
+                    <input type="checkbox" checked={checked} disabled={!free} onChange={() => onToggle(e.id)} />
+                    <span className="eq-pick-info">
+                      <span className="eq-pick-name">{e.name}</span>
+                      <span className="eq-pick-sub">
+                        № {e.code ?? "—"}
+                        {e.warehouse ? ` · ${e.warehouse}` : ""}
+                      </span>
                     </span>
-                  </span>
-                  <span className="eq-pick-rate" title={equipmentRateLabelTitle(e)}>
-                    {equipmentRateLabel(e)}
-                  </span>
-                  {!free && conflictEnd && <span className="eq-pick-conflict">занято до {fmtDate(conflictEnd)}</span>}
-                </label>
+                    <span className="eq-pick-rate" title={equipmentRateLabelTitle(e)}>
+                      {equipmentRateLabel(e)}
+                    </span>
+                    {!free && conflictEnd && <span className="eq-pick-conflict">занято до {fmtDate(conflictEnd)}</span>}
+                  </label>
+                )}
               </Fragment>
             );
           })
@@ -525,11 +557,21 @@ export function CreateRentalModal({
     >
       <div className="field">
         <label>Клиент</label>
+        {/* Поиск (46-й проход, по итогам обзора формы "Новая аренда" — при
+            росте базы клиентов простой скролл по кнопкам перестаёт работать)
+            — searchable уже был готов в самом Dropdown (используется, например,
+            в подборе клиента при объединении дублей), здесь просто не был
+            включён. Список отсортирован по алфавиту — иначе даже до начала
+            поиска порядок опций был бы "как лежат в базе", случайным на вид. */}
         <Dropdown
           value={clientId}
           onChange={setClientId}
           placeholder="Выберите клиента"
-          options={clients.map((c) => ({ value: c.id, label: c.name + (c.phone ? ` · ${c.phone}` : "") }))}
+          searchable
+          searchPlaceholder="Поиск клиента…"
+          options={[...clients]
+            .sort((a, b) => a.name.localeCompare(b.name, "ru"))
+            .map((c) => ({ value: c.id, label: c.name + (c.phone ? ` · ${c.phone}` : "") }))}
         />
         {/* 26-й проход, проф. обзор: раньше рейтинг "чёрный список" нигде не
             всплывал в момент, когда это важнее всего — при оформлении НОВОЙ
@@ -560,6 +602,7 @@ export function CreateRentalModal({
           rentals={rentals}
           checkedIds={checkedIds}
           onToggle={toggle}
+          businessId={businessId}
         />
         <div className="field-hint">Занятые на выбранные даты позиции недоступны для выбора.</div>
       </div>
@@ -724,6 +767,7 @@ function EditRentalModal({
           checkedIds={checkedIds}
           onToggle={toggle}
           alwaysShowIds={currentIds}
+          businessId={businessId}
         />
         <div className="field-hint">Занятые на выбранные даты позиции недоступны для выбора.</div>
       </div>
