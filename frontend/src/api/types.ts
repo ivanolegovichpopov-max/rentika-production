@@ -289,6 +289,9 @@ export interface Rental {
 // произвольный набор полей "было/стало", зависящий от action, интерпретация
 // каждого — в RentalHistorySection.tsx.
 export interface RentalHistoryEntry {
+  // 49-й проход — id записи журнала, нужен чтобы сослаться на неё из
+  // POST .../history/{entry_id}/correct (исправление опечатки в платеже).
+  id: string;
   action: string;
   employee_name: string | null;
   meta: Record<string, unknown> | null;

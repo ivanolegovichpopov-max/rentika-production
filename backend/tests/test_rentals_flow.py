@@ -843,6 +843,95 @@ def test_payment_accumulates_clamps_at_zero_and_appears_in_history(client):
     assert len(payment_entries) == 3
     assert payment_entries[0]["meta"]["amount"] == -10000
     assert payment_entries[0]["meta"]["paid_amount_after"] == 0
+    # id есть у каждой записи (49-й проход) — на него ссылается коррекция.
+    assert all(e["id"] for e in entries)
+
+
+def test_payment_correction_fixes_typo_without_manual_delta(client):
+    """49-й проход: /history/{entry_id}/correct — человек вводит "сколько
+    должно было быть" (corrected_to), а не сам считает разницу. Сервер сам
+    находит исходную запись по entry_id и накатывает delta на paid_amount.
+    Исходная запись не переписывается — добавляется новая, action=
+    "payment_correction", со ссылкой correction_of на исходную."""
+    owner = register_business(client, email="rental-payment-correct@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    _, _, rental = _setup_rental(client, headers, business_id)
+    rental_id = rental["id"]
+
+    # Опечатка: ввели 5000 вместо 500.
+    pay_resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/payment",
+        json={"amount": 5000},
+        headers=headers,
+    )
+    assert pay_resp.status_code == 200
+    assert pay_resp.json()["paid_amount"] == 5000
+
+    history = client.get(f"/api/businesses/{business_id}/rentals/{rental_id}/history", headers=headers).json()
+    payment_entry = next(e for e in history if e["action"] == "payment")
+    entry_id = payment_entry["id"]
+
+    correct_resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/history/{entry_id}/correct",
+        json={"corrected_to": 500},
+        headers=headers,
+    )
+    assert correct_resp.status_code == 200
+    # 5000 + (500 − 5000) = 500 — без ручного подсчёта разницы на клиенте.
+    assert correct_resp.json()["paid_amount"] == 500
+
+    history2 = client.get(f"/api/businesses/{business_id}/rentals/{rental_id}/history", headers=headers).json()
+    correction = next(e for e in history2 if e["action"] == "payment_correction")
+    assert correction["meta"]["correction_of"] == entry_id
+    assert correction["meta"]["corrected_from"] == 5000
+    assert correction["meta"]["corrected_to"] == 500
+    assert correction["meta"]["amount"] == -4500
+    assert correction["meta"]["paid_amount_after"] == 500
+
+    # Исходная запись осталась как была — история не переписывается.
+    payment_entry_after = next(e for e in history2 if e["id"] == entry_id)
+    assert payment_entry_after["meta"]["amount"] == 5000
+
+    # Несуществующая/чужая запись — 404, а не тихое создание мусора.
+    missing_resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/history/{rental_id}/correct",
+        json={"corrected_to": 100},
+        headers=headers,
+    )
+    assert missing_resp.status_code == 404
+
+    # Саму коррекцию исправлять нельзя — только исходный платёж (см.
+    # докстринг correct_rental_payment про entry.action == "payment").
+    correction_id = correction["id"]
+    correct_a_correction_resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/history/{correction_id}/correct",
+        json={"corrected_to": 100},
+        headers=headers,
+    )
+    assert correct_a_correction_resp.status_code == 404
+
+    # Повторное исправление ТОГО ЖЕ исходного платежа — delta должна
+    # считаться от действующего значения (500, после первой коррекции), а
+    # не от исходных 5000: иначе 700 − 5000 = −4300 увело бы paid_amount в
+    # 0 вместо верных 500 + (700 − 500) = 700.
+    second_correct_resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/history/{entry_id}/correct",
+        json={"corrected_to": 700},
+        headers=headers,
+    )
+    assert second_correct_resp.status_code == 200
+    assert second_correct_resp.json()["paid_amount"] == 700
+
+    history3 = client.get(f"/api/businesses/{business_id}/rentals/{rental_id}/history", headers=headers).json()
+    corrections = [e for e in history3 if e["action"] == "payment_correction"]
+    assert len(corrections) == 2
+    second_correction = next(c for c in corrections if c["id"] != correction_id)
+    assert second_correction["meta"]["corrected_from"] == 500
+    assert second_correction["meta"]["corrected_to"] == 700
+    assert second_correction["meta"]["amount"] == 200
+    assert second_correction["meta"]["paid_amount_after"] == 700
 
 
 def test_extra_fee_set_at_creation_edited_and_included_in_total(client):

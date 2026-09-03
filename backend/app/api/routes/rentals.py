@@ -30,6 +30,7 @@ from app.schemas.inventory import (
     RentalIssue,
     RentalOut,
     RentalPayment,
+    RentalPaymentCorrection,
     RentalPhotoOut,
     RentalReturn,
     RentalReturnItems,
@@ -664,6 +665,88 @@ async def add_rental_payment(
     return _to_out(db, rental)
 
 
+@router.post("/{rental_id}/history/{entry_id}/correct", response_model=RentalOut)
+async def correct_rental_payment(
+    rental_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    body: RentalPaymentCorrection,
+    ctx: BusinessContext = Depends(edit_dep),
+    db: Session = Depends(get_db),
+):
+    """Исправление опечатки в платеже (49-й проход) — см. докстринг
+    RentalPaymentCorrection про то, почему это отдельный эндпоинт, а не
+    просто подсказка "введите отрицательную сумму" в /payment. entry_id —
+    id ИСХОДНОЙ записи AuditLog (action="payment"); исправлять саму
+    коррекцию нельзя — если платёж поправили не туда, нужно снова открыть
+    "Исправить" у исходного платежа и указать верное значение (см. ниже,
+    почему это не то же самое, что просто "исправить второй раз"). Сама
+    исходная запись не переписывается и не удаляется — добавляется новая,
+    action="payment_correction", со ссылкой correction_of на исходную,
+    тем же принципом, что и весь остальной журнал: история только
+    дополняется, никогда не переписывается задним числом.
+
+    Важно: если платёж уже исправляли раньше, corrected_to нельзя сравнивать
+    с исходным entry.meta["amount"] — это привело бы к неверной delta при
+    повторном исправлении (пример: 5000 → поправили на 500 → хотим 700;
+    сравнение с исходными 5000 дало бы delta=-4300 вместо верных +200).
+    Поэтому здесь сначала считается ТЕКУЩЕЕ действующее значение платежа —
+    исходная сумма плюс все более ранние коррекции именно этой записи — и
+    delta берётся уже от него."""
+    rental = _get_rental_or_404(db, ctx, rental_id)
+    entry = db.execute(
+        select(AuditLog).where(
+            AuditLog.id == entry_id,
+            AuditLog.business_id == ctx.business_id,
+            AuditLog.resource == "rental",
+            AuditLog.resource_id == str(rental_id),
+            AuditLog.action == "payment",
+        )
+    ).scalar_one_or_none()
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Запись платежа не найдена")
+
+    original_amount = float((entry.meta or {}).get("amount", 0.0))
+    prior_corrections = db.execute(
+        select(AuditLog).where(
+            AuditLog.business_id == ctx.business_id,
+            AuditLog.resource == "rental",
+            AuditLog.resource_id == str(rental_id),
+            AuditLog.action == "payment_correction",
+        )
+    ).scalars().all()
+    # meta — JSON-поле, сравнить correction_of на уровне SQL надёжно не для
+    # каждой БД (SQLite в тестах хранит JSON как TEXT) — фильтруем в Python,
+    # записей на одну аренду всегда немного.
+    current_effective_amount = original_amount + sum(
+        float((c.meta or {}).get("amount", 0.0))
+        for c in prior_corrections
+        if (c.meta or {}).get("correction_of") == str(entry_id)
+    )
+
+    delta = body.corrected_to - current_effective_amount
+    new_amount = max(0.0, float(rental.paid_amount) + delta)
+    rental.paid_amount = new_amount
+
+    log_action(
+        db,
+        business_id=ctx.business_id,
+        user_id=ctx.user.id,
+        action="payment_correction",
+        resource="rental",
+        resource_id=str(rental_id),
+        meta={
+            "correction_of": str(entry_id),
+            "corrected_from": current_effective_amount,
+            "corrected_to": body.corrected_to,
+            "amount": delta,
+            "paid_amount_after": new_amount,
+        },
+    )
+    db.commit()
+    db.refresh(rental)
+    return _to_out(db, rental)
+
+
 # ============================================================
 # Фото состояния оборудования при выдаче/возврате (41-й проход) — по образцу
 # документов клиента (app/api/routes/clients.py), но привязано к Rental
@@ -774,6 +857,7 @@ async def rental_history(rental_id: uuid.UUID, ctx: BusinessContext = Depends(vi
     for log, employee_name in rows:
         entries.append(
             RentalHistoryEntry(
+                id=log.id,
                 action=log.action,
                 employee_name=employee_name,
                 meta=log.meta,
