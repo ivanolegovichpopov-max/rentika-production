@@ -721,7 +721,18 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .eq-pick-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 120px; }
 .eq-pick-name { font-weight: 600; }
 .eq-pick-sub { font-size: 11px; font-weight: 400; color: var(--muted); }
-.eq-pick-rate { font-family: "Roboto Mono"; font-size: 12px; color: var(--muted); white-space: nowrap; }
+/* .eq-pick-cost — заменил собой одиночный .eq-pick-rate (46-й проход,
+   повторный обзор формы "Новая аренда"): раньше строка показывала только
+   ставку за сутки ("100 ₽/сутки"), пользователю приходилось самому умножать
+   на число дней аренды. Когда даты уже выбраны (previewDays > 0) — сверху
+   показывается ГОТОВАЯ сумма за весь срок, а сама ставка уходит вниз,
+   мельче, как пояснение "из чего это сложилось" (тот же приём, что
+   .eq-pick-name/.eq-pick-sub чуть выше). Если диапазон дат ещё не задан
+   (previewDays === 0) — второй строки нет, остаётся только ставка, как и
+   раньше. title (расшифровка ступенчатого тарифа) остаётся на всём блоке. */
+.eq-pick-cost { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; white-space: nowrap; }
+.eq-pick-cost-total { font-family: "Roboto Mono"; font-size: 13px; font-weight: 700; color: var(--ink); }
+.eq-pick-cost-rate { font-family: "Roboto Mono"; font-size: 11px; color: var(--muted); }
 .eq-pick-conflict { font-size: 11px; color: var(--critical); }
 /* Заголовок группы по категории (46-й проход) — раньше список шёл в
    порядке, в котором позиции лежат в базе (фактически случайном для
@@ -737,6 +748,39 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .eq-pick-group:hover { background: var(--border); }
 .eq-pick-group svg { width: 12px; height: 12px; transition: transform 0.1s; flex: none; }
 .eq-pick-group.collapsed svg { transform: rotate(-90deg); }
+/* Счётчик позиций в свёрнутой/развёрнутой категории (повторный обзор формы
+   "Новая аренда") — раньше, пока категория свёрнута, было не видно, сколько
+   в ней вообще единиц оборудования. Нормальный вес (без uppercase-жирности
+   заголовка) и приглушённый цвет — читается как метаданные, а не часть
+   названия категории. */
+.eq-pick-group-count { font-weight: 400; text-transform: none; letter-spacing: normal; color: var(--muted); opacity: 0.8; }
+/* Поиск, закреплённый над списком (повторный обзор формы "Новая аренда") —
+   раньше строка поиска прокручивалась вместе со списком оборудования,
+   поэтому, чтобы поменять или стереть запрос при длинном списке, приходилось
+   сначала листать назад наверх. Модалка сама не скроллится — скроллится
+   .modal-body (см. ниже), поэтому sticky-контейнером для этого поля
+   выступает именно он. */
+.eq-search-sticky { position: sticky; top: 0; z-index: 2; }
+/* Чипы уже выбранного оборудования (повторный обзор) — видны независимо от
+   того, свёрнута ли категория этой позиции или прокручен ли список мимо
+   неё: иначе, отметив позиции в разных категориях, сложно окинуть взглядом
+   весь набор, не разворачивая всё заново. Клик по крестику снимает галочку
+   тем же onToggle, что и сам чекбокс строки — переиспользование, а не
+   отдельная функция удаления. */
+.eq-pick-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.eq-pick-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 14px;
+  padding: 4px 4px 4px 10px; font-size: 12px; color: var(--ink);
+}
+.eq-pick-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eq-pick-chip button {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 16px; height: 16px; border-radius: 50%; border: none; background: none; padding: 0;
+  color: var(--muted); cursor: pointer;
+}
+.eq-pick-chip button:hover { background: var(--border); color: var(--ink); }
+.eq-pick-chip button svg { width: 10px; height: 10px; }
 
 /* ---------- Сводка финансов аренды (форма возврата) ---------- */
 .summary-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
@@ -744,6 +788,14 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .summary-row.total { font-weight: 800; font-size: 14.5px; border-top: 1px solid var(--border-strong); margin-top: 6px; padding-top: 8px; }
 .summary-row .v { font-family: "Roboto Mono"; }
 .summary-row.critical .v { color: var(--critical); }
+/* Итог, закреплённый внизу формы (повторный обзор формы "Новая аренда") —
+   раньше сумму было видно только долистав форму (клиент → даты → длинный
+   список оборудования → скидка → доп. услуги) до самого конца; правя
+   что-то выше, приходилось прокручивать заново. bottom: 0 — относительно
+   .modal-body (ближайший скроллящийся предок, см. dialog#modal .modal-body
+   выше), не всей модалки: нижний padding .modal-body (18px) остаётся
+   видимым зазором под карточкой, когда она "прилипла". */
+.summary-box.sticky-summary { position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -8px 14px -10px rgba(0, 0, 0, 0.25); }
 
 .doc-page { background: #fff; color: #17202A; padding: 34px 38px; font-family: "Roboto", sans-serif; font-size: 13px; line-height: 1.55; border-radius: 3px; border: 1px solid var(--border); }
 .doc-page h2 { font-family: "Roboto", system-ui, sans-serif; font-weight: 600; font-size: 18px; margin-bottom: 4px; color: #17202A; }

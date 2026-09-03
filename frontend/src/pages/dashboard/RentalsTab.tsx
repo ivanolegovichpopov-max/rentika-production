@@ -388,11 +388,23 @@ function EquipmentPicklist({
   // применяем сохранённое collapsed только когда поле поиска пустое.
   const collapseActive = !q;
 
+  // Счётчик позиций в каждой категории (повторный обзор формы "Новая
+  // аренда") — считается от того же visible, что и сам список: пока идёт
+  // поиск, число в свёрнутом заголовке — это то, сколько там совпадений
+  // запроса, а не общее число позиций категории вслепую.
+  const categoryCounts = new Map<string, number>();
+  for (const e of visible) categoryCounts.set(e.category, (categoryCounts.get(e.category) ?? 0) + 1);
+
+  // Стоимость за весь выбранный срок, а не только ставка за сутки
+  // (повторный обзор формы "Новая аренда") — то же previewDays, что
+  // считают CreateRentalModal/EditRentalModal для итоговой суммы формы.
+  const previewDays = end >= start ? spanDays(start, end) : 0;
+
   let lastCategory: string | null = null;
 
   return (
     <div>
-      <div className="search-box" style={{ width: "100%", marginBottom: "8px" }}>
+      <div className="search-box eq-search-sticky" style={{ width: "100%", marginBottom: "8px" }}>
         <IconSearch width={16} height={16} />
         <input
           type="text"
@@ -401,6 +413,22 @@ function EquipmentPicklist({
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
+      {checkedIds.length > 0 && (
+        <div className="eq-pick-chips">
+          {checkedIds.map((id) => {
+            const eq = items.find((e) => e.id === id);
+            if (!eq) return null;
+            return (
+              <span className="eq-pick-chip" key={id}>
+                <span>{eq.name}</span>
+                <button type="button" onClick={() => onToggle(id)} aria-label={`Убрать «${eq.name}» из выбранного`}>
+                  <IconClose />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
       <div className="eq-picklist">
         {visible.length === 0 ? (
           <div className="empty-note" style={{ padding: "10px 12px" }}>
@@ -429,6 +457,7 @@ function EquipmentPicklist({
                   >
                     <IconChevronDown />
                     {e.category}
+                    <span className="eq-pick-group-count">{categoryCounts.get(e.category)}</span>
                   </button>
                 )}
                 {!isCollapsed && (
@@ -441,8 +470,11 @@ function EquipmentPicklist({
                         {e.warehouse ? ` · ${e.warehouse}` : ""}
                       </span>
                     </span>
-                    <span className="eq-pick-rate" title={equipmentRateLabelTitle(e)}>
-                      {equipmentRateLabel(e)}
+                    <span className="eq-pick-cost" title={equipmentRateLabelTitle(e)}>
+                      {previewDays > 0 && (
+                        <span className="eq-pick-cost-total">{money(equipmentCostForDays(e, previewDays))}</span>
+                      )}
+                      <span className="eq-pick-cost-rate">{equipmentRateLabel(e)}</span>
                     </span>
                     {!free && conflictEnd && <span className="eq-pick-conflict">занято до {fmtDate(conflictEnd)}</span>}
                   </label>
@@ -627,7 +659,7 @@ export function CreateRentalModal({
         </div>
       </div>
       <div className="field">
-        <label>Оборудование</label>
+        <label>Оборудование{checkedIds.length > 0 ? ` — выбрано: ${checkedIds.length}` : ""}</label>
         <EquipmentPicklist
           items={equipment}
           start={startDate}
@@ -668,7 +700,7 @@ export function CreateRentalModal({
         </div>
       </div>
       {previewDays > 0 && checkedIds.length > 0 && (
-        <div className="summary-box">
+        <div className="summary-box sticky-summary">
           <div className="summary-row">
             <span>Аренда, {previewDays} дн.</span>
             <span className="v">{money(previewBase)}</span>
@@ -829,7 +861,7 @@ function EditRentalModal({
         </div>
       )}
       <div className="field">
-        <label>Оборудование</label>
+        <label>Оборудование{checkedIds.length > 0 ? ` — выбрано: ${checkedIds.length}` : ""}</label>
         <EquipmentPicklist
           items={equipment}
           start={startDate}
@@ -864,7 +896,7 @@ function EditRentalModal({
         </div>
       </div>
       {previewDays > 0 && checkedIds.length > 0 && (
-        <div className="summary-box">
+        <div className="summary-box sticky-summary">
           <div className="summary-row">
             <span>Аренда, {previewDays} дн.</span>
             <span className="v">{money(previewBase)}</span>
