@@ -739,8 +739,16 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    бы сюда, ломая строку "чекбокс — название — ставка" на три строки. Судя по
    всему, эта строка пиклиста оборудования в форме аренды была сломана этим
    же образом ещё до 17-го прохода — просто раньше на неё не обратили
-   внимания на скриншотах. */
-.field .eq-pick-row { display: flex; flex-direction: row; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
+   внимания на скриншотах.
+   margin-bottom: 0 — тот же самый баг каскада, ещё одно его проявление (по
+   итогам обзора — "между строкой и серой заливкой следующей категории есть
+   пустое поле"): базовый `.field label { margin-bottom: 5px }` (см. выше)
+   точно так же "протекает" на .eq-pick-row, оставляя пустую полосу между
+   нижней границей строки (разделитель) и следующим .eq-pick-group — эта
+   полоса ничем не закрашена (не серая, не белая — фон родителя), поэтому и
+   выглядит как "пустое поле". У самого .eq-pick-group такой утечки нет — это
+   <button>, а не <label>, базовый селектор его не касается. */
+.field .eq-pick-row { display: flex; flex-direction: row; align-items: center; gap: 10px; padding: 9px 12px; margin-bottom: 0; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
 .eq-pick-row:last-child { border-bottom: none; }
 .eq-pick-row.disabled { opacity: 0.5; }
 .eq-pick-row input[type=checkbox] { width: 16px; height: 16px; flex: none; }
