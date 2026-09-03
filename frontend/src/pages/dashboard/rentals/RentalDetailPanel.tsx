@@ -338,6 +338,14 @@ export function RentalDetailPanel({
   // клиенту" (buildRentalSummaryText) чуть выше — уже реализовано прямо
   // здесь, без похода в RentalsTab.tsx.
   const [printDoc, setPrintDoc] = useState<{ title: string; node: ReactNode } | null>(null);
+  // Вкладки (по итогам обзора "карточка перегружена" — 1:1 тот же приём,
+  // что уже применён на ClientDetailPanel.tsx в 35-м проходе: "Обзор" —
+  // то, что нужно чаще всего, без скролла; "История" — заметки/фото/журнал,
+  // то, что открывают редко, обычно чтобы разобраться в чём-то задним
+  // числом). Два таба, а не три, как у клиента — у аренды меньше
+  // самостоятельных смысловых блоков (нет отдельного "Журнала" заметок
+  // сотрудника, который был бы третьим).
+  const [panelTab, setPanelTab] = useState<"overview" | "history">("overview");
 
   if (!rental) return null;
 
@@ -393,56 +401,47 @@ export function RentalDetailPanel({
             <IconUser /> Карточка клиента
           </button>
         )}
-        {/* Выдать/Принять возврат/Изменить/Отменить (повторный обзор — "из
-            панели деталей ничего не сделать, приходится закрывать её и
-            искать ту же карточку в списке") — 1:1 те же условия по статусу,
-            что и в .rental-actions карточки списка (RentalsTab.tsx,
-            renderCard). st includes "overdue" отдельно от "active" (см.
-            rentalDisplayStatus), но по факту это та же "active"-аренда в
-            БД — оба варианта равнозначны условию r.status === "active" на
-            карточке. */}
+        {/* Главное действие по статусу + "Изменить" — единственные два
+            действия, оставленные на виду (по итогам обзора "карточка
+            перегружена" — 1:1 тот же приём, что и на ClientDetailPanel.tsx,
+            35-й проход: в основном ряду только то, что нужно каждый день,
+            остальное — в "Ещё" ниже). st includes "overdue" отдельно от
+            "active" (см. rentalDisplayStatus), но по факту это та же
+            "active"-аренда в БД. */}
         {st === "booked" && (
-          <>
-            <button className="btn btn-primary btn-sm" type="button" onClick={() => onIssue(rental.id)}>
-              Выдать
-            </button>
-            <button className="btn btn-sm" type="button" onClick={() => onEdit(rental.id)}>
-              <IconEdit /> Изменить
-            </button>
-            <button className="btn btn-danger-ghost btn-sm" type="button" onClick={() => onCancel(rental.id)}>
-              Отменить
-            </button>
-          </>
+          <button className="btn btn-primary btn-sm" type="button" onClick={() => onIssue(rental.id)}>
+            Выдать
+          </button>
         )}
         {(st === "active" || st === "overdue") && (
-          <>
-            <button className="btn btn-primary btn-sm" type="button" onClick={() => onReturn(rental.id)}>
-              Принять возврат
-            </button>
-            <button className="btn btn-sm" type="button" onClick={() => onEdit(rental.id)}>
-              <IconEdit /> Изменить
-            </button>
-            <button className="btn btn-sm" type="button" onClick={() => onExtend(rental.id)}>
-              <IconEdit /> Продлить
-            </button>
-          </>
+          <button className="btn btn-primary btn-sm" type="button" onClick={() => onReturn(rental.id)}>
+            Принять возврат
+          </button>
         )}
-        <button
-          className="btn btn-sm"
-          type="button"
-          onClick={() => onRepeat(rental.client_id, rental.items.map((it) => it.equipment_id))}
-        >
-          <IconRepeat /> Повторить аренду
-        </button>
-        <button className="btn btn-sm" type="button" onClick={() => onOpenCalendar(rental.start_date)}>
-          <IconCalendar /> В календаре
-        </button>
-        {/* Печать (повторный обзор) — тем же принципом группировки, что и
-            "Ещё" на карточке в списке: редко нужные документы прячутся за
-            одной кнопкой, а не занимают место в основном ряду действий. */}
+        {(st === "booked" || st === "active" || st === "overdue") && (
+          <button className="btn btn-sm" type="button" onClick={() => onEdit(rental.id)}>
+            <IconEdit /> Изменить
+          </button>
+        )}
+        {/* "Ещё" — все остальные действия одним списком (повторный обзор —
+            раньше это были ТРИ отдельных источника кнопок: основной ряд
+            (Отменить/Продлить/Повторить/Календарь) + отдельный дропдаун
+            "Печать" + отдельный дропдаун "Написать клиенту". Собраны в один,
+            тем же принципом, что и "Объединить с другим клиентом"/"Сводка"
+            в одном "Ещё" на ClientDetailPanel.tsx. */}
         <MoreActionsMenu
-          label="Печать"
           actions={[
+            ...(st === "booked" ? [{ key: "cancel", label: "Отменить", onClick: () => onCancel(rental.id) }] : []),
+            ...(st === "active" || st === "overdue"
+              ? [{ key: "extend", label: "Продлить", icon: <IconEdit />, onClick: () => onExtend(rental.id) }]
+              : []),
+            {
+              key: "repeat",
+              label: "Повторить аренду",
+              icon: <IconRepeat />,
+              onClick: () => onRepeat(rental.client_id, rental.items.map((it) => it.equipment_id)),
+            },
+            { key: "calendar", label: "В календаре", icon: <IconCalendar />, onClick: () => onOpenCalendar(rental.start_date) },
             ...(st === "active" || st === "overdue"
               ? [
                   {
@@ -466,46 +465,54 @@ export function RentalDetailPanel({
               label: "Договор",
               onClick: () => setPrintDoc({ title: "Договор аренды", node: buildContractDoc(rental, client, equipment) }),
             },
+            ...(client?.phone
+              ? [
+                  {
+                    key: "wa",
+                    label: "Сводка в WhatsApp",
+                    onClick: () =>
+                      window.open(
+                        `https://wa.me/${normalizePhoneDigits(client.phone)}?text=${encodeURIComponent(
+                          buildRentalSummaryText(rental, client, equipment)
+                        )}`,
+                        "_blank",
+                        "noreferrer"
+                      ),
+                  },
+                ]
+              : []),
+            ...(client?.email
+              ? [
+                  {
+                    key: "email",
+                    label: "Сводка на почту",
+                    onClick: () => {
+                      window.location.href = `mailto:${client.email}?subject=${encodeURIComponent(
+                        "Информация по аренде"
+                      )}&body=${encodeURIComponent(buildRentalSummaryText(rental, client, equipment))}`;
+                    },
+                  },
+                ]
+              : []),
           ]}
         />
-        {client && (client.phone || client.email) && (
-          <MoreActionsMenu
-            label="Написать клиенту"
-            actions={[
-              ...(client.phone
-                ? [
-                    {
-                      key: "wa",
-                      label: "Сводка в WhatsApp",
-                      onClick: () =>
-                        window.open(
-                          `https://wa.me/${normalizePhoneDigits(client.phone)}?text=${encodeURIComponent(
-                            buildRentalSummaryText(rental, client, equipment)
-                          )}`,
-                          "_blank",
-                          "noreferrer"
-                        ),
-                    },
-                  ]
-                : []),
-              ...(client.email
-                ? [
-                    {
-                      key: "email",
-                      label: "Сводка на почту",
-                      onClick: () => {
-                        window.location.href = `mailto:${client.email}?subject=${encodeURIComponent(
-                          "Информация по аренде"
-                        )}&body=${encodeURIComponent(buildRentalSummaryText(rental, client, equipment))}`;
-                      },
-                    },
-                  ]
-                : []),
-            ]}
-          />
-        )}
       </div>
 
+      {/* Вкладки (см. комментарий у panelTab выше). margin-bottom: 4px, а не
+          margin слева — тот же приём, что и на ClientDetailPanel.tsx: у
+          .slideover уже есть свой padding, свой left-margin только увёл бы
+          вкладки правее заголовков секций под ними. */}
+      <div className="segmented" style={{ margin: "0 0 4px" }}>
+        <button type="button" className={panelTab === "overview" ? "active" : ""} onClick={() => setPanelTab("overview")}>
+          Обзор
+        </button>
+        <button type="button" className={panelTab === "history" ? "active" : ""} onClick={() => setPanelTab("history")}>
+          История
+        </button>
+      </div>
+
+      {panelTab === "overview" && (
+      <>
       <div className="slideover-section">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
           <h4 style={{ marginBottom: 0 }}>Оборудование</h4>
@@ -628,32 +635,38 @@ export function RentalDetailPanel({
         </div>
         {depositError && <div className="form-error">{depositError}</div>}
       </div>
-
-      {(rental.issue_notes || rental.return_notes) && (
-        <div className="slideover-section">
-          <h4>Заметки</h4>
-          {rental.issue_notes && (
-            <div style={{ marginBottom: rental.return_notes ? "10px" : 0 }}>
-              <div className="k" style={{ marginBottom: "4px" }}>
-                При выдаче
-              </div>
-              <div style={{ whiteSpace: "pre-wrap", fontSize: "13px" }}>{rental.issue_notes}</div>
-            </div>
-          )}
-          {rental.return_notes && (
-            <div>
-              <div className="k" style={{ marginBottom: "4px" }}>
-                При возврате
-              </div>
-              <div style={{ whiteSpace: "pre-wrap", fontSize: "13px" }}>{rental.return_notes}</div>
-            </div>
-          )}
-        </div>
+      </>
       )}
 
-      <RentalPhotosSection businessId={businessId} rentalId={rental.id} />
+      {panelTab === "history" && (
+        <>
+          {(rental.issue_notes || rental.return_notes) && (
+            <div className="slideover-section">
+              <h4>Заметки</h4>
+              {rental.issue_notes && (
+                <div style={{ marginBottom: rental.return_notes ? "10px" : 0 }}>
+                  <div className="k" style={{ marginBottom: "4px" }}>
+                    При выдаче
+                  </div>
+                  <div style={{ whiteSpace: "pre-wrap", fontSize: "13px" }}>{rental.issue_notes}</div>
+                </div>
+              )}
+              {rental.return_notes && (
+                <div>
+                  <div className="k" style={{ marginBottom: "4px" }}>
+                    При возврате
+                  </div>
+                  <div style={{ whiteSpace: "pre-wrap", fontSize: "13px" }}>{rental.return_notes}</div>
+                </div>
+              )}
+            </div>
+          )}
 
-      <RentalHistorySection businessId={businessId} rentalId={rental.id} />
+          <RentalPhotosSection businessId={businessId} rentalId={rental.id} />
+
+          <RentalHistorySection businessId={businessId} rentalId={rental.id} />
+        </>
+      )}
 
       {returnModalOpen && (
         <ReturnItemsModal
