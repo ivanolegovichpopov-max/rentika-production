@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "../../api/client";
 import { useData } from "../../context/DataContext";
 import type { Client, Equipment, Rental, RentalItem } from "../../api/types";
-import { money, fmtDate, dayDiff, todayISO, isoAddDays, spanDays } from "../../lib/format";
+import { money, fmtDate, dayDiff, todayISO, isoAddDays, spanDays, formatPhoneInput, formatPassportInput } from "../../lib/format";
 import { RENTAL_META, Badge, rentalDisplayStatus, type StatusMeta } from "../../lib/statusMeta";
 import {
   IconPrinter,
@@ -677,6 +677,25 @@ export function CreateRentalModal({
       setQaError("Укажите имя клиента");
       return;
     }
+    // Проверки формата (тот же принцип, что validateLocally в
+    // ClientFormModal.tsx — телефон/ИНН) — поля уже отформатированы маской
+    // по мере ввода (formatPhoneInput/formatPassportInput), здесь только
+    // финальная проверка длины перед отправкой.
+    if (qaPhone.trim()) {
+      const digits = qaPhone.replace(/\D/g, "").length;
+      if (digits < 10 || digits > 15) {
+        setQaError("Похоже на некорректный номер телефона — должно быть от 10 до 15 цифр");
+        return;
+      }
+    }
+    if (doc && doc.replace(/\D/g, "").length !== 10) {
+      setQaError("Паспорт должен содержать 10 цифр (серия + номер)");
+      return;
+    }
+    if (inn && ![10, 12].includes(inn.length)) {
+      setQaError("ИНН должен состоять из 10 цифр (организация) или 12 цифр (ИП/физлицо)");
+      return;
+    }
     if (!doc && !inn) {
       setQaError("Укажите паспорт или ИНН — хотя бы одно из двух");
       return;
@@ -838,11 +857,15 @@ export function CreateRentalModal({
             по клику. Не трогает сам Dropdown — тот остаётся полностью
             переиспользуемым общим компонентом. */}
         {!quickAddOpen ? (
-          <button type="button" className="link-btn" style={{ marginTop: "6px" }} onClick={() => setQuickAddOpen(true)}>
+          // Отступ увеличен (по итогам обзора — "не должна быть впритык к
+          // выпадающему меню") — раньше ссылка стояла вплотную под
+          // Dropdown'ом (6px, тот же отступ, что и у предупреждения о
+          // чёрном списке), из-за чего визуально сливалась с полем "Клиент".
+          <button type="button" className="link-btn" style={{ marginTop: "12px" }} onClick={() => setQuickAddOpen(true)}>
             + Добавить нового клиента
           </button>
         ) : (
-          <div style={{ marginTop: "8px", padding: "10px", background: "var(--surface-2)", borderRadius: "8px" }}>
+          <div style={{ marginTop: "12px", padding: "10px", background: "var(--surface-2)", borderRadius: "8px" }}>
             <div className="field-row">
               <div className="field">
                 <label>Имя</label>
@@ -856,17 +879,40 @@ export function CreateRentalModal({
               </div>
               <div className="field">
                 <label>Телефон</label>
-                <input type="text" value={qaPhone} onChange={(e) => setQaPhone(e.target.value)} placeholder="+7…" />
+                {/* Маска ввода (по итогам обзора — "ко всем полям маску") —
+                    та же formatPhoneInput, что и в форме клиента
+                    (ClientFormModal.tsx). */}
+                <input
+                  type="text"
+                  value={qaPhone}
+                  onChange={(e) => setQaPhone(formatPhoneInput(e.target.value))}
+                  placeholder="+7 900 000-00-00"
+                />
               </div>
             </div>
             <div className="field-row">
               <div className="field">
                 <label>Паспорт</label>
-                <input type="text" value={qaDoc} onChange={(e) => setQaDoc(e.target.value)} placeholder="Серия и номер" />
+                {/* На вкладке "Клиенты" поле "Документ" — простой текст без
+                    маски (там оно должно вмещать и загранпаспорт, и другие
+                    документы). Здесь поле называется конкретно "Паспорт",
+                    так что маска серии+номера уместна — новая функция
+                    formatPassportInput в lib/format.ts. */}
+                <input
+                  type="text"
+                  value={qaDoc}
+                  onChange={(e) => setQaDoc(formatPassportInput(e.target.value))}
+                  placeholder="45 03 123456"
+                />
               </div>
               <div className="field">
                 <label>ИНН</label>
-                <input type="text" value={qaInn} onChange={(e) => setQaInn(e.target.value)} placeholder="ИНН" />
+                <input
+                  type="text"
+                  value={qaInn}
+                  onChange={(e) => setQaInn(e.target.value.replace(/\D/g, "").slice(0, 12))}
+                  placeholder="ИНН"
+                />
               </div>
             </div>
             <div className="field-hint">Укажите паспорт или ИНН — хотя бы одно из двух обязательно.</div>
