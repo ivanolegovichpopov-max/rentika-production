@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { IconChevronDown, IconMore } from "../lib/icons";
 
 export interface MoreAction {
@@ -68,6 +68,11 @@ export function MoreActionsMenu({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Досчитанный нижний отступ панели — не 0 только когда прямо под открытой
+  // панелью, при закрытии, окажется частично перекрытый триггер ДРУГОГО
+  // экземпляра MoreActionsMenu (см. комментарий у useLayoutEffect ниже).
+  const [extraBottom, setExtraBottom] = useState(0);
 
   useEffect(() => {
     if (!open) return;
@@ -78,20 +83,85 @@ export function MoreActionsMenu({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [open]);
 
+  /**
+   * 51-й проход — точная причина бага "в выпадающем меню просвечивается
+   * следующее 'Ещё'" (репортился дважды, второй раз — с 4 скриншотами на
+   * разных карточках, с явным требованием найти точную причину без
+   * затемнения). Живой замер в DOM (getBoundingClientRect +
+   * elementsFromPoint) показал: панель НЕ прозрачная и НЕ ниже по
+   * z-index — в точке стыка она честно оказывается самым верхним
+   * элементом. Настоящая причина другая — карточки идут плотно
+   * (margin-bottom всего 10px), и КАЖДАЯ заканчивается собственной кнопкой
+   * "Ещё"/"⋯" в том же столбце, где раскрывается панель. Панель меню
+   * (~120px высотой у списка из 3 пунктов) при открытии геометрически
+   * задевает верхнюю часть такой же кнопки соседней карточки, но только
+   * ЧАСТИЧНО — нижняя часть её подписи/шеврона остаётся видна сразу под
+   * краем панели. Именно это частичное (не полное) перекрытие двух честных
+   * непрозрачных слоёв и читается как "слои перемешались". Смена
+   * направления раскрытия не решает проблему — тем же замером
+   * подтверждено, что вверх панель ровно так же перекрывает "Ещё"
+   * предыдущей карточки (структура одинаковая у всех карточек).
+   *
+   * Фикс — не затемнение (пользователь явно отверг его как костыль,
+   * которого нет больше нигде на сайте), а устранение самой причины
+   * частичного перекрытия: после открытия меряем реальную геометрию,
+   * ищем через elementsFromPoint вдоль нижнего края панели триггер ДРУГОГО
+   * экземпляра этого же компонента (маркер data-more-trigger — не
+   * произвольная кнопка со случайно совпавшим классом, и не наш
+   * собственный триггер, см. !ref.current?.contains) и, если он перекрыт
+   * лишь частично, досчитываем панели ровно столько нижнего отступа,
+   * чтобы накрыть его целиком — частичное перекрытие становится полным
+   * (без обрезанного "хвоста" подписи) либо, если места хватает, не
+   * задевает соседа вовсе. Эффект молчит (extraBottom = 0) везде, где
+   * рядом нет второй такой же кнопки — тулбары "Клиенты"/"Оборудование",
+   * панели карточек и т.п. не затронуты.
+   */
+  useLayoutEffect(() => {
+    if (!open) {
+      setExtraBottom(0);
+      return;
+    }
+    const panelEl = panelRef.current;
+    if (!panelEl) return;
+    const panelRect = panelEl.getBoundingClientRect();
+    // Несколько точек вдоль нижнего края, а не только центр — соседняя
+    // кнопка может оказаться у любого края панели в зависимости от align.
+    const xs = [panelRect.left + 4, (panelRect.left + panelRect.right) / 2, panelRect.right - 4];
+    let extra = 0;
+    for (const x of xs) {
+      const hit = document
+        .elementsFromPoint(x, panelRect.bottom - 1)
+        .find((el) => el instanceof HTMLElement && el.hasAttribute("data-more-trigger") && !ref.current?.contains(el));
+      if (!hit) continue;
+      const hitRect = hit.getBoundingClientRect();
+      // Перекрытие именно частичное: нижний край соседней кнопки ниже
+      // нижнего края панели, а верхний — выше него. Иначе перекрытия либо
+      // нет, либо оно уже полное — дорабатывать нечего.
+      if (hitRect.bottom > panelRect.bottom && hitRect.top < panelRect.bottom) {
+        extra = Math.max(extra, Math.ceil(hitRect.bottom - panelRect.bottom) + 2);
+      }
+    }
+    setExtraBottom(extra);
+  }, [open]);
+
   return (
     <div className="cat-filter" ref={ref}>
       {iconOnly ? (
-        <button type="button" className="icon-btn" title={label} onClick={() => setOpen((v) => !v)}>
+        <button type="button" className="icon-btn" title={label} data-more-trigger onClick={() => setOpen((v) => !v)}>
           <IconMore />
         </button>
       ) : (
-        <button type="button" className="more-menu-btn" onClick={() => setOpen((v) => !v)}>
+        <button type="button" className="more-menu-btn" data-more-trigger onClick={() => setOpen((v) => !v)}>
           <span>{label}</span>
           <IconChevronDown />
         </button>
       )}
       {open && (
-        <div className={"cat-filter-panel" + (align === "right" ? " cat-filter-panel-right" : "")}>
+        <div
+          ref={panelRef}
+          className={"cat-filter-panel" + (align === "right" ? " cat-filter-panel-right" : "")}
+          style={extraBottom ? { paddingBottom: 6 + extraBottom } : undefined}
+        >
           {actions.map((a) => (
             <button
               type="button"
