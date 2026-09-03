@@ -43,7 +43,7 @@ import { useData } from "../../../context/DataContext";
 import { RENTAL_META, Badge, rentalDisplayStatus } from "../../../lib/statusMeta";
 import { money, fmtDate, todayISO } from "../../../lib/format";
 import { IconClose, IconUser, IconEdit, IconRepeat, IconCalendar } from "../../../lib/icons";
-import { itemRateLabel } from "./helpers";
+import { itemRateLabel, itemRateLabelTitle } from "./helpers";
 import { api, ApiError } from "../../../api/client";
 import { normalizePhoneDigits } from "../clients/helpers";
 import { buildRentalSummaryText } from "../clients/summary";
@@ -440,7 +440,9 @@ export function RentalDetailPanel({
                   </span>
                 )}
               </span>
-              <span className="mono">{itemRateLabel(it)}</span>
+              <span className="mono" title={itemRateLabelTitle(it)}>
+                {itemRateLabel(it)}
+              </span>
             </div>
           );
         })}

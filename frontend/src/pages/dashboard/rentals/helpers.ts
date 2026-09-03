@@ -46,6 +46,38 @@ export function itemRateLabel(it: RentalItem): string {
   );
 }
 
+/** Расшифровка ступенчатой ставки для title/подсказки (46-й проход, по
+ * итогам обзора формы "Новая аренда" — короткая запись "690 ₽/14дн →
+ * 190 ₽/7 дн" сама по себе непонятна тому, кто не в курсе идиомы "цена за
+ * период → цена за шаг после него"; полным предложением при наведении —
+ * понятно любому сотруднику). undefined для простого посуточного тарифа —
+ * там rateLabel() уже самодостаточен, пояснять нечего. */
+export function rateLabelTitle(
+  periodDays: number | null,
+  periodPrice: number | null,
+  periodPriceAfter: number | null,
+  afterPeriodDays: number | null
+): string | undefined {
+  if (!periodDays || !periodPrice) return undefined;
+  const afterDays = afterPeriodDays || 1;
+  const afterUnit = afterDays === 1 ? "сутки" : `каждые ${afterDays} дн.`;
+  const base = `${money(periodPrice)} за первые ${periodDays} дн.`;
+  return periodPriceAfter != null ? `${base}, затем ${money(periodPriceAfter)} за ${afterUnit}` : base;
+}
+
+export function equipmentRateLabelTitle(e: Equipment): string | undefined {
+  return rateLabelTitle(e.period_days, e.period_price, e.period_price_after, e.after_period_days);
+}
+
+export function itemRateLabelTitle(it: RentalItem): string | undefined {
+  return rateLabelTitle(
+    it.period_days_snapshot,
+    it.period_price_snapshot,
+    it.period_price_after_snapshot,
+    it.after_period_days_snapshot
+  );
+}
+
 /** Стоимость позиции ПО ТЕКУЩЕМУ (живому) тарифу Equipment за N дней — для
  * живой оценки в CreateRentalModal/EditRentalModal (43-й проход, п.1
  * обзора), где реальных RentalItem-снимков ещё нет (аренда не создана/не

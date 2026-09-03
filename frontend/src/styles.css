@@ -704,9 +704,20 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .eq-pick-row:last-child { border-bottom: none; }
 .eq-pick-row.disabled { opacity: 0.5; }
 .eq-pick-row input[type=checkbox] { width: 16px; height: 16px; flex: none; }
-.eq-pick-name { flex: 1; font-weight: 600; min-width: 120px; }
+/* .eq-pick-info — колонка "название + номер/склад" (46-й проход, по итогам
+   обзора формы "Новая аренда" — раньше несколько единиц оборудования с
+   одинаковым названием было невозможно отличить друг от друга в этом
+   списке). flex: 1/min-width переехали сюда с .eq-pick-name, которое само
+   стало просто жирной первой строкой этой колонки. */
+.eq-pick-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 120px; }
+.eq-pick-name { font-weight: 600; }
+.eq-pick-sub { font-size: 11px; font-weight: 400; color: var(--muted); }
 .eq-pick-rate { font-family: "Roboto Mono"; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .eq-pick-conflict { font-size: 11px; color: var(--critical); }
+/* Заголовок группы по категории (46-й проход) — раньше список шёл в
+   порядке, в котором позиции лежат в базе (фактически случайном для
+   пользователя); теперь отсортирован и разбит на подписанные группы. */
+.eq-pick-group { padding: 6px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--border); }
 
 /* ---------- Сводка финансов аренды (форма возврата) ---------- */
 .summary-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }

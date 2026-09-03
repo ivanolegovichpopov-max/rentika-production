@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "../../api/client";
 import { useData } from "../../context/DataContext";
 import type { Client, Equipment, Rental, RentalItem } from "../../api/types";
@@ -16,6 +16,7 @@ import {
   IconShield,
   IconMessages,
   IconFinance,
+  IconSearch,
 } from "../../lib/icons";
 import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc, buildBulkContractsDoc } from "./documents";
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -25,7 +26,16 @@ import { Dropdown } from "../../components/Dropdown";
 import { MoreActionsMenu } from "../../components/MoreActionsMenu";
 import { clientDisplayRating, normalizePhoneDigits } from "./clients/helpers";
 import { buildRentalSummaryText } from "./clients/summary";
-import { equipmentRateLabel, itemRateLabel, isEquipmentFreeForRange, conflictEndFor, docNumber, equipmentCostForDays } from "./rentals/helpers";
+import {
+  equipmentRateLabel,
+  equipmentRateLabelTitle,
+  itemRateLabel,
+  itemRateLabelTitle,
+  isEquipmentFreeForRange,
+  conflictEndFor,
+  docNumber,
+  equipmentCostForDays,
+} from "./rentals/helpers";
 import { exportRentalsCsv } from "./rentals/csv";
 import { RentalDetailPanel } from "./rentals/RentalDetailPanel";
 
@@ -281,7 +291,25 @@ function FormModal({
 
 /** Мультивыбор оборудования с проверкой занятости на диапазон [start, end] —
  * порт общей разметки .eq-picklist/.eq-pick-row демо, используется и в
- * создании, и в правке аренды. */
+ * создании, и в правке аренды.
+ *
+ * 46-й проход, по итогам обзора формы "Новая аренда" (пользователь принял
+ * все три моих предложения из обзора целиком, поиск — единственное из его
+ * собственных трёх вопросов, на которое тоже согласился):
+ *  - список теперь отсортирован (категория → название → номер) и разбит на
+ *    подписанные группы по категории — раньше порядок совпадал с тем, как
+ *    записи лежат в базе (фактически случайным для пользователя), из-за
+ *    чего несколько одинаковых по названию единиц оказывались вперемешку с
+ *    другим оборудованием без всякой системы;
+ *  - под названием — номер (Equipment.code) и склад, тот же принцип
+ *    подписи, что "№ …" на вкладке "Оборудование" (EquipmentTab.tsx) —
+ *    раньше несколько единиц с одинаковым названием были неотличимы друг от
+ *    друга в этом списке;
+ *  - ставка сопровождается title-подсказкой (equipmentRateLabelTitle) —
+ *    расшифровка ступенчатого тарифа полным предложением при наведении;
+ *  - строка поиска по названию/номеру/категории — тот же .search-box, что
+ *    в общем поиске шапки (Dashboard.tsx).
+ */
 function EquipmentPicklist({
   items,
   start,
@@ -301,25 +329,75 @@ function EquipmentPicklist({
   onToggle: (id: string) => void;
   alwaysShowIds?: string[];
 }) {
-  const visible = items.filter(
+  const [query, setQuery] = useState("");
+
+  const base = items.filter(
     (e) => (alwaysShowIds?.includes(e.id) ?? false) || (e.status !== "retired" && !isUnderMaintenanceOn(e, start))
   );
+  const sorted = [...base].sort((a, b) => {
+    const byCategory = a.category.localeCompare(b.category, "ru");
+    if (byCategory !== 0) return byCategory;
+    const byName = a.name.localeCompare(b.name, "ru");
+    if (byName !== 0) return byName;
+    return (a.code ?? "").localeCompare(b.code ?? "", "ru");
+  });
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? sorted.filter((e) => (e.name + " " + e.category + " " + (e.code ?? "")).toLowerCase().includes(q))
+    : sorted;
+
+  let lastCategory: string | null = null;
 
   return (
-    <div className="eq-picklist">
-      {visible.map((e) => {
-        const free = isEquipmentFreeForRange(e.id, start, end, rentals, excludeRentalId);
-        const conflictEnd = free ? null : conflictEndFor(e.id, start, end, rentals, excludeRentalId);
-        const checked = checkedIds.includes(e.id);
-        return (
-          <label key={e.id} className={`eq-pick-row${free ? "" : " disabled"}`}>
-            <input type="checkbox" checked={checked} disabled={!free} onChange={() => onToggle(e.id)} />
-            <span className="eq-pick-name">{e.name}</span>
-            <span className="eq-pick-rate">{equipmentRateLabel(e)}</span>
-            {!free && conflictEnd && <span className="eq-pick-conflict">занято до {fmtDate(conflictEnd)}</span>}
-          </label>
-        );
-      })}
+    <div>
+      <div className="search-box" style={{ width: "100%", marginBottom: "8px" }}>
+        <IconSearch width={16} height={16} />
+        <input
+          type="text"
+          placeholder="Поиск по названию, номеру, категории…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+      <div className="eq-picklist">
+        {visible.length === 0 ? (
+          <div className="empty-note" style={{ padding: "10px 12px" }}>
+            Ничего не найдено
+          </div>
+        ) : (
+          visible.map((e) => {
+            const free = isEquipmentFreeForRange(e.id, start, end, rentals, excludeRentalId);
+            const conflictEnd = free ? null : conflictEndFor(e.id, start, end, rentals, excludeRentalId);
+            const checked = checkedIds.includes(e.id);
+            const showGroup = e.category !== lastCategory;
+            lastCategory = e.category;
+            return (
+              // Fragment, а не оборачивающий <div> — .eq-pick-row:last-child
+              // (снимает нижнюю границу у последней строки списка) полагается
+              // на то, что строки остаются ПРЯМЫМИ детьми .eq-picklist;
+              // обёртка сделала бы каждую строку "последним ребёнком" своего
+              // персонального div и убрала бы разделители между позициями.
+              <Fragment key={e.id}>
+                {showGroup && <div className="eq-pick-group">{e.category}</div>}
+                <label className={`eq-pick-row${free ? "" : " disabled"}`}>
+                  <input type="checkbox" checked={checked} disabled={!free} onChange={() => onToggle(e.id)} />
+                  <span className="eq-pick-info">
+                    <span className="eq-pick-name">{e.name}</span>
+                    <span className="eq-pick-sub">
+                      № {e.code ?? "—"}
+                      {e.warehouse ? ` · ${e.warehouse}` : ""}
+                    </span>
+                  </span>
+                  <span className="eq-pick-rate" title={equipmentRateLabelTitle(e)}>
+                    {equipmentRateLabel(e)}
+                  </span>
+                  {!free && conflictEnd && <span className="eq-pick-conflict">занято до {fmtDate(conflictEnd)}</span>}
+                </label>
+              </Fragment>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
@@ -1058,7 +1136,9 @@ function IssueRentalModal({
           return (
             <div className="mini-item" key={it.equipment_id}>
               <span>{eq?.name ?? "—"}</span>
-              <span className="mono">{itemRateLabel(it)}</span>
+              <span className="mono" title={itemRateLabelTitle(it)}>
+                {itemRateLabel(it)}
+              </span>
             </div>
           );
         })}
