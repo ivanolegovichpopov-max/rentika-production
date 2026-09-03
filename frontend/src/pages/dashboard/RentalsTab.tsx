@@ -4,7 +4,19 @@ import { useData } from "../../context/DataContext";
 import type { Client, Equipment, Rental, RentalItem } from "../../api/types";
 import { money, fmtDate, dayDiff, todayISO, isoAddDays, spanDays } from "../../lib/format";
 import { RENTAL_META, Badge, rentalDisplayStatus, type StatusMeta } from "../../lib/statusMeta";
-import { IconPrinter, IconEdit, IconClose, IconAlert, IconCalendar, IconChevronRight, IconShield, IconMessages } from "../../lib/icons";
+import {
+  IconPrinter,
+  IconEdit,
+  IconClose,
+  IconAlert,
+  IconCalendar,
+  IconChevronRight,
+  IconChevronDown,
+  IconCheck,
+  IconShield,
+  IconMessages,
+  IconFinance,
+} from "../../lib/icons";
 import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc, buildBulkContractsDoc } from "./documents";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
@@ -129,6 +141,15 @@ interface FinancePreview {
  * "Показать только". */
 function isDepositDue(r: Rental): boolean {
   return r.status === "returned" && r.deposit_total > 0 && !r.deposit_returned_at;
+}
+
+/** Не оплачено (полностью или частично) — 46-й проход, "чего не хватает на
+ * главной странице": total считается вживую (см. compute_rental_breakdown)
+ * и может расти день ото дня для просроченной аренды, поэтому остаток
+ * (total - paid_amount) тоже пересчитывается здесь при каждом рендере, а
+ * не хранится. Отменённые аренды исключены — оплата за них не взимается. */
+function isUnpaid(r: Rental): boolean {
+  return r.status !== "cancelled" && r.total - r.paid_amount > 0.01;
 }
 
 function previewReturnFinance(r: Rental, actualReturn: string, damageFee: number): FinancePreview {
@@ -1171,6 +1192,28 @@ export function RentalsTab({
   // заметить — открыть карточку каждой закрытой аренды по очереди, тут же
   // видно сразу в списке, тем же паттерном, что riskOnly/expiringOnly.
   const [depositDueOnly, setDepositDueOnly] = useState(false);
+  // "Не оплачено" (46-й проход, по итогам обзора — "чего не хватает на
+  // главной странице") — тот же паттерн переключателя, что и три выше, см.
+  // isUnpaid.
+  const [unpaidOnly, setUnpaidOnly] = useState(false);
+  // Дропдаун "Фильтры" (46-й проход, по итогам обзора — "Клиенты"/
+  // "Оборудование" собирают редкие/переключаемые фильтры в один дропдаун
+  // с чекбоксами вместо отдельных кнопок в ряду; три круглые icon-only
+  // кнопки здесь были единственным местом в приложении с другой
+  // стилизацией фильтров). Тот же idiom, что moreFiltersOpen/Ref в
+  // ClientsTab.tsx — клик вне панели закрывает её.
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+  const moreFiltersRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!moreFiltersOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (moreFiltersRef.current && !moreFiltersRef.current.contains(e.target as Node)) setMoreFiltersOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [moreFiltersOpen]);
+  const moreFiltersActiveCount =
+    (riskOnly ? 1 : 0) + (expiringOnly ? 1 : 0) + (depositDueOnly ? 1 : 0) + (unpaidOnly ? 1 : 0);
   const [showCreate, setShowCreate] = useState(false);
   // Предзаполнение "Новой аренды" клиентом+позициями текущей (41-й проход,
   // "Повторить аренду" из RentalDetailPanel) — null при обычном открытии
@@ -1220,7 +1263,12 @@ export function RentalsTab({
     });
   }
 
-  const list = rentals.filter((r) => {
+  // Базовый список (статус-сегмент + поиск, БЕЗ трёх переключателей ниже) —
+  // выделен отдельно (46-й проход), чтобы посчитать, сколько аренд попадёт
+  // под каждый переключатель дропдауна "Фильтры", тем же принципом, что
+  // dormantCount/birthdayCount в ClientsTab.tsx (счётчик — "сколько найдётся,
+  // если включить именно этот", а не "сколько уже видно с учётом него же").
+  const bySearch = rentals.filter((r) => {
     const st = rentalDisplayStatus(r);
     const statusOk = filter === "all" ? true : filter === "active" ? st === "active" || st === "overdue" : st === filter;
     if (!statusOk) return false;
@@ -1239,6 +1287,18 @@ export function RentalsTab({
       .toLowerCase();
     if (search && !haystack.includes(search.toLowerCase())) return false;
 
+    return true;
+  });
+  const riskCount = bySearch.filter((r) => {
+    const client = clients.find((c) => c.id === r.client_id);
+    return client && clientDisplayRating(client, rentals) !== "normal";
+  }).length;
+  const expiringCount = bySearch.filter((r) => rentalDisplayStatus(r) === "active" && dayDiff(r.end_date) <= 2).length;
+  const depositDueCount = bySearch.filter(isDepositDue).length;
+  const unpaidCount = bySearch.filter(isUnpaid).length;
+
+  const list = bySearch.filter((r) => {
+    const client = clients.find((c) => c.id === r.client_id);
     // Живой рейтинг (клиент "на контроле" вычисляется по текущей
     // просрочке — см. clientDisplayRating), а не сырое client.rating: до
     // исправления в 39-м проходе фильтр ловил только формальный чёрный
@@ -1246,9 +1306,11 @@ export function RentalsTab({
     // клиенты в него не попадали.
     if (riskOnly && (!client || clientDisplayRating(client, rentals) === "normal")) return false;
 
-    if (expiringOnly && !(st === "active" && dayDiff(r.end_date) <= 2)) return false;
+    if (expiringOnly && !(rentalDisplayStatus(r) === "active" && dayDiff(r.end_date) <= 2)) return false;
 
     if (depositDueOnly && !isDepositDue(r)) return false;
+
+    if (unpaidOnly && !isUnpaid(r)) return false;
 
     return true;
   });
@@ -1386,6 +1448,14 @@ export function RentalsTab({
         ? { label: `Возвращено ${returnedCount}/${r.items.length}`, tone: "info" }
         : null;
     const depositBadge: StatusMeta | null = isDepositDue(r) ? { label: "Депозит не возвращён", tone: "warning" } : null;
+    // Бейдж оплаты (46-й проход) — тем же принципом, что depositBadge выше:
+    // виден только когда есть о чём предупредить (реально не хватает
+    // денег), а не на каждой карточке подряд. "частично" отличает случай,
+    // когда что-то уже внесли, от полного нуля — сотруднику это важно
+    // видеть с одного взгляда на список, не открывая карточку.
+    const paymentBadge: StatusMeta | null = isUnpaid(r)
+      ? { label: r.paid_amount > 0 ? "Оплата частично" : "Не оплачено", tone: "warning" }
+      : null;
 
     return (
       // Карточка кликабельна целиком — открывает RentalDetailPanel (39-й
@@ -1416,6 +1486,7 @@ export function RentalsTab({
             {soonBadge && <Badge meta={soonBadge} />}
             {partialBadge && <Badge meta={partialBadge} />}
             {depositBadge && <Badge meta={depositBadge} />}
+            {paymentBadge && <Badge meta={paymentBadge} />}
             {/* Намёк, что карточка целиком кликабельна (40-й проход, по
                 итогам обзора: раньше это было незаметно — только
                 hover-эффект самой карточки, который пользователь мог
@@ -1555,37 +1626,69 @@ export function RentalsTab({
               ))}
             </div>
             <div className="toolbar-divider" />
-            {/* icon-only (41-й проход) — подсказка (title) и так объясняет
-                смысл кнопки при наведении, текстовая подпись была бы
-                избыточна в и без того плотном ряду. */}
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            {/* Дропдаун "Фильтры" (46-й проход, по итогам обзора — раньше
+                это были три отдельные круглые icon-only кнопки, единственное
+                место в приложении со своей стилизацией фильтров, не похожей
+                на "Фильтры" на ClientsTab.tsx/категории-склады на
+                EquipmentTab.tsx). Тот же .cat-filter*-idiom, счётчики — из
+                riskCount/expiringCount/depositDueCount выше (сколько найдётся
+                по базовому списку — статус+поиск, — если включить именно
+                этот переключатель). */}
+            <div className="cat-filter" ref={moreFiltersRef}>
               <button
                 type="button"
-                className={"btn btn-icon-only" + (riskOnly ? " btn-primary" : "")}
-                title="Показать только клиентов «на контроле» или из чёрного списка"
-                aria-label="Только рискованные"
-                onClick={() => setRiskOnly((v) => !v)}
+                className={"btn cat-filter-btn" + (moreFiltersActiveCount > 0 ? " btn-primary" : "")}
+                onClick={() => setMoreFiltersOpen((v) => !v)}
               >
-                <IconAlert />
+                {moreFiltersActiveCount === 0 ? "Фильтры" : `Фильтры: ${moreFiltersActiveCount}`}
+                <IconChevronDown />
               </button>
-              <button
-                type="button"
-                className={"btn btn-icon-only" + (expiringOnly ? " btn-primary" : "")}
-                title="Показать только аренды в работе, которые истекают в ближайшие 2 дня"
-                aria-label="Истекает скоро"
-                onClick={() => setExpiringOnly((v) => !v)}
-              >
-                <IconCalendar />
-              </button>
-              <button
-                type="button"
-                className={"btn btn-icon-only" + (depositDueOnly ? " btn-primary" : "")}
-                title="Показать только закрытые аренды с невозвращённым депозитом"
-                aria-label="Депозит не возвращён"
-                onClick={() => setDepositDueOnly((v) => !v)}
-              >
-                <IconShield />
-              </button>
+              {moreFiltersOpen && (
+                <div className="cat-filter-panel">
+                  <label className={"cat-filter-option" + (riskOnly ? " checked" : "")}>
+                    <input type="checkbox" className="sr-only" checked={riskOnly} onChange={() => setRiskOnly((v) => !v)} />
+                    <span className="cat-filter-check">{riskOnly && <IconCheck />}</span>
+                    <span className="cat-filter-name" title="Клиенты «на контроле» или из чёрного списка">
+                      <IconAlert width={14} height={14} /> Рискованные клиенты
+                    </span>
+                    <span className="cat-filter-count">{riskCount}</span>
+                  </label>
+                  <label className={"cat-filter-option" + (expiringOnly ? " checked" : "")}>
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={expiringOnly}
+                      onChange={() => setExpiringOnly((v) => !v)}
+                    />
+                    <span className="cat-filter-check">{expiringOnly && <IconCheck />}</span>
+                    <span className="cat-filter-name" title="Аренды в работе, которые истекают в ближайшие 2 дня">
+                      <IconCalendar width={14} height={14} /> Истекает скоро
+                    </span>
+                    <span className="cat-filter-count">{expiringCount}</span>
+                  </label>
+                  <label className={"cat-filter-option" + (depositDueOnly ? " checked" : "")}>
+                    <input
+                      type="checkbox"
+                      className="sr-only"
+                      checked={depositDueOnly}
+                      onChange={() => setDepositDueOnly((v) => !v)}
+                    />
+                    <span className="cat-filter-check">{depositDueOnly && <IconCheck />}</span>
+                    <span className="cat-filter-name" title="Закрытые аренды с невозвращённым депозитом">
+                      <IconShield width={14} height={14} /> Депозит не возвращён
+                    </span>
+                    <span className="cat-filter-count">{depositDueCount}</span>
+                  </label>
+                  <label className={"cat-filter-option" + (unpaidOnly ? " checked" : "")}>
+                    <input type="checkbox" className="sr-only" checked={unpaidOnly} onChange={() => setUnpaidOnly((v) => !v)} />
+                    <span className="cat-filter-check">{unpaidOnly && <IconCheck />}</span>
+                    <span className="cat-filter-name" title="Оплачено меньше, чем начислено на данный момент">
+                      <IconFinance width={14} height={14} /> Не оплачено
+                    </span>
+                    <span className="cat-filter-count">{unpaidCount}</span>
+                  </label>
+                </div>
+              )}
             </div>
           </div>
           <Dropdown

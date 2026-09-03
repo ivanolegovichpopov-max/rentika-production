@@ -29,6 +29,7 @@ from app.schemas.inventory import (
     RentalHistoryEntry,
     RentalIssue,
     RentalOut,
+    RentalPayment,
     RentalPhotoOut,
     RentalReturn,
     RentalReturnItems,
@@ -109,6 +110,7 @@ def _to_out(db: Session, rental: Rental) -> RentalOut:
         amount=breakdown["total"],
         deposit_total=deposit_total,
         deposit_returned_at=rental.deposit_returned_at,
+        paid_amount=float(rental.paid_amount),
         items=items,
     )
 
@@ -604,6 +606,35 @@ async def set_deposit_returned(
         action="deposit_return" if body.returned else "deposit_return_undo",
         resource="rental",
         resource_id=str(rental_id),
+    )
+    db.commit()
+    db.refresh(rental)
+    return _to_out(db, rental)
+
+
+@router.post("/{rental_id}/payment", response_model=RentalOut)
+async def add_rental_payment(
+    rental_id: uuid.UUID,
+    body: RentalPayment,
+    ctx: BusinessContext = Depends(edit_dep),
+    db: Session = Depends(get_db),
+):
+    """Запись платежа (46-й проход) — см. докстринг RentalPayment и
+    Rental.paid_amount. amount добавляется к уже накопленной сумме (может
+    быть отрицательным — исправление ошибки), результат ограничен снизу
+    нулём, чтобы накопленная сумма не уходила в минус."""
+    rental = _get_rental_or_404(db, ctx, rental_id)
+    new_amount = max(0.0, float(rental.paid_amount) + body.amount)
+    rental.paid_amount = new_amount
+
+    log_action(
+        db,
+        business_id=ctx.business_id,
+        user_id=ctx.user.id,
+        action="payment",
+        resource="rental",
+        resource_id=str(rental_id),
+        meta={"amount": body.amount, "paid_amount_after": new_amount},
     )
     db.commit()
     db.refresh(rental)

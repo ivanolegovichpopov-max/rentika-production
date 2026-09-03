@@ -571,6 +571,11 @@ class RentalOut(BaseModel):
     # Депозит возвращён клиенту (42-й проход) — отдельный факт от закрытия
     # аренды, см. Rental.deposit_returned_at в app/models/inventory.py.
     deposit_returned_at: date | None = None
+    # Учёт оплаты (46-й проход) — накопительная сумма всех платежей, см.
+    # Rental.paid_amount в app/models/inventory.py. Остаток к оплате
+    # (total - paid_amount) не хранится и не отдаётся отдельным полем —
+    # считается на фронте, тем же принципом, что и deposit_total.
+    paid_amount: float = 0
     items: list[RentalItemOut] = []
 
     model_config = {"from_attributes": True}
@@ -652,6 +657,18 @@ class RentalDepositReturn(BaseModel):
 
     returned: bool
     returned_at: date | None = None
+
+
+class RentalPayment(BaseModel):
+    """Запись платежа по аренде (46-й проход) — см. докстринг
+    Rental.paid_amount. amount СКЛАДЫВАЕТСЯ с уже накопленной суммой, тем же
+    принципом, что и damage_fee при частичном возврате (RentalReturnItems) —
+    один платёж может быть внесён в несколько заходов (депозит при брони,
+    остаток при возврате). Отрицательное значение намеренно разрешено (без
+    ge=0) — это единственный способ исправить ошибочно внесённую сумму, без
+    отдельного эндпоинта отмены платежа."""
+
+    amount: float
 
 
 class RentalHistoryEntry(BaseModel):

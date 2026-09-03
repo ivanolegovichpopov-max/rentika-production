@@ -159,6 +159,92 @@ function ReturnItemsModal({
   );
 }
 
+/* ---------- Запись платежа по аренде (46-й проход) ---------- */
+function PaymentModal({
+  businessId,
+  rental,
+  onClose,
+  onPaid,
+}: {
+  businessId: string;
+  rental: Rental;
+  onClose: () => void;
+  onPaid: () => Promise<void>;
+}) {
+  // Подсказываем остаток как значение по умолчанию — самый частый случай
+  // (доплата до полной суммы), но поле остаётся редактируемым: платёж может
+  // быть частичным, а отрицательное значение — исправлением ошибки.
+  const remaining = Math.max(0, rental.total - rental.paid_amount);
+  const [amount, setAmount] = useState(remaining > 0 ? String(remaining) : "");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    dialogRef.current?.showModal();
+  }, []);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const value = Number(amount);
+    if (!value) {
+      setError("Введите сумму платежа");
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.post(`/businesses/${businessId}/rentals/${rental.id}/payment`, { amount: value });
+      onClose();
+      await onPaid();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Не удалось записать платёж");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <dialog
+      id="modal"
+      ref={dialogRef}
+      onClose={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <form onSubmit={handleSubmit}>
+        <div className="modal-head">
+          <h3>Записать платёж</h3>
+          <button className="icon-btn" onClick={onClose} type="button">
+            <IconClose />
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="field-hint" style={{ marginBottom: "10px" }}>
+            Уже оплачено {money(rental.paid_amount)} из {money(rental.total)}
+            {remaining > 0 ? ` · остаток ${money(remaining)}` : ""}.
+          </div>
+          <div className="field">
+            <label>Сумма платежа, ₽</label>
+            <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
+          </div>
+          <div className="field-hint">Отрицательное значение — исправление ошибочно внесённой суммы.</div>
+          {error && <div className="form-error">{error}</div>}
+        </div>
+        <div className="modal-foot">
+          <button className="btn" onClick={onClose} type="button">
+            Отмена
+          </button>
+          <button className="btn btn-primary" type="submit">
+            {saving ? "Сохранение…" : "Записать"}
+          </button>
+        </div>
+      </form>
+    </dialog>
+  );
+}
+
 export function RentalDetailPanel({
   businessId,
   rentalId,
@@ -217,6 +303,7 @@ export function RentalDetailPanel({
   // после успешного оформления, тот же принцип автопоказа, что и у
   // openDoc("Акт возврата", ...) после полного возврата в RentalsTab.tsx.
   const [returnDoc, setReturnDoc] = useState<ReactNode | null>(null);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
 
   if (!rental) return null;
 
@@ -390,6 +477,21 @@ export function RentalDetailPanel({
           <span className="mono" style={{ fontWeight: 700 }}>
             {money(rental.total)}
           </span>
+          <span className="k">Оплачено</span>
+          <span className="mono" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "10px" }}>
+            {money(rental.paid_amount)}
+            <button className="btn btn-sm" type="button" onClick={() => setPaymentModalOpen(true)}>
+              Записать платёж
+            </button>
+          </span>
+          {rental.paid_amount < rental.total && (
+            <>
+              <span className="k">Остаток к оплате</span>
+              <span className="mono" style={{ fontWeight: 600 }}>
+                {money(rental.total - rental.paid_amount)}
+              </span>
+            </>
+          )}
           <span className="k">Депозит на удержании</span>
           <span className="mono" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "10px" }}>
             {money(rental.deposit_total)}
@@ -460,6 +562,15 @@ export function RentalDetailPanel({
       <DocModal title="Акт частичного возврата" open={!!returnDoc} onClose={() => setReturnDoc(null)}>
         {returnDoc}
       </DocModal>
+
+      {paymentModalOpen && (
+        <PaymentModal
+          businessId={businessId}
+          rental={rental}
+          onClose={() => setPaymentModalOpen(false)}
+          onPaid={reloadRentals}
+        />
+      )}
     </div>
   );
 }

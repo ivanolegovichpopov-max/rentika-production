@@ -799,6 +799,52 @@ def test_deposit_return_toggle_sets_and_clears_date(client):
     assert resp3.json()["deposit_returned_at"] is None
 
 
+def test_payment_accumulates_clamps_at_zero_and_appears_in_history(client):
+    """46-й проход: paid_amount — накопительная сумма (несколько заходов),
+    отрицательная корректировка уменьшает её, но не уходит ниже нуля;
+    каждый платёж попадает в журнал аренды действием "payment"."""
+    owner = register_business(client, email="rental-payment@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    _, _, rental = _setup_rental(client, headers, business_id)
+    rental_id = rental["id"]
+    assert rental["paid_amount"] == 0
+
+    resp = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/payment",
+        json={"amount": 3000},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["paid_amount"] == 3000
+
+    # Второй заход добавляется к уже накопленному.
+    resp2 = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/payment",
+        json={"amount": 1500},
+        headers=headers,
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["paid_amount"] == 4500
+
+    # Отрицательная сумма — исправление ошибки, но не ниже нуля.
+    resp3 = client.post(
+        f"/api/businesses/{business_id}/rentals/{rental_id}/payment",
+        json={"amount": -10000},
+        headers=headers,
+    )
+    assert resp3.status_code == 200
+    assert resp3.json()["paid_amount"] == 0
+
+    history_resp = client.get(f"/api/businesses/{business_id}/rentals/{rental_id}/history", headers=headers)
+    entries = history_resp.json()
+    payment_entries = [e for e in entries if e["action"] == "payment"]
+    assert len(payment_entries) == 3
+    assert payment_entries[0]["meta"]["amount"] == -10000
+    assert payment_entries[0]["meta"]["paid_amount_after"] == 0
+
+
 def test_rental_history_lists_lifecycle_actions_with_meta(client):
     """42-й проход, п.2: журнал аренды переиспользует существующий AuditLog —
     проверяем, что create/issue/edit попадают в список в правильном порядке

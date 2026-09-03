@@ -25,6 +25,7 @@ const ACTION_LABELS: Record<string, string> = {
   cancel: "Аренда отменена",
   deposit_return: "Депозит отмечен возвращённым",
   deposit_return_undo: "Отметка о возврате депозита снята",
+  payment: "Записан платёж",
 };
 
 // Описание конкретной правки внутри action="edit" — meta несёт только те
@@ -69,6 +70,13 @@ function entryDetails(entry: RentalHistoryEntry): string[] {
     // проверить наличие поля.
     case "cancel":
       return typeof meta.reason === "string" && meta.reason ? [`причина: ${meta.reason}`] : [];
+    case "payment":
+      return [
+        typeof meta.amount === "number"
+          ? `${meta.amount >= 0 ? "внесено" : "корректировка"}: ${money(meta.amount)}`
+          : "",
+        typeof meta.paid_amount_after === "number" ? `оплачено всего: ${money(meta.paid_amount_after)}` : "",
+      ].filter(Boolean);
     default:
       return [];
   }

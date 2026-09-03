@@ -373,6 +373,17 @@ class Rental(Base):
     # совпадать по времени — иногда депозит отдают на следующий день).
     # NULL = ещё не возвращён, дата = когда отметили.
     deposit_returned_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Учёт оплаты (46-й проход) — накопительная сумма всех платежей по этой
+    # аренде, а не единственное значение: сотрудник может получать деньги
+    # несколькими заходами (депозит при брони, остаток при возврате), см.
+    # POST .../payment в app/api/routes/rentals.py — ДОБАВЛЯЕТ переданную
+    # сумму к уже накопленной, той же логикой, что и damage_fee при
+    # частичном возврате. Остаток к оплате (total - paid_amount) нигде не
+    # хранится — total сам по себе не хранится, считается вживую (см.
+    # app/services/pricing.py:compute_rental_breakdown), поэтому и остаток
+    # может для активной/просроченной аренды меняться день ото дня, как и
+    # сам total.
+    paid_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0, nullable=False)
 
 
 class RentalItem(Base):

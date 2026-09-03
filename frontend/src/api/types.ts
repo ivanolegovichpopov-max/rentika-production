@@ -267,6 +267,11 @@ export interface Rental {
   // суммой на аренде, поэтому "возвращён" — отдельная дата, не производная
   // от status==="returned". null = ещё не отмечен возвращённым.
   deposit_returned_at: string | null;
+  // Учёт оплаты (46-й проход) — накопительная сумма всех платежей по аренде,
+  // см. Rental.paid_amount в app/models/inventory.py. Остаток к оплате
+  // (total - paid_amount) не приходит отдельным полем — считается здесь же,
+  // тем же принципом, что и deposit_total.
+  paid_amount: number;
   items: RentalItem[];
 }
 
