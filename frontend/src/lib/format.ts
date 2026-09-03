@@ -49,6 +49,27 @@ export function fmtDate(iso: string): string {
   return parseLocal(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
 }
 
+/** Диапазон дат для карточки аренды (49-й проход, обратная связь по списку
+ * "Аренды" — "диапазон дат без года... если аренда пересекает границу года
+ * или пользователь листает архив за прошлые годы, будет неоднозначно").
+ * Год добавляется к ОБЕИМ датам сразу, только если он реально нужен для
+ * однозначности — период пересекает границу года (start/end в разных годах)
+ * или сам целиком лежит не в текущем году; иначе — обычный fmtDate без года,
+ * как и раньше, чтобы не удлинять диапазон на каждой карточке без нужды.
+ * Отдельная функция, а не необязательный параметр у fmtDate — у fmtDate уже
+ * много вызовов по всему приложению (документы, журнал, экспорт CSV), где
+ * год не нужен никогда; расширять его сигнатуру ради одного места было бы
+ * избыточным риском регрессии в местах, которые не просили ничего менять. */
+export function fmtDateRange(start: string, end: string): string {
+  const startYear = start.slice(0, 4);
+  const endYear = end.slice(0, 4);
+  const currentYear = String(new Date().getFullYear());
+  const showYear = startYear !== endYear || startYear !== currentYear;
+  if (!showYear) return `${fmtDate(start)} — ${fmtDate(end)}`;
+  const withYear = (iso: string) => `${fmtDate(iso)} ${iso.slice(0, 4)}`;
+  return `${withYear(start)} — ${withYear(end)}`;
+}
+
 export function fmtDateLong(iso: string): string {
   return parseLocal(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 }

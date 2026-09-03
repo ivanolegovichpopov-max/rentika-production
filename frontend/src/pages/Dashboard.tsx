@@ -15,7 +15,8 @@ import { EmployeesTab } from "./dashboard/EmployeesTab";
 import { MessagesTab } from "./dashboard/MessagesTab";
 import { AccountSettings } from "./AccountSettings";
 import { rentalDisplayStatus } from "../lib/statusMeta";
-import { initials } from "../lib/format";
+import { initials, money } from "../lib/format";
+import { isUnpaid } from "./dashboard/rentals/helpers";
 import { periodFor, type FinancePeriod } from "../lib/financeCalc";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
@@ -248,6 +249,12 @@ function DashboardShell({
 
   const activeEmployees = employees.filter((e) => e.status !== "disabled");
   const overdueCount = rentals.filter((r) => rentalDisplayStatus(r) === "overdue").length;
+  // Итоговая сводка долга (49-й проход, по итогам обзора списка "Аренды" —
+  // "хочется видеть общую картину, не листая карточки"), тем же принципом,
+  // что и overdueCount выше: считается по всем арендам бизнеса, независимо
+  // от текущего фильтра/поиска внутри самой вкладки "Аренды".
+  const unpaidRentals = rentals.filter(isUnpaid);
+  const unpaidSum = unpaidRentals.reduce((s, r) => s + (r.total - r.paid_amount), 0);
 
   const NAV: { key: View; label: string; icon: (p: SVGProps<SVGSVGElement>) => ReactElement; count?: number }[] = [
     { key: "dashboard", label: "Дашборд", icon: IconDashboard },
@@ -276,7 +283,15 @@ function DashboardShell({
     dashboard: ["Дашборд", `Сводка · ${todayLabel}`],
     equipment: ["Оборудование", equipment.length + " позиций в парке"],
     clients: ["Клиенты", clients.length + " в базе"],
-    rentals: ["Аренды", overdueCount ? overdueCount + " просрочено — нужно связаться с клиентом" : "Все аренды под контролем"],
+    rentals: [
+      "Аренды",
+      [
+        overdueCount ? `${overdueCount} просрочено — нужно связаться с клиентом` : "",
+        unpaidRentals.length ? `не оплачено: ${unpaidRentals.length} на ${money(unpaidSum)}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ") || "Все аренды под контролем",
+    ],
     calendar: ["Календарь занятости", "Занятость оборудования"],
     finance: ["Финансы", "Доходы, депозиты и история возвратов"],
     employees: ["Сотрудники", "Должности и права доступа"],

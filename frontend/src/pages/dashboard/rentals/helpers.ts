@@ -138,6 +138,29 @@ export function isEquipmentFreeForRange(
   });
 }
 
+/** Аренда закрыта, депозит был, но ещё не отмечен возвращённым (43-й проход,
+ * п.2 обзора) — та же формула, что и чекбокс "Депозит возвращён" в
+ * RentalDetailPanel.tsx (deposit_returned_at выставляется только для
+ * status="returned"), используется и для бейджа на карточке, и для фильтра
+ * "Показать только". Перенесена сюда из RentalsTab.tsx (49-й проход) — та же
+ * причина, что и у остальных функций этого файла: понадобилась ещё и в
+ * Dashboard.tsx (сводка долга в шапке вкладки "Аренды"), дублировать формулу
+ * ради одного места было бы ошибкой. */
+export function isDepositDue(r: Rental): boolean {
+  return r.status === "returned" && r.deposit_total > 0 && !r.deposit_returned_at;
+}
+
+/** Не оплачено (полностью или частично) — 46-й проход, "чего не хватает на
+ * главной странице": total считается вживую (см. compute_rental_breakdown)
+ * и может расти день ото дня для просроченной аренды, поэтому остаток
+ * (total - paid_amount) тоже пересчитывается здесь при каждом рендере, а
+ * не хранится. Отменённые аренды исключены — оплата за них не взимается.
+ * Перенесена сюда из RentalsTab.tsx (49-й проход) вместе с isDepositDue
+ * выше — та же причина. */
+export function isUnpaid(r: Rental): boolean {
+  return r.status !== "cancelled" && r.total - r.paid_amount > 0.01;
+}
+
 export function conflictEndFor(
   equipmentId: string,
   start: string,

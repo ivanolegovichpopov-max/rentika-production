@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, ApiError } from "../../api/client";
 import { useData } from "../../context/DataContext";
 import type { Client, Equipment, Rental, RentalItem } from "../../api/types";
-import { money, fmtDate, dayDiff, todayISO, isoAddDays, spanDays, formatPhoneInput, formatPassportInput } from "../../lib/format";
+import { money, fmtDate, fmtDateRange, dayDiff, todayISO, isoAddDays, spanDays, formatPhoneInput, formatPassportInput } from "../../lib/format";
 import { RENTAL_META, Badge, rentalDisplayStatus, type StatusMeta } from "../../lib/statusMeta";
 import {
   IconPrinter,
@@ -36,9 +36,11 @@ import {
   conflictEndFor,
   docNumber,
   equipmentCostForDays,
+  isDepositDue,
+  isUnpaid,
 } from "./rentals/helpers";
 import { exportRentalsCsv } from "./rentals/csv";
-import { RentalDetailPanel } from "./rentals/RentalDetailPanel";
+import { RentalDetailPanel, PaymentModal } from "./rentals/RentalDetailPanel";
 
 /**
  * Порт renderRentals()/addRentalForm()/editRentalForm()/issueRentalForm()/
@@ -150,23 +152,9 @@ interface FinancePreview {
   total: number;
 }
 
-/** Аренда закрыта, депозит был, но ещё не отмечен возвращённым (43-й проход,
- * п.2 обзора) — та же формула, что и чекбокс "Депозит возвращён" в
- * RentalDetailPanel.tsx (deposit_returned_at выставляется только для
- * status="returned"), используется и для бейджа на карточке, и для фильтра
- * "Показать только". */
-function isDepositDue(r: Rental): boolean {
-  return r.status === "returned" && r.deposit_total > 0 && !r.deposit_returned_at;
-}
-
-/** Не оплачено (полностью или частично) — 46-й проход, "чего не хватает на
- * главной странице": total считается вживую (см. compute_rental_breakdown)
- * и может расти день ото дня для просроченной аренды, поэтому остаток
- * (total - paid_amount) тоже пересчитывается здесь при каждом рендере, а
- * не хранится. Отменённые аренды исключены — оплата за них не взимается. */
-function isUnpaid(r: Rental): boolean {
-  return r.status !== "cancelled" && r.total - r.paid_amount > 0.01;
-}
+// isDepositDue/isUnpaid перенесены в rentals/helpers.ts (49-й проход) —
+// понадобились и в Dashboard.tsx (сводка долга в шапке вкладки), см. импорт
+// ниже.
 
 function previewReturnFinance(r: Rental, actualReturn: string, damageFee: number): FinancePreview {
   const plannedDays = spanDays(r.start_date, r.end_date);
@@ -1807,6 +1795,12 @@ export function RentalsTab({
   const [editRental, setEditRental] = useState<Rental | null>(null);
   const [issueRental, setIssueRental] = useState<Rental | null>(null);
   const [returnRental, setReturnRental] = useState<Rental | null>(null);
+  // Быстрая запись оплаты прямо с карточки списка (49-й проход, по итогам
+  // обзора списка "Аренды" — "нужен ли механизм записи оплаты не открывая
+  // панель деталей"), тем же принципом, что editRental/returnRental выше —
+  // сама модалка (PaymentModal) экспортирована из RentalDetailPanel.tsx, где
+  // и продолжает жить основная реализация (используется и там, и здесь).
+  const [paymentRental, setPaymentRental] = useState<Rental | null>(null);
   const [extendRental, setExtendRental] = useState<Rental | null>(null);
   const [cancelRental, setCancelRental] = useState<Rental | null>(null);
   const [openRentalId, setOpenRentalId] = useState<string | null>(null);
@@ -2017,7 +2011,19 @@ export function RentalsTab({
       st === "active" && daysLeft <= 2
         ? { label: daysLeft <= 0 ? "Истекает сегодня" : `Осталось ${daysLeft} дн.`, tone: "warning" }
         : null;
-    const itemNames = r.items.map((it) => equipment.find((e) => e.id === it.equipment_id)?.name ?? "—").join(", ");
+    // Группировка одинаковых позиций с количеством (49-й проход, обратная
+    // связь по списку "Аренды" — "Подлокотные костыли, Подлокотные костыли"
+    // вместо "Подлокотные костыли ×2"). Map сохраняет порядок первого
+    // появления имени — порядок строки не "прыгает" по сравнению со старым
+    // .map().join(", ") при том же составе позиций.
+    const itemNameCounts = new Map<string, number>();
+    for (const it of r.items) {
+      const name = equipment.find((e) => e.id === it.equipment_id)?.name ?? "—";
+      itemNameCounts.set(name, (itemNameCounts.get(name) ?? 0) + 1);
+    }
+    const itemNames = [...itemNameCounts.entries()]
+      .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
+      .join(", ");
     // Прогресс частичного возврата (41-й проход) — видно на самой
     // карточке, не открывая панель деталей: если часть позиций уже
     // вернулась отдельно (RentalDetailPanel → "Вернуть выбранное"), а
@@ -2029,13 +2035,24 @@ export function RentalsTab({
         ? { label: `Возвращено ${returnedCount}/${r.items.length}`, tone: "info" }
         : null;
     const depositBadge: StatusMeta | null = isDepositDue(r) ? { label: "Депозит не возвращён", tone: "warning" } : null;
-    // Бейдж оплаты (46-й проход) — тем же принципом, что depositBadge выше:
-    // виден только когда есть о чём предупредить (реально не хватает
-    // денег), а не на каждой карточке подряд. "частично" отличает случай,
-    // когда что-то уже внесли, от полного нуля — сотруднику это важно
+    // Бейдж оплаты (46-й проход, доработан в 49-м) — тем же принципом, что
+    // depositBadge выше: виден только когда есть о чём предупредить (реально
+    // не хватает денег), а не на каждой карточке подряд. "частично" отличает
+    // случай, когда что-то уже внесли, от полного нуля — сотруднику это важно
     // видеть с одного взгляда на список, не открывая карточку.
+    //
+    // 49-й проход, по итогам обзора списка "Аренды": раньше бейдж был
+    // бинарным ("Не оплачено"/"Оплата частично") без суммы — приходилось
+    // открывать карточку, чтобы узнать остаток долга. Теперь сумма прямо в
+    // бейдже. Тон сменён с "warning" на "critical" — по тому же обзору,
+    // "Не оплачено" и "Осталось N дн." (soonBadge выше) визуально сливались
+    // в одну и ту же тёплую жёлтую гамму, хотя это разные по срочности вещи:
+    // долг — финансовая проблема, срок — просто напоминание. tone-critical
+    // уже используется для "Просрочено"/"Чёрный список" (см. statusMeta.tsx)
+    // — тот же язык тревожности, а не новый цвет.
+    const debt = r.total - r.paid_amount;
     const paymentBadge: StatusMeta | null = isUnpaid(r)
-      ? { label: r.paid_amount > 0 ? "Оплата частично" : "Не оплачено", tone: "warning" }
+      ? { label: r.paid_amount > 0 ? `Долг ${money(debt)}` : `Не оплачено: ${money(debt)}`, tone: "critical" }
       : null;
 
     return (
@@ -2081,7 +2098,7 @@ export function RentalsTab({
           <div className="rental-items">{itemNames}</div>
           <div className="rental-meta">
             <span>
-              {fmtDate(r.start_date)} — {fmtDate(r.end_date)}
+              {fmtDateRange(r.start_date, r.end_date)}
               {r.actual_return ? " · возврат " + fmtDate(r.actual_return) : ""}
             </span>
             <span className="amount-mono mono">{money(r.total)}</span>
@@ -2112,9 +2129,27 @@ export function RentalsTab({
           )}
           {r.status === "active" && (
             <>
-              <button className="btn btn-primary btn-sm" type="button" onClick={() => setReturnRental(r)}>
-                Принять возврат
-              </button>
+              {/* Приоритет главной кнопки по контексту (49-й проход, по
+                  итогам обзора списка "Аренды" — "Принять возврат" была
+                  главной кнопкой всегда, даже когда за аренду не заплачено, а
+                  самым вероятным следующим шагом скорее является запись
+                  оплаты). Если есть долг — "Записать оплату" становится
+                  главной (btn-primary), "Принять возврат" — второстепенной;
+                  без долга порядок и вид кнопок остаются прежними. */}
+              {isUnpaid(r) ? (
+                <>
+                  <button className="btn btn-primary btn-sm" type="button" onClick={() => setPaymentRental(r)}>
+                    Записать оплату
+                  </button>
+                  <button className="btn btn-sm" type="button" onClick={() => setReturnRental(r)}>
+                    Принять возврат
+                  </button>
+                </>
+              ) : (
+                <button className="btn btn-primary btn-sm" type="button" onClick={() => setReturnRental(r)}>
+                  Принять возврат
+                </button>
+              )}
               <button className="btn btn-sm" type="button" onClick={() => setEditRental(r)}>
                 <IconEdit /> Изменить
               </button>
@@ -2497,6 +2532,22 @@ export function RentalsTab({
             await Promise.all([reloadRentals(), reloadEquipment()]);
             const c = clients.find((cl) => cl.id === updated.client_id);
             openDoc("Акт возврата", buildReturnDoc(updated, c, equipment));
+          }}
+        />
+      )}
+
+      {/* Быстрая запись оплаты с карточки списка (49-й проход) — та же
+          PaymentModal, что и внутри RentalDetailPanel, см. импорт вверху
+          файла. onPaid перезагружает только аренды — статья долга (total/
+          paid_amount) считается на backend'е и приходит уже готовой в
+          Rental, оборудование этот платёж не затрагивает. */}
+      {paymentRental && (
+        <PaymentModal
+          businessId={businessId}
+          rental={paymentRental}
+          onClose={() => setPaymentRental(null)}
+          onPaid={async () => {
+            await reloadRentals();
           }}
         />
       )}
