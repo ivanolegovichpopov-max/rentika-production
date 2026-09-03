@@ -50,7 +50,17 @@ import { buildRentalSummaryText } from "../clients/summary";
 import { MoreActionsMenu } from "../../../components/MoreActionsMenu";
 import { RentalPhotosSection } from "./RentalPhotosSection";
 import { RentalHistorySection } from "./RentalHistorySection";
-import { DocModal, buildPartialReturnDoc } from "../documents";
+import { DocModal, buildPartialReturnDoc, buildIssueDoc, buildReturnDoc, buildContractDoc } from "../documents";
+
+/** Не оплачено (полностью или частично) — 1:1 та же формула, что и isUnpaid
+ * в RentalsTab.tsx (бейдж на карточке списка), продублирована здесь, а не
+ * импортирована оттуда: RentalsTab.tsx сам импортирует RentalDetailPanel
+ * (см. докстринг файла выше), обратный импорт создал бы циклическую
+ * зависимость между модулями. Однострочная чистая функция — риск разъехаться
+ * с оригиналом минимален. */
+function isUnpaid(r: Rental): boolean {
+  return r.status !== "cancelled" && r.total - r.paid_amount > 0.01;
+}
 
 /* ---------- Частичный возврат выбранных позиций ---------- */
 function ReturnItemsModal({
@@ -252,6 +262,10 @@ export function RentalDetailPanel({
   onOpenClient,
   onOpenEquipment,
   onExtend,
+  onIssue,
+  onReturn,
+  onEdit,
+  onCancel,
   onRepeat,
   onOpenCalendar,
 }: {
@@ -263,6 +277,18 @@ export function RentalDetailPanel({
   // Открыть модалку быстрого продления (живёт в RentalsTab.tsx — см.
   // докстринг файла выше про "полностью read-only" в части правки аренды).
   onExtend: (rentalId: string) => void;
+  // Основные действия по аренде (повторный обзор — "из панели деталей
+  // нельзя ничего сделать, приходится закрывать её и искать ту же карточку
+  // в списке") — тем же принципом, что и onExtend выше: сами модалки
+  // (IssueRentalModal/ReturnRentalModal/EditRentalModal/CancelRentalModal)
+  // не экспортированы из RentalsTab.tsx и продолжают жить там же, здесь
+  // только сигнал "открой их для этой аренды". Ни одно из действий не
+  // закрывает панель — после reload аренд из контекста статус/бейджи в уже
+  // открытой панели обновятся сами, тот же принцип, что и у "Продлить".
+  onIssue: (rentalId: string) => void;
+  onReturn: (rentalId: string) => void;
+  onEdit: (rentalId: string) => void;
+  onCancel: (rentalId: string) => void;
   // Открыть "Новую аренду", предзаполненную клиентом и позициями текущей
   // аренды (CreateRentalModal тоже живёт в RentalsTab.tsx).
   onRepeat: (clientId: string, equipmentIds: string[]) => void;
@@ -304,6 +330,14 @@ export function RentalDetailPanel({
   // openDoc("Акт возврата", ...) после полного возврата в RentalsTab.tsx.
   const [returnDoc, setReturnDoc] = useState<ReactNode | null>(null);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  // Печать документов прямо из панели (повторный обзор — "Договор"/акты
+  // раньше были доступны только с карточки в списке) — самостоятельный
+  // локальный DocModal, а не делегирование наверх через ещё один проп: сами
+  // build*Doc-функции чистые (клиент+аренда+оборудование → готовая
+  // разметка), backend не трогают, тем же принципом, что и "Написать
+  // клиенту" (buildRentalSummaryText) чуть выше — уже реализовано прямо
+  // здесь, без похода в RentalsTab.tsx.
+  const [printDoc, setPrintDoc] = useState<{ title: string; node: ReactNode } | null>(null);
 
   if (!rental) return null;
 
@@ -333,6 +367,15 @@ export function RentalDetailPanel({
             {fmtDate(rental.start_date)} — {fmtDate(rental.end_date)}
             {rental.actual_return ? ` · возврат ${fmtDate(rental.actual_return)}` : ""}
           </div>
+          {/* Чёрный список клиента (повторный обзор — тот же контекст, что
+              уже показывается в форме "Новая аренда" при выборе клиента, но
+              раньше нигде не всплывал здесь, хотя карточка аренды — ровно то
+              место, где это важно увидеть перед выдачей/продлением). */}
+          {client?.rating === "blacklist" && (
+            <div className="form-error" style={{ marginTop: "6px" }}>
+              Клиент в чёрном списке{client.blacklist_reason ? `: ${client.blacklist_reason}` : ""}
+            </div>
+          )}
         </div>
         <button className="icon-btn" onClick={onClose}>
           <IconClose />
@@ -341,15 +384,48 @@ export function RentalDetailPanel({
 
       <div className="slideover-section" style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
         <Badge meta={RENTAL_META[st]} />
+        {/* Бейдж оплаты (повторный обзор — та же логика, что и на карточке в
+            списке, isUnpaid выше) — виден только когда реально не хватает
+            денег, чтобы не грузить строку бейджей на каждой аренде подряд. */}
+        {isUnpaid(rental) && <Badge meta={{ label: rental.paid_amount > 0 ? "Оплата частично" : "Не оплачено", tone: "warning" }} />}
         {client && (
           <button className="btn btn-sm" onClick={() => onOpenClient(client.id)}>
             <IconUser /> Карточка клиента
           </button>
         )}
+        {/* Выдать/Принять возврат/Изменить/Отменить (повторный обзор — "из
+            панели деталей ничего не сделать, приходится закрывать её и
+            искать ту же карточку в списке") — 1:1 те же условия по статусу,
+            что и в .rental-actions карточки списка (RentalsTab.tsx,
+            renderCard). st includes "overdue" отдельно от "active" (см.
+            rentalDisplayStatus), но по факту это та же "active"-аренда в
+            БД — оба варианта равнозначны условию r.status === "active" на
+            карточке. */}
+        {st === "booked" && (
+          <>
+            <button className="btn btn-primary btn-sm" type="button" onClick={() => onIssue(rental.id)}>
+              Выдать
+            </button>
+            <button className="btn btn-sm" type="button" onClick={() => onEdit(rental.id)}>
+              <IconEdit /> Изменить
+            </button>
+            <button className="btn btn-danger-ghost btn-sm" type="button" onClick={() => onCancel(rental.id)}>
+              Отменить
+            </button>
+          </>
+        )}
         {(st === "active" || st === "overdue") && (
-          <button className="btn btn-sm" type="button" onClick={() => onExtend(rental.id)}>
-            <IconEdit /> Продлить
-          </button>
+          <>
+            <button className="btn btn-primary btn-sm" type="button" onClick={() => onReturn(rental.id)}>
+              Принять возврат
+            </button>
+            <button className="btn btn-sm" type="button" onClick={() => onEdit(rental.id)}>
+              <IconEdit /> Изменить
+            </button>
+            <button className="btn btn-sm" type="button" onClick={() => onExtend(rental.id)}>
+              <IconEdit /> Продлить
+            </button>
+          </>
         )}
         <button
           className="btn btn-sm"
@@ -361,6 +437,37 @@ export function RentalDetailPanel({
         <button className="btn btn-sm" type="button" onClick={() => onOpenCalendar(rental.start_date)}>
           <IconCalendar /> В календаре
         </button>
+        {/* Печать (повторный обзор) — тем же принципом группировки, что и
+            "Ещё" на карточке в списке: редко нужные документы прячутся за
+            одной кнопкой, а не занимают место в основном ряду действий. */}
+        <MoreActionsMenu
+          label="Печать"
+          actions={[
+            ...(st === "active" || st === "overdue"
+              ? [
+                  {
+                    key: "issue-doc",
+                    label: "Акт выдачи",
+                    onClick: () => setPrintDoc({ title: "Акт приёма-передачи", node: buildIssueDoc(rental, client, equipment) }),
+                  },
+                ]
+              : []),
+            ...(st === "returned"
+              ? [
+                  {
+                    key: "return-doc",
+                    label: "Акт возврата",
+                    onClick: () => setPrintDoc({ title: "Акт возврата", node: buildReturnDoc(rental, client, equipment) }),
+                  },
+                ]
+              : []),
+            {
+              key: "contract-doc",
+              label: "Договор",
+              onClick: () => setPrintDoc({ title: "Договор аренды", node: buildContractDoc(rental, client, equipment) }),
+            },
+          ]}
+        />
         {client && (client.phone || client.email) && (
           <MoreActionsMenu
             label="Написать клиенту"
@@ -569,6 +676,10 @@ export function RentalDetailPanel({
 
       <DocModal title="Акт частичного возврата" open={!!returnDoc} onClose={() => setReturnDoc(null)}>
         {returnDoc}
+      </DocModal>
+
+      <DocModal title={printDoc?.title ?? ""} open={!!printDoc} onClose={() => setPrintDoc(null)}>
+        {printDoc?.node}
       </DocModal>
 
       {paymentModalOpen && (

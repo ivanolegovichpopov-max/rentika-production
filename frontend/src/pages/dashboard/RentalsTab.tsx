@@ -2572,6 +2572,26 @@ export function RentalsTab({
             const r = rentals.find((x) => x.id === rentalId);
             if (r) setExtendRental(r);
           }}
+          // Выдать/Принять возврат/Изменить/Отменить (повторный обзор — "из
+          // панели деталей ничего не сделать") — тот же принцип, что и
+          // onExtend выше: панель не закрывается, статус/бейджи обновятся в
+          // ней же после reloadRentals() внутри соответствующей модалки.
+          onIssue={(rentalId) => {
+            const r = rentals.find((x) => x.id === rentalId);
+            if (r) setIssueRental(r);
+          }}
+          onReturn={(rentalId) => {
+            const r = rentals.find((x) => x.id === rentalId);
+            if (r) setReturnRental(r);
+          }}
+          onEdit={(rentalId) => {
+            const r = rentals.find((x) => x.id === rentalId);
+            if (r) setEditRental(r);
+          }}
+          onCancel={(rentalId) => {
+            const r = rentals.find((x) => x.id === rentalId);
+            if (r) setCancelRental(r);
+          }}
           // "Повторить аренду" — навигационное действие (открывает другую
           // форму на весь экран), поэтому панель закрывается первой — тот же
           // принцип, что и у onOpenClient/onOpenEquipment выше.
