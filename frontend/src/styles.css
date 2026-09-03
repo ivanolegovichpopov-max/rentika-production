@@ -905,7 +905,24 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .eq-pick-chip button svg { width: 10px; height: 10px; }
 
 /* ---------- Сводка финансов аренды (форма возврата) ---------- */
-.summary-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+/* margin-top (49-й проход, обратная связь по форме "Принять возврат" —
+   "'Доплата за повреждения 0' стоит вплотную к 'Аренда, 3 дн.'"). Дело
+   было не в самой сводке (там отступы уже поправлены выше) — .summary-box
+   в принципе не имел отступа от того, что стоит перед ним: последнее поле
+   формы (.field) заканчивается ровно там, где начинается видимая рамка
+   .summary-box, 0px между ними (проверено на живой странице,
+   getBoundingClientRect: bottom последнего .field === top .summary-box).
+   Между самими полями формы это визуально не так заметно — там вместо
+   границы-рамки просто текст следующего label'а, и его line-height создаёт
+   иллюзию небольшого воздуха, даже когда реального CSS-отступа нет; но
+   рамка .summary-box вплотную к рамке инпута — уже настоящий, заметный шов
+   без единого пикселя между ними. margin-top на самом .summary-box, а не
+   через селектор соседства (.field + .summary-box) — блок используется в
+   разных формах (после .field в форме возврата, после .field-row в форме
+   аренды), простой margin-top решает оба случая одним правилом и ничего не
+   задваивает: ни у .field, ни у .field-row нет собственного
+   margin-bottom, который мог бы сложиться с этим отступом. */
+.summary-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-top: 16px; }
 .summary-row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
 /* margin-bottom + padding-bottom (49-й проход, обратная связь по форме
    "Принять возврат" — "нижние строки не имеют отступа друг от друга"; сразу
