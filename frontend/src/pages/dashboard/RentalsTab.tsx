@@ -81,6 +81,11 @@ const SORTS: { id: string; label: string }[] = [
   { id: "date", label: "Сначала новые" },
   { id: "amount", label: "По сумме" },
   { id: "client", label: "По клиенту" },
+  // "По долгу" (49-й проход, по итогам обзора списка "Аренды") — "По сумме"
+  // сортирует по общей стоимости аренды, а не по непогашенному остатку; для
+  // приоритизации звонков должникам (крупные долги наверх) нужна отдельная
+  // сортировка именно по остатку, см. debtOf ниже.
+  { id: "debt", label: "По долгу" },
 ];
 
 // Тексты по умолчанию для textarea выдачи/возврата — 1:1 с демо
@@ -1892,6 +1897,7 @@ export function RentalsTab({
 
   const sorted = [...list].sort((a, b) => {
     if (sort === "amount") return b.total - a.total;
+    if (sort === "debt") return b.total - b.paid_amount - (a.total - a.paid_amount);
     if (sort === "client") {
       const ca = clients.find((c) => c.id === a.client_id)?.name ?? "";
       const cb = clients.find((c) => c.id === b.client_id)?.name ?? "";
@@ -2051,8 +2057,16 @@ export function RentalsTab({
     // уже используется для "Просрочено"/"Чёрный список" (см. statusMeta.tsx)
     // — тот же язык тревожности, а не новый цвет.
     const debt = r.total - r.paid_amount;
+    // Title-подсказка с разбивкой (49-й проход, по итогам обзора) — при
+    // частичной оплате в самом бейдже видно только остаток, а сколько уже
+    // внесено — только открыв карточку. Подсказка при наведении показывает
+    // то же "оплачено N из M", что и в панели деталей, без удлинения бейджа.
     const paymentBadge: StatusMeta | null = isUnpaid(r)
-      ? { label: r.paid_amount > 0 ? `Долг ${money(debt)}` : `Не оплачено: ${money(debt)}`, tone: "critical" }
+      ? {
+          label: r.paid_amount > 0 ? `Долг ${money(debt)}` : `Не оплачено: ${money(debt)}`,
+          tone: "critical",
+          title: r.paid_amount > 0 ? `Оплачено ${money(r.paid_amount)} из ${money(r.total)}` : undefined,
+        }
       : null;
 
     return (
@@ -2081,10 +2095,15 @@ export function RentalsTab({
             )}
             <span className="rental-client">{client?.name ?? "Клиент удалён"}</span>
             <Badge meta={RENTAL_META[st]} />
+            {/* Долг — сразу после статуса, перед сроком/депозитом (49-й
+                проход, по итогам обзора списка "Аренды" — единственный
+                красный (critical) бейдж в ряду раньше стоял последним и
+                терялся при нескольких бейджах на карточке; самое тревожное
+                должно быть видно первым). */}
+            {paymentBadge && <Badge meta={paymentBadge} />}
             {soonBadge && <Badge meta={soonBadge} />}
             {partialBadge && <Badge meta={partialBadge} />}
             {depositBadge && <Badge meta={depositBadge} />}
-            {paymentBadge && <Badge meta={paymentBadge} />}
             {/* Намёк, что карточка целиком кликабельна (40-й проход, по
                 итогам обзора: раньше это было незаметно — только
                 hover-эффект самой карточки, который пользователь мог
@@ -2532,6 +2551,23 @@ export function RentalsTab({
             await Promise.all([reloadRentals(), reloadEquipment()]);
             const c = clients.find((cl) => cl.id === updated.client_id);
             openDoc("Акт возврата", buildReturnDoc(updated, c, equipment));
+            // Предложить записать оплату остатка (49-й проход, по итогам
+            // обзора списка "Аренды" — "приём возврата и оплата остатка —
+            // два отдельных действия, а в жизни клиент чаще платит именно
+            // в момент возврата"). Сам эндпоинт /return не меняется и
+            // платёж не собирает — это просто удобный переход ко второму,
+            // отдельному шагу (та же PaymentModal, что и кнопка "Записать
+            // оплату" на карточке), если после возврата долг всё ещё есть.
+            if (isUnpaid(updated)) {
+              const remaining = updated.total - updated.paid_amount;
+              if (
+                await confirm(`Остался долг ${money(remaining)} — записать оплату?`, {
+                  confirmLabel: "Записать оплату",
+                })
+              ) {
+                setPaymentRental(updated);
+              }
+            }
           }}
         />
       )}

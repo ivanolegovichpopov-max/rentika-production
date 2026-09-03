@@ -255,6 +255,16 @@ function DashboardShell({
   // от текущего фильтра/поиска внутри самой вкладки "Аренды".
   const unpaidRentals = rentals.filter(isUnpaid);
   const unpaidSum = unpaidRentals.reduce((s, r) => s + (r.total - r.paid_amount), 0);
+  // Подсказка при наведении (49-й проход, по итогам обзора списка "Аренды" —
+  // "цифра долга в шапке общая по бизнесу, а не про то, что сейчас на
+  // экране, это может путать"): сама надпись остаётся короткой, пояснение —
+  // только по наведению, не занимает места в шапке постоянно.
+  const rentalsSubtitleTitle = [
+    overdueCount > 0 ? "Показать просроченные" : "",
+    unpaidRentals.length > 0 ? "Долг считается по всем арендам бизнеса, а не только по текущей вкладке/фильтру" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const NAV: { key: View; label: string; icon: (p: SVGProps<SVGSVGElement>) => ReactElement; count?: number }[] = [
     { key: "dashboard", label: "Дашборд", icon: IconDashboard },
@@ -400,13 +410,15 @@ function DashboardShell({
               <button
                 type="button"
                 className="subtitle critical"
-                title="Показать просроченные"
+                title={rentalsSubtitleTitle}
                 onClick={() => navigate("rentals", { rentalFilter: "overdue" })}
               >
                 {subtitle}
               </button>
             ) : (
-              <div className="subtitle">{subtitle}</div>
+              <div className="subtitle" title={view === "rentals" ? rentalsSubtitleTitle : undefined}>
+                {subtitle}
+              </div>
             )}
           </div>
           <div className="topbar-spacer" />

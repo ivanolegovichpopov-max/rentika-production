@@ -18,6 +18,11 @@ export type Tone = "good" | "warning" | "critical" | "accent" | "info" | "muted"
 export interface StatusMeta {
   label: string;
   tone: Tone;
+  // Необязательная подсказка при наведении (49-й проход) — например, у
+  // бейджа долга на карточке аренды (RentalsTab.tsx) показывает разбивку
+  // "оплачено N из M", не удлиняя сам бейдж. Ни один из существующих
+  // вызовов Badge её не задаёт — undefined безвреден для HTML title.
+  title?: string;
 }
 
 export const RENTAL_META: Record<string, StatusMeta> = {
@@ -44,7 +49,7 @@ export const RATING_META: Record<string, StatusMeta> = {
 
 export function Badge({ meta }: { meta: StatusMeta }) {
   return (
-    <span className={`badge tone-${meta.tone}`}>
+    <span className={`badge tone-${meta.tone}`} title={meta.title}>
       <span className="dot" />
       {meta.label}
     </span>
