@@ -473,7 +473,7 @@ function EquipmentPicklist({
                     onClick={() => toggleCollapsed(e.category)}
                   >
                     <IconChevronDown />
-                    {e.category}
+                    <span className="eq-pick-group-name">{e.category}</span>
                     <span className="eq-pick-group-count">({categoryCounts.get(e.category)})</span>
                   </button>
                 )}
@@ -487,13 +487,23 @@ function EquipmentPicklist({
                         {e.warehouse ? ` · ${e.warehouse}` : ""}
                       </span>
                     </span>
+                    {/* Плашка "занято до" стоит ДО суммы, а не после (третий
+                        обзор той же формы) — раньше она была последним flex-
+                        элементом строки и, появляясь только у части позиций,
+                        отжимала .eq-pick-cost влево ровно на свою ширину: суммы
+                        занятых и свободных позиций оказывались на разной
+                        горизонтали, мешая сравнивать их взглядом сверху вниз.
+                        Теперь у .eq-pick-cost зафиксирована собственная ширина
+                        (см. styles.css), и порядок элементов в строке гарантирует,
+                        что она всегда последняя — сумма садится в одно и то же
+                        место независимо от того, есть плашка или нет. */}
+                    {!free && conflictEnd && <span className="eq-pick-conflict">занято до {fmtDate(conflictEnd)}</span>}
                     <span className="eq-pick-cost" title={equipmentRateLabelTitle(e)}>
                       {previewDays > 0 && (
                         <span className="eq-pick-cost-total">{money(equipmentCostForDays(e, previewDays))}</span>
                       )}
                       <span className="eq-pick-cost-rate">{equipmentRateLabel(e)}</span>
                     </span>
-                    {!free && conflictEnd && <span className="eq-pick-conflict">занято до {fmtDate(conflictEnd)}</span>}
                   </label>
                 )}
               </Fragment>

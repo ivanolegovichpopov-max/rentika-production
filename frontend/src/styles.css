@@ -738,10 +738,20 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    .eq-pick-name/.eq-pick-sub чуть выше). Если диапазон дат ещё не задан
    (previewDays === 0) — второй строки нет, остаётся только ставка, как и
    раньше. title (расшифровка ступенчатого тарифа) остаётся на всём блоке. */
-.eq-pick-cost { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; white-space: nowrap; }
+/* flex: none + min-width (четвёртый обзор той же формы) — раньше у этого
+   блока не было собственной ширины, и когда у части позиций рядом
+   появлялась плашка "занято до …" (.eq-pick-conflict), она отжимала сумму
+   влево ровно на свою ширину: суммы занятых и свободных позиций оказывались
+   на разной горизонтали, взгляд "спотыкался", сравнивая цифры по списку.
+   min-width — под самые длинные реалистичные суммы (5 знаков + " ₽"), сумма
+   всегда прижата к правому краю этой колонки одной и той же ширины. */
+.eq-pick-cost { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; white-space: nowrap; flex: none; min-width: 84px; }
 .eq-pick-cost-total { font-family: "Roboto Mono"; font-size: 13px; font-weight: 700; color: var(--ink); }
 .eq-pick-cost-rate { font-family: "Roboto Mono"; font-size: 11px; color: var(--muted); }
-.eq-pick-conflict { font-size: 11px; color: var(--critical); }
+/* Стоит ПЕРЕД .eq-pick-cost в разметке (см. RentalsTab.tsx) — именно это,
+   а не только ширина соседа, и держит сумму статичной: плашка теперь всегда
+   слева от неё, а не отжимает её своим появлением/исчезновением. */
+.eq-pick-conflict { font-size: 11px; color: var(--critical); white-space: nowrap; }
 /* Заголовок группы по категории (46-й проход) — раньше список шёл в
    порядке, в котором позиции лежат в базе (фактически случайном для
    пользователя); теперь отсортирован, разбит на подписанные группы и сам
@@ -763,6 +773,14 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .eq-pick-group:hover { background: var(--surface-2); }
 .eq-pick-group svg { width: 12px; height: 12px; transition: transform 0.1s; flex: none; }
 .eq-pick-group.collapsed svg { transform: rotate(-90deg); }
+/* Само название категории чуть легче, чем базовый вес заголовка (четвёртый
+   обзор той же формы) — тот же цвет var(--muted), что и раньше, но без
+   подложки под ним контраст с белым фоном формы оказался выше, чем на
+   старой светло-серой плашке (серый на светло-сером "тонул", серый на
+   белом — читается заметно темнее/жирнее, хотя цвет не менялся). opacity,
+   а не сам цвет — border-bottom/иконка-шеврон остаются прежней силы, мягче
+   становится только текст названия. */
+.eq-pick-group-name { font-weight: 500; opacity: 0.82; }
 /* Счётчик позиций в свёрнутой/развёрнутой категории (повторный обзор формы
    "Новая аренда") — раньше, пока категория свёрнута, было не видно, сколько
    в ней вообще единиц оборудования. Нормальный вес (без uppercase-жирности
