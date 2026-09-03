@@ -367,6 +367,7 @@ function EquipmentPicklist({
   excludeRentalId,
   checkedIds,
   onToggle,
+  onClearAll,
   alwaysShowIds,
   businessId,
 }: {
@@ -377,6 +378,12 @@ function EquipmentPicklist({
   excludeRentalId?: string;
   checkedIds: string[];
   onToggle: (id: string) => void;
+  // Сброс всего выбранного разом (четвёртый обзор той же формы) — раньше
+  // снять отметки можно было только по одной, кликая крестик на каждом
+  // чипе; при случайно отмеченных позициях в разных категориях это
+  // неудобно. Необязательный проп — родитель решает, что значит "очистить"
+  // (просто setCheckedIds([])).
+  onClearAll?: () => void;
   alwaysShowIds?: string[];
   businessId: string;
 }) {
@@ -411,6 +418,14 @@ function EquipmentPicklist({
   // запроса, а не общее число позиций категории вслепую.
   const categoryCounts = new Map<string, number>();
   for (const e of visible) categoryCounts.set(e.category, (categoryCounts.get(e.category) ?? 0) + 1);
+  // Сколько из них уже отмечено (четвёртый обзор той же формы) — раньше
+  // заголовок свёрнутой категории показывал только общее число позиций, но
+  // не намекал, есть ли внутри уже выбранное: отметив пару позиций и
+  // свернув категорию, легко забыть, что там что-то выбрано.
+  const categorySelected = new Map<string, number>();
+  for (const e of visible) {
+    if (checkedIds.includes(e.id)) categorySelected.set(e.category, (categorySelected.get(e.category) ?? 0) + 1);
+  }
 
   // Стоимость за весь выбранный срок, а не только ставка за сутки
   // (повторный обзор формы "Новая аренда") — то же previewDays, что
@@ -444,6 +459,11 @@ function EquipmentPicklist({
               </span>
             );
           })}
+          {onClearAll && (
+            <button type="button" className="link-btn" onClick={onClearAll}>
+              Очистить
+            </button>
+          )}
         </div>
       )}
       <div className="eq-picklist">
@@ -474,7 +494,13 @@ function EquipmentPicklist({
                   >
                     <IconChevronDown />
                     <span className="eq-pick-group-name">{e.category}</span>
-                    <span className="eq-pick-group-count">({categoryCounts.get(e.category)})</span>
+                    <span className="eq-pick-group-count">
+                      {(() => {
+                        const selected = categorySelected.get(e.category) ?? 0;
+                        const total = categoryCounts.get(e.category);
+                        return selected > 0 ? `(${selected} из ${total})` : `(${total})`;
+                      })()}
+                    </span>
                   </button>
                 )}
                 {!isCollapsed && (
@@ -695,6 +721,7 @@ export function CreateRentalModal({
           rentals={rentals}
           checkedIds={checkedIds}
           onToggle={toggle}
+          onClearAll={() => setCheckedIds([])}
           businessId={businessId}
         />
         <div className="field-hint">Занятые на выбранные даты позиции недоступны для выбора.</div>
@@ -899,6 +926,7 @@ function EditRentalModal({
           excludeRentalId={rental.id}
           checkedIds={checkedIds}
           onToggle={toggle}
+          onClearAll={() => setCheckedIds([])}
           alwaysShowIds={currentIds}
           businessId={businessId}
         />

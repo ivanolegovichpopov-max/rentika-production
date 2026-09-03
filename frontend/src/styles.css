@@ -680,6 +680,18 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
   padding: 9px 11px; font-size: 13.5px; color: var(--ink);
 }
 .field input:focus-visible, .field select:focus-visible, .field textarea:focus-visible { background: var(--surface); }
+/* Убраны нативные стрелки у числовых полей (четвёртый обзор формы "Новая
+   аренда", но правило общее для .field — затрагивает все number-инпуты
+   приложения, не только эту форму: своего отдельного стиля числовые поля
+   нигде больше не получали, так что несогласованность была везде, просто
+   заметнее всего именно тут, рядом со свежепереоформленными "Скидка"/"Доп.
+   услуги"). Системные ▲▼ появляются только по наведению/фокусу — на фоне
+   единообразных скруглённых серых полей они выглядят случайной вставкой, а
+   не частью дизайна; никто в приложении ими и не пользуется (значения
+   вводятся с клавиатуры). */
+.field input[type="number"]::-webkit-outer-spin-button,
+.field input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.field input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 .field textarea { resize: vertical; min-height: 56px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .field-row-3 { grid-template-columns: 1fr 1fr 1fr; }
@@ -806,7 +818,7 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    весь набор, не разворачивая всё заново. Клик по крестику снимает галочку
    тем же onToggle, что и сам чекбокс строки — переиспользование, а не
    отдельная функция удаления. */
-.eq-pick-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.eq-pick-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
 .eq-pick-chip {
   display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 14px;
