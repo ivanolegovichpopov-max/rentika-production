@@ -1212,8 +1212,9 @@ export function RentalsTab({
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [moreFiltersOpen]);
-  const moreFiltersActiveCount =
-    (riskOnly ? 1 : 0) + (expiringOnly ? 1 : 0) + (depositDueOnly ? 1 : 0) + (unpaidOnly ? 1 : 0);
+  // "Рискованные клиенты" — отдельная кнопка на первой строке (по просьбе
+  // пользователя, скриншот), не входит в дропдаун "Фильтры" и его счётчик.
+  const moreFiltersActiveCount = (expiringOnly ? 1 : 0) + (depositDueOnly ? 1 : 0) + (unpaidOnly ? 1 : 0);
   const [showCreate, setShowCreate] = useState(false);
   // Предзаполнение "Новой аренды" клиентом+позициями текущей (41-й проход,
   // "Повторить аренду" из RentalDetailPanel) — null при обычном открытии
@@ -1611,11 +1612,11 @@ export function RentalsTab({
             (скриншот) — эта же поправка нужна и в ClientsTab.tsx, там та
             же причина.
 
-            Три кнопки-переключателя (риск/скоро истекает/депозит) переехали
-            из второй строки в первую, к сегментам статусов (через
-            .toolbar-divider — тот же приём, что и "Недавние" на
-            ClientsTab.tsx) — по просьбе пользователя. Вторая строка теперь
-            содержит только сортировку. */}
+            "Рискованные клиенты" — отдельная кнопка на первой строке, рядом
+            с сегментами статусов (через .toolbar-divider — тот же приём, что
+            и "Недавние" на ClientsTab.tsx). Дропдаун "Фильтры" (истекает
+            скоро/депозит/не оплачено) — на второй строке, рядом с
+            сортировкой (перестановка по просьбе пользователя, скриншот). */}
         <div style={{ display: "flex", flexDirection: "column", gap: "10px", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
             <div className="segmented">
@@ -1626,14 +1627,31 @@ export function RentalsTab({
               ))}
             </div>
             <div className="toolbar-divider" />
+            <button
+              type="button"
+              className={"btn" + (riskOnly ? " btn-primary" : "")}
+              onClick={() => setRiskOnly((v) => !v)}
+              title="Клиенты «на контроле» или из чёрного списка"
+            >
+              Рискованные клиенты ({riskCount})
+            </button>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            <Dropdown
+              value={sort}
+              onChange={setSort}
+              placeholder={SORTS[0]?.label ?? ""}
+              options={SORTS.map((s) => ({ value: s.id, label: s.label }))}
+            />
             {/* Дропдаун "Фильтры" (46-й проход, по итогам обзора — раньше
                 это были три отдельные круглые icon-only кнопки, единственное
                 место в приложении со своей стилизацией фильтров, не похожей
                 на "Фильтры" на ClientsTab.tsx/категории-склады на
                 EquipmentTab.tsx). Тот же .cat-filter*-idiom, счётчики — из
-                riskCount/expiringCount/depositDueCount выше (сколько найдётся
-                по базовому списку — статус+поиск, — если включить именно
-                этот переключатель). */}
+                expiringCount/depositDueCount/unpaidCount выше (сколько
+                найдётся по базовому списку — статус+поиск, — если включить
+                именно этот переключатель). "Рискованные" сюда не входят —
+                у них теперь своя кнопка на первой строке. */}
             <div className="cat-filter" ref={moreFiltersRef}>
               <button
                 type="button"
@@ -1645,14 +1663,6 @@ export function RentalsTab({
               </button>
               {moreFiltersOpen && (
                 <div className="cat-filter-panel">
-                  <label className={"cat-filter-option" + (riskOnly ? " checked" : "")}>
-                    <input type="checkbox" className="sr-only" checked={riskOnly} onChange={() => setRiskOnly((v) => !v)} />
-                    <span className="cat-filter-check">{riskOnly && <IconCheck />}</span>
-                    <span className="cat-filter-name" title="Клиенты «на контроле» или из чёрного списка">
-                      <IconAlert width={14} height={14} /> Рискованные клиенты
-                    </span>
-                    <span className="cat-filter-count">{riskCount}</span>
-                  </label>
                   <label className={"cat-filter-option" + (expiringOnly ? " checked" : "")}>
                     <input
                       type="checkbox"
@@ -1691,12 +1701,6 @@ export function RentalsTab({
               )}
             </div>
           </div>
-          <Dropdown
-            value={sort}
-            onChange={setSort}
-            placeholder={SORTS[0]?.label ?? ""}
-            options={SORTS.map((s) => ({ value: s.id, label: s.label }))}
-          />
         </div>
         {/* Колонка кнопок в .tab-toolbar-grid — тот же фикс, что и в
             ClientsTab.tsx/EquipmentTab.tsx (30-й проход): держит эту
