@@ -907,7 +907,17 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 /* ---------- Сводка финансов аренды (форма возврата) ---------- */
 .summary-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
 .summary-row { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
-.summary-row.total { font-weight: 800; font-size: 14.5px; border-top: 1px solid var(--border-strong); margin-top: 6px; padding-top: 8px; }
+/* margin-bottom (49-й проход, обратная связь по форме "Принять возврат" —
+   "нижние строки не имеют отступа друг от друга") — отступ ДО итоговой
+   строки обеспечивает сама .total (margin-top + border-top + padding-top),
+   а строка ПОСЛЕ неё (здесь — "Депозит на удержании" в FinanceSummary,
+   RentalsTab.tsx) была обычным .summary-row с padding: 3px 0, из-за чего
+   визуально липла к жирному итогу почти без зазора — асимметрично по
+   сравнению с отступом сверху. margin-bottom здесь безвреден и там, где
+   .total — последняя строка в .summary-box (CreateRentalModal/
+   EditRentalModal): просто на 6px больше внутреннего отступа снизу самого
+   блока, ничего не сдвигает и не ломает. */
+.summary-row.total { font-weight: 800; font-size: 14.5px; border-top: 1px solid var(--border-strong); margin-top: 6px; padding-top: 8px; margin-bottom: 6px; }
 .summary-row .v { font-family: "Roboto Mono"; }
 .summary-row.critical .v { color: var(--critical); }
 /* Итог сделан sticky-блоком внутри .modal-body в 46-м проходе, но при
