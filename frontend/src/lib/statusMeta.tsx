@@ -62,10 +62,20 @@ export function rentalDisplayStatus(r: Pick<Rental, "status" | "end_date">): str
   return r.status;
 }
 
-/** Активная (ещё не возвращённая) аренда для конкретной единицы оборудования. */
+/** Активная (ещё не возвращённая) аренда для конкретной единицы оборудования.
+ *
+ * it.returned_at учитывается с 50-го прохода (по итогам всестороннего обзора
+ * вкладки "Аренды") — раньше проверялось только r.status === "active" без
+ * учёта того, что КОНКРЕТНАЯ позиция внутри этой аренды могла уже вернуться
+ * индивидуально через "Вернуть выбранное" (ReturnItemsModal, доступно при
+ * частичном возврате — см. RentalDetailPanel.tsx), пока аренда в целом
+ * остаётся active из-за других, ещё не возвращённых позиций. Из-за этого уже
+ * физически вернувшаяся на склад единица техники продолжала считаться
+ * занятой: показывалась "В аренде"/"Просрочено" на вкладке "Оборудование" и
+ * не появлялась свободной в EquipmentPicklist при создании новой аренды. */
 export function activeRentalFor(equipmentId: string, rentals: Rental[]): Rental | undefined {
   return rentals.find(
-    (r) => r.status === "active" && r.items.some((it) => it.equipment_id === equipmentId)
+    (r) => r.status === "active" && r.items.some((it) => it.equipment_id === equipmentId && !it.returned_at)
   );
 }
 

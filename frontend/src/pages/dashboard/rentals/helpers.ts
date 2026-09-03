@@ -16,7 +16,21 @@ import { itemCostForDays } from "../../../lib/financeCalc";
  * afterPeriodDays дней (двадцатый проход, п.4 обзора), а не цена, размазанная
  * линейно по дням. afterPeriodDays==1 печатается как "/сутки" для
  * читаемости (самый частый случай — посуточная надбавка), любая другая
- * длина шага — как "/N дн". */
+ * длина шага — как "/N дн".
+ *
+ * ВАЖНО (50-й проход, по итогам всестороннего обзора вкладки "Аренды"):
+ * periodPrice НЕ является ценой за первые periodDays дней аренды — пока
+ * срок не превышает periodDays, itemCostForDays (financeCalc.ts) считает
+ * стоимость по обычной посуточной ставке dailyRate, periodPrice вообще не
+ * участвует (это осознанное поведение бэкенда, зафиксированное тестом
+ * test_pricing_within_period_uses_daily_rate_not_period_price в
+ * backend/tests/test_pricing.py — здесь НЕ трогаем формулу, только текст).
+ * Раньше подпись звучала как "690 ₽/14дн" — читалась как "14 дней стоят
+ * 690 ₽", что для многих реальных тарифов просто неверно (пример из
+ * обзора: dailyRate=27.14, periodDays=14 → 14 дней реально стоят 379.96 ₽,
+ * а не 690). Теперь подпись честно показывает посуточную ставку и то, что
+ * periodPrice — это цена, в которую упирается стоимость ТОЛЬКО когда срок
+ * ПРЕВЫСИЛ период. */
 export function rateLabel(
   dailyRate: number,
   periodDays: number | null,
@@ -27,7 +41,10 @@ export function rateLabel(
   if (periodDays && periodPrice) {
     const afterDays = afterPeriodDays || 1;
     const afterUnit = afterDays === 1 ? "сутки" : `${afterDays} дн`;
-    return `${money(periodPrice)}/${periodDays}дн` + (periodPriceAfter != null ? ` → ${money(periodPriceAfter)}/${afterUnit}` : "");
+    return (
+      `${money(dailyRate)}/сутки → дольше ${periodDays} дн: ${money(periodPrice)}` +
+      (periodPriceAfter != null ? ` +${money(periodPriceAfter)}/${afterUnit}` : "")
+    );
   }
   return `${money(dailyRate)}/сутки`;
 }
@@ -51,8 +68,14 @@ export function itemRateLabel(it: RentalItem): string {
  * 190 ₽/7 дн" сама по себе непонятна тому, кто не в курсе идиомы "цена за
  * период → цена за шаг после него"; полным предложением при наведении —
  * понятно любому сотруднику). undefined для простого посуточного тарифа —
- * там rateLabel() уже самодостаточен, пояснять нечего. */
+ * там rateLabel() уже самодостаточен, пояснять нечего.
+ *
+ * Переписана в 50-м проходе вместе с rateLabel() — старый текст "690 ₽ за
+ * первые 14 дн." прямо утверждал то, что формула не делает (см. комментарий
+ * над rateLabel). Теперь явно называет оба случая: посуточно в пределах
+ * периода, порог periodPrice — только при выходе за него. */
 export function rateLabelTitle(
+  dailyRate: number,
   periodDays: number | null,
   periodPrice: number | null,
   periodPriceAfter: number | null,
@@ -61,16 +84,17 @@ export function rateLabelTitle(
   if (!periodDays || !periodPrice) return undefined;
   const afterDays = afterPeriodDays || 1;
   const afterUnit = afterDays === 1 ? "сутки" : `каждые ${afterDays} дн.`;
-  const base = `${money(periodPrice)} за первые ${periodDays} дн.`;
-  return periodPriceAfter != null ? `${base}, затем ${money(periodPriceAfter)} за ${afterUnit}` : base;
+  const base = `До ${periodDays} дн. — по ${money(dailyRate)} ₽/сутки. Дольше ${periodDays} дн. — ${money(periodPrice)} ₽`;
+  return periodPriceAfter != null ? `${base}, затем ${money(periodPriceAfter)} за ${afterUnit}.` : `${base}.`;
 }
 
 export function equipmentRateLabelTitle(e: Equipment): string | undefined {
-  return rateLabelTitle(e.period_days, e.period_price, e.period_price_after, e.after_period_days);
+  return rateLabelTitle(e.daily_rate, e.period_days, e.period_price, e.period_price_after, e.after_period_days);
 }
 
 export function itemRateLabelTitle(it: RentalItem): string | undefined {
   return rateLabelTitle(
+    it.daily_rate_snapshot,
     it.period_days_snapshot,
     it.period_price_snapshot,
     it.period_price_after_snapshot,
@@ -133,7 +157,11 @@ export function isEquipmentFreeForRange(
   return !rentals.some((r) => {
     if (r.id === excludeRentalId) return false;
     if (r.status !== "booked" && r.status !== "active") return false;
-    if (!r.items.some((it) => it.equipment_id === equipmentId)) return false;
+    // !it.returned_at — та же поправка на частичный возврат, что и в
+    // activeRentalFor (statusMeta.tsx), см. комментарий там (50-й проход):
+    // индивидуально возвращённая позиция не должна блокировать её же саму
+    // на новый диапазон дат, даже если сама аренда ещё active.
+    if (!r.items.some((it) => it.equipment_id === equipmentId && !it.returned_at)) return false;
     return rangesOverlap(r.start_date, r.end_date, start, end);
   });
 }
@@ -172,7 +200,9 @@ export function conflictEndFor(
     .filter((r) => {
       if (r.id === excludeRentalId) return false;
       if (r.status !== "booked" && r.status !== "active") return false;
-      if (!r.items.some((it) => it.equipment_id === equipmentId)) return false;
+      // Та же поправка на частичный возврат, что и в isEquipmentFreeForRange
+      // выше (50-й проход) — см. комментарий там.
+      if (!r.items.some((it) => it.equipment_id === equipmentId && !it.returned_at)) return false;
       return rangesOverlap(r.start_date, r.end_date, start, end);
     })
     .sort((a, b) => (a.end_date < b.end_date ? 1 : -1));

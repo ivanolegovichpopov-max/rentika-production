@@ -2446,7 +2446,13 @@ export function RentalsTab({
           отфильтрован. Полоска над самим списком, у самых карточек —
           труднее пропустить, чем кнопку в тулбаре наверху. "Сбросить" одним
           кликом снимает оба переключателя разом. */}
-      {(riskOnly || expiringOnly || depositDueOnly) && (
+      {/* unpaidOnly добавлен в полоску 50-м проходом (по итогам всестороннего
+          обзора вкладки "Аренды") — тот же переключатель "Не оплачено" живёт
+          в том же дропдауне "Фильтры", что и depositDueOnly/expiringOnly, но
+          раньше не учитывался ни в тексте полоски, ни в "Сбросить" — при
+          включённом только unpaidOnly полоска не появлялась вовсе, хотя
+          список так же фильтровался. */}
+      {(riskOnly || expiringOnly || depositDueOnly || unpaidOnly) && (
         <div className="active-filter-bar">
           <IconAlert />
           <span>
@@ -2455,6 +2461,7 @@ export function RentalsTab({
               riskOnly && "рискованные клиенты",
               expiringOnly && "аренды, истекающие скоро",
               depositDueOnly && "закрытые аренды с невозвращённым депозитом",
+              unpaidOnly && "неоплаченные аренды",
             ]
               .filter(Boolean)
               .join(" и ")}
@@ -2466,6 +2473,7 @@ export function RentalsTab({
               setRiskOnly(false);
               setExpiringOnly(false);
               setDepositDueOnly(false);
+              setUnpaidOnly(false);
             }}
           >
             Сбросить

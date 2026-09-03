@@ -521,10 +521,23 @@ export function RentalDetailPanel({
           нижний (кнопки) всегда на своём месте, в одном и том же порядке. */}
       <div className="slideover-section" style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center", marginBottom: "8px" }}>
         <Badge meta={RENTAL_META[st]} />
-        {/* Бейдж оплаты (повторный обзор — та же логика, что и на карточке в
-            списке, isUnpaid выше) — виден только когда реально не хватает
-            денег, чтобы не грузить строку бейджей на каждой аренде подряд. */}
-        {isUnpaid(rental) && <Badge meta={{ label: rental.paid_amount > 0 ? "Оплата частично" : "Не оплачено", tone: "warning" }} />}
+        {/* Бейдж оплаты — виден только когда реально не хватает денег, чтобы
+            не грузить строку бейджей на каждой аренде подряд. Формулировка и
+            тон приведены 1:1 к paymentBadge из RentalsTab.tsx (50-й проход,
+            по итогам всестороннего обзора — раньше здесь был текст без суммы
+            и тон warning вместо critical: тот же самый факт выглядел
+            заметно тревожнее в списке, чем в открытой панели той же
+            аренды). Title — та же разбивка "оплачено N из M", что и в
+            подсказке карточки списка. */}
+        {isUnpaid(rental) && (
+          <Badge
+            meta={{
+              label: rental.paid_amount > 0 ? `Долг ${money(rental.total - rental.paid_amount)}` : `Не оплачено: ${money(rental.total - rental.paid_amount)}`,
+              tone: "critical",
+              title: rental.paid_amount > 0 ? `Оплачено ${money(rental.paid_amount)} из ${money(rental.total)}` : undefined,
+            }}
+          />
+        )}
       </div>
 
       <div className="slideover-section" style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
