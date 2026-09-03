@@ -194,6 +194,15 @@ function PaymentModal({
     dialogRef.current?.showModal();
   }, []);
 
+  // Предупреждение о переплате (48-й проход, обратная связь по карточке
+  // аренды) — раньше форма молча принимала любую сумму: опечатка или
+  // повторный клик создавали переплату, которую нигде не было видно (см.
+  // симметричную строку "Переплата" в Финансах ниже). Не блокирует сабмит —
+  // отрицательные и "странные" суммы остаются легитимным исправлением
+  // ошибки, просто теперь видно заранее, к чему приведёт платёж.
+  const numAmount = Number(amount) || 0;
+  const overpayAfter = rental.paid_amount + numAmount - rental.total;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -240,6 +249,11 @@ function PaymentModal({
             <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
           </div>
           <div className="field-hint">Отрицательное значение — исправление ошибочно внесённой суммы.</div>
+          {numAmount !== 0 && overpayAfter > 0.01 && (
+            <div className="field-hint" style={{ color: "var(--warning-ink)", marginTop: "4px" }}>
+              После этого платежа возникнет переплата: {money(overpayAfter)}.
+            </div>
+          )}
           {error && <div className="form-error">{error}</div>}
         </div>
         <div className="modal-foot">
@@ -581,8 +595,15 @@ export function RentalDetailPanel({
         })}
       </div>
 
+      {/* "Финансы" разбита на три блока (48-й проход, обратная связь по
+          карточке аренды: "один сплошной kv-grid мешает стоимость, оплату и
+          депозит") — раньше это была одна секция с одним kv-grid на всё, и
+          глаз не сразу считывал, где кончается "из чего сложилась цена" и
+          начинается "что по деньгам сделано". "Депозит" вынесен в отдельную
+          секцию ещё и потому, что его чекбоксу с подписью тесно в общей
+          узкой колонке значений — см. отдельный блок ниже, не kv-grid. */}
       <div className="slideover-section">
-        <h4>Финансы</h4>
+        <h4>Стоимость</h4>
         <div className="kv-grid">
           <span className="k">Плановых дней</span>
           <span className="mono">{rental.planned_days}</span>
@@ -618,6 +639,12 @@ export function RentalDetailPanel({
           <span className="mono" style={{ fontWeight: 700 }}>
             {money(rental.total)}
           </span>
+        </div>
+      </div>
+
+      <div className="slideover-section">
+        <h4>Оплата</h4>
+        <div className="kv-grid">
           <span className="k">Оплачено</span>
           <span className="mono" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "8px" }}>
             {money(rental.paid_amount)}
@@ -636,27 +663,62 @@ export function RentalDetailPanel({
               </span>
             </>
           )}
-          <span className="k">Депозит на удержании</span>
-          <span className="mono" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "10px" }}>
-            {money(rental.deposit_total)}
-            {rental.deposit_total > 0 && (
-              <label
-                style={{ display: "flex", alignItems: "center", gap: "5px", fontWeight: 400, fontSize: "11.5px", color: "var(--muted)", cursor: depositSaving ? "wait" : "pointer" }}
-              >
-                <input
-                  type="checkbox"
-                  checked={!!rental.deposit_returned_at}
-                  disabled={depositSaving}
-                  onChange={toggleDepositReturned}
-                  style={{ width: "14px", height: "14px" }}
-                />
-                {rental.deposit_returned_at ? `возвращён ${fmtDate(rental.deposit_returned_at)}` : "возвращён клиенту"}
-              </label>
-            )}
-          </span>
+          {/* Переплата (48-й проход, обратная связь) — раньше при
+              paid_amount > total карточка вообще ничего не показывала: была
+              только строка на случай недоплаты, симметричной на случай
+              переплаты не было, и оператор мог не заметить, что клиенту
+              нужно вернуть лишнее. */}
+          {rental.paid_amount - rental.total > 0.01 && (
+            <>
+              <span className="k">Переплата</span>
+              <span className="mono" style={{ fontWeight: 600, color: "var(--warning-ink)" }}>
+                {money(rental.paid_amount - rental.total)}
+              </span>
+            </>
+          )}
         </div>
-        {depositError && <div className="form-error">{depositError}</div>}
       </div>
+
+      {rental.deposit_total > 0 && (
+        <div className="slideover-section">
+          <h4>Депозит</h4>
+          <div className="kv-grid">
+            <span className="k">Сумма на удержании</span>
+            <span className="mono" style={{ fontWeight: 600 }}>{money(rental.deposit_total)}</span>
+          </div>
+          {/* Чекбокс возврата — отдельной строкой на всю ширину, а не втиснут
+              в узкую колонку значений рядом с суммой (48-й проход, обратная
+              связь: подпись "возвращён клиенту" переносилась посередине
+              слова, когда делила колонку с суммой и чекбоксом). Явный
+              flexDirection: "row" обязателен — базовый global `label {
+              flex-direction: column }` (styles.css) иначе ставит чекбокс НАД
+              текстом, а не рядом (тот же баг, что и вызвал перенос в старой
+              вёрстке — inline style без flexDirection не перебивает это
+              свойство, только display/gap/alignItems). */}
+          <label
+            style={{
+              display: "flex",
+              flexDirection: "row",
+              alignItems: "center",
+              gap: "6px",
+              marginTop: "8px",
+              fontSize: "12.5px",
+              color: "var(--muted)",
+              cursor: depositSaving ? "wait" : "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={!!rental.deposit_returned_at}
+              disabled={depositSaving}
+              onChange={toggleDepositReturned}
+              style={{ width: "14px", height: "14px" }}
+            />
+            {rental.deposit_returned_at ? `Возвращён клиенту ${fmtDate(rental.deposit_returned_at)}` : "Возвращён клиенту"}
+          </label>
+          {depositError && <div className="form-error" style={{ marginTop: "6px" }}>{depositError}</div>}
+        </div>
+      )}
       </>
       )}
 

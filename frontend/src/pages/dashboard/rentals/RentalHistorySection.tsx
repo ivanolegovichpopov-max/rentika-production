@@ -126,8 +126,15 @@ export function RentalHistorySection({ businessId, rentalId }: { businessId: str
               <div key={i} style={{ fontSize: "12.5px", paddingLeft: "10px", borderLeft: "2px solid var(--border)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
                   <span style={{ fontWeight: 600 }}>{ACTION_LABELS[entry.action] ?? entry.action}</span>
+                  {/* Время рядом с датой (48-й проход, обратная связь по
+                      карточке аренды) — без него несколько записей за один
+                      день (чаще всего "Записан платёж") были неотличимы друг
+                      от друга, порядок читался только по позиции в списке.
+                      Тот же idiom "дата · время", что и у уведомлений на
+                      дашборде (см. DashboardTab.tsx). */}
                   <span style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
-                    {fmtDate(entry.created_at.slice(0, 10))}
+                    {fmtDate(entry.created_at.slice(0, 10))} ·{" "}
+                    {new Date(entry.created_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
                   </span>
                 </div>
                 <div style={{ color: "var(--muted)", marginTop: "1px" }}>
