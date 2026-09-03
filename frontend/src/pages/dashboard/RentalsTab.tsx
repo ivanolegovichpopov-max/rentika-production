@@ -253,6 +253,19 @@ function FormModal({
   // необязательный проп, по умолчанию false, старое поведение (btn-primary)
   // не меняется ни для одной из уже существующих форм на FormModal.
   danger,
+  // Итоговая сумма в футере (46-й проход, повторный обзор формы "Новая
+  // аренда") — необязательный проп, по умолчанию отсутствует, старое
+  // поведение футера (просто кнопки, прижатые вправо) не меняется ни для
+  // одной из форм, которые его не передают. Раньше итог показывался
+  // "прилипающим" блоком внутри прокручиваемого тела формы (.summary-box.
+  // sticky-summary) — по итогам обзора пользователь указал, что при
+  // длинном списке оборудования это одновременно съедает видимую высоту
+  // списка И визуально наезжает на соседние поля (скидка/доп. услуги),
+  // когда список короткий. Футер модалки в принципе никогда не скроллится
+  // — это НАСТОЯЩАЯ фиксация, а не CSS sticky-трюк, поэтому вынести туда
+  // только сам итог (без построчной разбивки, которая остаётся в теле
+  // формы обычным, не прилипающим блоком) решает обе жалобы сразу.
+  footerExtra,
   children,
 }: {
   title: string;
@@ -263,6 +276,7 @@ function FormModal({
   wide?: boolean;
   error?: string | null;
   danger?: boolean;
+  footerExtra?: ReactNode;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -298,13 +312,16 @@ function FormModal({
           {children}
           {error && <div className="form-error">{error}</div>}
         </div>
-        <div className="modal-foot">
-          <button className="btn" onClick={onClose} type="button">
-            Отмена
-          </button>
-          <button className={"btn " + (danger ? "btn-danger" : "btn-primary")} type="submit">
-            {submitLabel}
-          </button>
+        <div className={"modal-foot" + (footerExtra ? " modal-foot-split" : "")}>
+          {footerExtra && <div className="modal-foot-total">{footerExtra}</div>}
+          <div className="modal-foot-actions">
+            <button className="btn" onClick={onClose} type="button">
+              Отмена
+            </button>
+            <button className={"btn " + (danger ? "btn-danger" : "btn-primary")} type="submit">
+              {submitLabel}
+            </button>
+          </div>
         </div>
       </form>
     </dialog>
@@ -405,7 +422,7 @@ function EquipmentPicklist({
   return (
     <div>
       <div className="search-box eq-search-sticky" style={{ width: "100%", marginBottom: "8px" }}>
-        <IconSearch width={16} height={16} />
+        <IconSearch width={14} height={14} />
         <input
           type="text"
           placeholder="Поиск по названию, номеру, категории…"
@@ -619,6 +636,7 @@ export function CreateRentalModal({
       submitLabel={saving ? "Сохранение…" : "Оформить"}
       wide
       error={error}
+      footerExtra={previewDays > 0 && checkedIds.length > 0 ? `К оплате: ${money(previewTotal)}` : undefined}
     >
       <div className="field">
         <label>Клиент</label>
@@ -700,7 +718,7 @@ export function CreateRentalModal({
         </div>
       </div>
       {previewDays > 0 && checkedIds.length > 0 && (
-        <div className="summary-box sticky-summary">
+        <div className="summary-box">
           <div className="summary-row">
             <span>Аренда, {previewDays} дн.</span>
             <span className="v">{money(previewBase)}</span>
@@ -832,6 +850,7 @@ function EditRentalModal({
       submitLabel={saving ? "Сохранение…" : "Сохранить"}
       wide
       error={error}
+      footerExtra={previewDays > 0 && checkedIds.length > 0 ? `К оплате: ${money(previewTotal)}` : undefined}
     >
       <div className="field">
         <label>Клиент</label>
@@ -896,7 +915,7 @@ function EditRentalModal({
         </div>
       </div>
       {previewDays > 0 && checkedIds.length > 0 && (
-        <div className="summary-box sticky-summary">
+        <div className="summary-box">
           <div className="summary-row">
             <span>Аренда, {previewDays} дн.</span>
             <span className="v">{money(previewBase)}</span>

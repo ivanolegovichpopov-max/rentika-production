@@ -654,7 +654,15 @@ dialog#modal::backdrop { background: rgba(0,0,0,0.4); }
    форме модалки поля и так уже в одну колонку/два столбца через
    .field/.field-row, отдельный контейнер на каждую группу не нужен. */
 .modal-body h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); font-weight: 700; margin: 20px 0 8px; }
-.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
+.modal-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
+/* Итог в футере вместо прилипающего блока в теле формы (46-й проход,
+   повторный обзор формы "Новая аренда" — см. FormModal.footerExtra в
+   RentalsTab.tsx). modal-foot-split раздвигает итог и кнопки по краям —
+   применяется, только когда footerExtra реально передан, поэтому все
+   остальные формы на FormModal (без итога) выглядят как раньше. */
+.modal-foot-split { justify-content: space-between; }
+.modal-foot-actions { display: flex; gap: 8px; }
+.modal-foot-total { font-family: "Roboto Mono"; font-size: 14.5px; font-weight: 800; }
 
 /* ---------- Модалка подтверждения (замена window.confirm()) ---------- */
 dialog#confirm-modal { border: none; border-radius: 16px; padding: 0; box-shadow: var(--shadow-lg); width: min(420px, 92vw); background: var(--surface); color: var(--ink); }
@@ -759,8 +767,14 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    поэтому, чтобы поменять или стереть запрос при длинном списке, приходилось
    сначала листать назад наверх. Модалка сама не скроллится — скроллится
    .modal-body (см. ниже), поэтому sticky-контейнером для этого поля
-   выступает именно он. */
-.eq-search-sticky { position: sticky; top: 0; z-index: 2; }
+   выступает именно он.
+   Уменьшенные отступы (третий обзор той же формы) — раньше это поле было
+   такого же размера, что и общий поиск в шапке (.search-box), а раз оно
+   теперь ещё и постоянно занимает место (sticky), в невысоком окне это
+   заметно "съедало" высоту, отведённую под сам список. Уменьшено только
+   здесь, через явный override после .search-box — общий поиск в шапке
+   (Dashboard.tsx) остаётся прежнего размера. */
+.eq-search-sticky { position: sticky; top: 0; z-index: 2; padding: 5px 12px; gap: 6px; min-width: 0; }
 /* Чипы уже выбранного оборудования (повторный обзор) — видны независимо от
    того, свёрнута ли категория этой позиции или прокручен ли список мимо
    неё: иначе, отметив позиции в разных категориях, сложно окинуть взглядом
@@ -788,14 +802,15 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .summary-row.total { font-weight: 800; font-size: 14.5px; border-top: 1px solid var(--border-strong); margin-top: 6px; padding-top: 8px; }
 .summary-row .v { font-family: "Roboto Mono"; }
 .summary-row.critical .v { color: var(--critical); }
-/* Итог, закреплённый внизу формы (повторный обзор формы "Новая аренда") —
-   раньше сумму было видно только долистав форму (клиент → даты → длинный
-   список оборудования → скидка → доп. услуги) до самого конца; правя
-   что-то выше, приходилось прокручивать заново. bottom: 0 — относительно
-   .modal-body (ближайший скроллящийся предок, см. dialog#modal .modal-body
-   выше), не всей модалки: нижний padding .modal-body (18px) остаётся
-   видимым зазором под карточкой, когда она "прилипла". */
-.summary-box.sticky-summary { position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -8px 14px -10px rgba(0, 0, 0, 0.25); }
+/* Итог сделан sticky-блоком внутри .modal-body в 46-м проходе, но при
+   разборе на реальном (небольшом) окне обнаружилось: sticky снизу + sticky
+   поиск сверху вместе съедают слишком много высоты, а сам прилипший блок
+   визуально наезжает на соседние поля (скидка/доп. услуги), когда список
+   короткий. Заменено на footerExtra в футере модалки (см. FormModal в
+   RentalsTab.tsx) — там сумма закреплена по-настоящему (футер не
+   скроллится вообще), а этот блок вернулся к обычному, не прилипающему
+   виду (просто .summary-box). Класс .sticky-summary больше не
+   используется, оставлять его как мёртвый CSS смысла нет. */
 
 .doc-page { background: #fff; color: #17202A; padding: 34px 38px; font-family: "Roboto", sans-serif; font-size: 13px; line-height: 1.55; border-radius: 3px; border: 1px solid var(--border); }
 .doc-page h2 { font-family: "Roboto", system-ui, sans-serif; font-weight: 600; font-size: 18px; margin-bottom: 4px; color: #17202A; }
