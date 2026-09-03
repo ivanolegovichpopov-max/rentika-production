@@ -20,6 +20,7 @@ import {
 } from "../../lib/icons";
 import { DocModal, buildContractDoc, buildIssueDoc, buildReturnDoc, buildBulkContractsDoc } from "./documents";
 import { useConfirm } from "../../components/ConfirmDialog";
+import { useModalDialog } from "../../lib/useModalDialog";
 import { useToast } from "../../components/Toast";
 import { usePersistedState } from "../../lib/persist";
 import { Dropdown } from "../../components/Dropdown";
@@ -266,6 +267,19 @@ function FormModal({
   // только сам итог (без построчной разбивки, которая остаётся в теле
   // формы обычным, не прилипающим блоком) решает обе жалобы сразу.
   footerExtra,
+  // Защита от случайного закрытия (повторный обзор формы "Новая аренда") —
+  // тот же принцип, что уже реализован в EquipmentFormModal/ClientFormModal:
+  // если передан onRequestClose, ИМЕННО он вызывается из X/"Отмена"/Esc/
+  // клика по фону вместо прямого onClose — вызывающий компонент сам решает,
+  // нужно ли спросить подтверждение при несохранённых изменениях. Если проп
+  // не передан (все остальные формы на FormModal — Выдача, Возврат,
+  // Продление и т.д.) — поведение остаётся прежним, один-в-один.
+  onRequestClose,
+  // Второй <dialog> подтверждения ("Несохранённые изменения будут
+  // потеряны") от useConfirm() вызывающего компонента — рендерится ПОСЛЕ
+  // </form>, но всё ещё внутри этого же внешнего <dialog>, тем же приёмом,
+  // что и discardDialog в EquipmentFormModal/ClientFormModal.
+  afterForm,
   children,
 }: {
   title: string;
@@ -277,34 +291,37 @@ function FormModal({
   error?: string | null;
   danger?: boolean;
   footerExtra?: ReactNode;
+  onRequestClose?: () => void;
+  afterForm?: ReactNode;
   children: ReactNode;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
-
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
+  const { ref, handleNativeClose } = useModalDialog(open);
+  const requestClose = onRequestClose ?? onClose;
 
   return (
     <dialog
       id="modal"
       className={wide ? "wide" : undefined}
       ref={ref}
-      onClose={onClose}
+      onClose={() => handleNativeClose(onClose)}
+      onCancel={(e) => {
+        // Esc закрывает <dialog> сам — трактуем как запрос на закрытие,
+        // а не как безусловное закрытие (тот же приём, что и в
+        // EquipmentFormModal/ClientFormModal).
+        e.preventDefault();
+        requestClose();
+      }}
       onClick={(e) => {
         // Клик по затемнённому фону закрывает модалку — тот же идиом, что и
         // в EquipmentTab.tsx (16-й проход, п.2 обзора). Раньше здесь этого
         // не было, хотя визуально модалка выглядит идентично.
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) requestClose();
       }}
     >
       <form onSubmit={onSubmit}>
         <div className="modal-head">
           <h3>{title}</h3>
-          <button className="icon-btn" onClick={onClose} type="button">
+          <button className="icon-btn" onClick={requestClose} type="button">
             <IconClose />
           </button>
         </div>
@@ -315,7 +332,7 @@ function FormModal({
         <div className={"modal-foot" + (footerExtra ? " modal-foot-split" : "")}>
           {footerExtra && <div className="modal-foot-total">{footerExtra}</div>}
           <div className="modal-foot-actions">
-            <button className="btn" onClick={onClose} type="button">
+            <button className="btn" onClick={requestClose} type="button">
               Отмена
             </button>
             <button className={"btn " + (danger ? "btn-danger" : "btn-primary")} type="submit">
@@ -324,6 +341,7 @@ function FormModal({
           </div>
         </div>
       </form>
+      {afterForm}
     </dialog>
   );
 }
@@ -588,6 +606,115 @@ export function CreateRentalModal({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Быстрое добавление клиента прямо из формы "Новая аренда" (по итогам
+  // обзора — "нужно ли иметь возможность добавить нового клиента"). Только
+  // самые необходимые поля, без полной карточки клиента (тип/скидка/теги и
+  // т.д. дозаполняются потом через полноценную карточку) — но паспорт/ИНН
+  // здесь ОБЯЗАТЕЛЬНЫ (хотя бы одно из двух), по прямому указанию: в отличие
+  // от полной формы клиента, где для физлица оба поля необязательны.
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [qaName, setQaName] = useState("");
+  const [qaPhone, setQaPhone] = useState("");
+  const [qaDoc, setQaDoc] = useState("");
+  const [qaInn, setQaInn] = useState("");
+  const [qaError, setQaError] = useState<string | null>(null);
+  const [qaSaving, setQaSaving] = useState(false);
+
+  const { reloadClients } = useData();
+  const { confirm: confirmDiscard, dialog: discardDialog } = useConfirm();
+
+  // Защита от случайного закрытия (повторный обзор — "как на страницах
+  // Оборудование и Клиенты"). Модалка монтируется заново при каждом
+  // открытии (родитель рендерит её условно), поэтому исходный снимок формы
+  // достаточно снять один раз прямо на первом рендере через useRef — не
+  // нужен сброс по open, как в формах Оборудования/Клиентов, которые не
+  // размонтируются между открытиями.
+  const initialSnapshotRef = useRef({
+    clientId,
+    startDate,
+    endDate,
+    checkedIds,
+    discount,
+    extraFee,
+    extraFeeNote,
+    quickAddOpen,
+    qaName,
+    qaPhone,
+    qaDoc,
+    qaInn,
+  });
+  const initialSnapshot = initialSnapshotRef.current;
+  const isDirty =
+    clientId !== initialSnapshot.clientId ||
+    startDate !== initialSnapshot.startDate ||
+    endDate !== initialSnapshot.endDate ||
+    checkedIds.length !== initialSnapshot.checkedIds.length ||
+    checkedIds.some((id) => !initialSnapshot.checkedIds.includes(id)) ||
+    discount !== initialSnapshot.discount ||
+    extraFee !== initialSnapshot.extraFee ||
+    extraFeeNote !== initialSnapshot.extraFeeNote ||
+    quickAddOpen !== initialSnapshot.quickAddOpen ||
+    qaName !== initialSnapshot.qaName ||
+    qaPhone !== initialSnapshot.qaPhone ||
+    qaDoc !== initialSnapshot.qaDoc ||
+    qaInn !== initialSnapshot.qaInn;
+
+  async function requestClose() {
+    if (saving) return;
+    if (isDirty) {
+      if (!(await confirmDiscard("Несохранённые изменения будут потеряны.", { confirmLabel: "Закрыть без сохранения" })))
+        return;
+    }
+    onClose();
+  }
+
+  async function handleQuickAddClient() {
+    setQaError(null);
+    const name = qaName.trim();
+    const doc = qaDoc.trim();
+    const inn = qaInn.trim();
+    if (!name) {
+      setQaError("Укажите имя клиента");
+      return;
+    }
+    if (!doc && !inn) {
+      setQaError("Укажите паспорт или ИНН — хотя бы одно из двух");
+      return;
+    }
+    setQaSaving(true);
+    try {
+      const created = await api.post<Client>(`/businesses/${businessId}/clients`, {
+        name,
+        phone: qaPhone.trim() || null,
+        email: null,
+        doc: doc || null,
+        notes: null,
+        client_type: "individual",
+        contact_person: null,
+        inn: inn || null,
+        default_discount_percent: null,
+        tags: null,
+        birthday: null,
+        additional_contacts: null,
+      });
+      // reloadClients() обновляет общий список в DataContext — тот же
+      // источник, откуда родитель (RentalsTab) берёт clients и передаёт
+      // сюда пропом, так что новый клиент появится в Dropdown сам по себе
+      // при следующем рендере, без ручного хранения локальной копии списка.
+      await reloadClients();
+      setClientId(created.id);
+      setQuickAddOpen(false);
+      setQaName("");
+      setQaPhone("");
+      setQaDoc("");
+      setQaInn("");
+    } catch (err) {
+      setQaError(err instanceof ApiError ? err.message : "Не удалось создать клиента");
+    } finally {
+      setQaSaving(false);
+    }
+  }
+
   const selectedClient = clients.find((c) => c.id === clientId);
 
   // Живая оценка стоимости (43-й проход, п.1 обзора) — до сих пор сумма
@@ -668,6 +795,8 @@ export function CreateRentalModal({
       title="Новая аренда"
       open
       onClose={onClose}
+      onRequestClose={requestClose}
+      afterForm={discardDialog}
       onSubmit={handleSubmit}
       submitLabel={saving ? "Сохранение…" : "Оформить"}
       wide
@@ -699,6 +828,65 @@ export function CreateRentalModal({
         {selectedClient?.rating === "blacklist" && (
           <div className="form-error" style={{ marginTop: "6px" }}>
             Клиент в чёрном списке{selectedClient.blacklist_reason ? `: ${selectedClient.blacklist_reason}` : ""}
+          </div>
+        )}
+        {/* Быстрое добавление клиента (повторный обзор — "нужно ли иметь
+            возможность добавить нового клиента на этапе оформления аренды")
+            — вместо вложенного <dialog> (см. обсуждение: стек модалок на
+            <dialog> сам по себе источник багов, см. useModalDialog.ts) это
+            обычная встроенная панель внутри тела формы, разворачивающаяся
+            по клику. Не трогает сам Dropdown — тот остаётся полностью
+            переиспользуемым общим компонентом. */}
+        {!quickAddOpen ? (
+          <button type="button" className="link-btn" style={{ marginTop: "6px" }} onClick={() => setQuickAddOpen(true)}>
+            + Добавить нового клиента
+          </button>
+        ) : (
+          <div style={{ marginTop: "8px", padding: "10px", background: "var(--surface-2)", borderRadius: "8px" }}>
+            <div className="field-row">
+              <div className="field">
+                <label>Имя</label>
+                <input
+                  type="text"
+                  value={qaName}
+                  onChange={(e) => setQaName(e.target.value)}
+                  placeholder="Имя клиента"
+                  autoFocus
+                />
+              </div>
+              <div className="field">
+                <label>Телефон</label>
+                <input type="text" value={qaPhone} onChange={(e) => setQaPhone(e.target.value)} placeholder="+7…" />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Паспорт</label>
+                <input type="text" value={qaDoc} onChange={(e) => setQaDoc(e.target.value)} placeholder="Серия и номер" />
+              </div>
+              <div className="field">
+                <label>ИНН</label>
+                <input type="text" value={qaInn} onChange={(e) => setQaInn(e.target.value)} placeholder="ИНН" />
+              </div>
+            </div>
+            <div className="field-hint">Укажите паспорт или ИНН — хотя бы одно из двух обязательно.</div>
+            {qaError && <div className="form-error">{qaError}</div>}
+            <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+              <button
+                type="button"
+                className="btn"
+                disabled={qaSaving}
+                onClick={() => {
+                  setQuickAddOpen(false);
+                  setQaError(null);
+                }}
+              >
+                Отмена
+              </button>
+              <button type="button" className="btn btn-primary" disabled={qaSaving} onClick={() => void handleQuickAddClient()}>
+                {qaSaving ? "Сохранение…" : "Добавить клиента"}
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -818,6 +1006,32 @@ function EditRentalModal({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Защита от случайного закрытия (тот же приём, что и в CreateRentalModal
+  // выше — тем же принципом мирроринга, что уже применялся ко всем прошлым
+  // правкам этой формы в паре с CreateRentalModal). Модалка монтируется
+  // заново при каждом открытии карточки правки, так что снимок исходных
+  // значений достаточно снять один раз на первом рендере.
+  const { confirm: confirmDiscard, dialog: discardDialog } = useConfirm();
+  const initialSnapshotRef = useRef({ startDate, endDate, checkedIds, discount, extraFee, extraFeeNote });
+  const initialSnapshot = initialSnapshotRef.current;
+  const isDirty =
+    startDate !== initialSnapshot.startDate ||
+    endDate !== initialSnapshot.endDate ||
+    checkedIds.length !== initialSnapshot.checkedIds.length ||
+    checkedIds.some((id) => !initialSnapshot.checkedIds.includes(id)) ||
+    discount !== initialSnapshot.discount ||
+    extraFee !== initialSnapshot.extraFee ||
+    extraFeeNote !== initialSnapshot.extraFeeNote;
+
+  async function requestClose() {
+    if (saving) return;
+    if (isDirty) {
+      if (!(await confirmDiscard("Несохранённые изменения будут потеряны.", { confirmLabel: "Закрыть без сохранения" })))
+        return;
+    }
+    onClose();
+  }
+
   // Живая оценка стоимости при правке (43-й проход, п.1 обзора) — тот же
   // принцип, что и в CreateRentalModal, но проще: PATCH .../rentals/{id}
   // (app/api/routes/rentals.py:edit_rental) НЕ подставляет скидку по
@@ -883,6 +1097,8 @@ function EditRentalModal({
       title={`Изменить аренду — ${client?.name ?? "—"}`}
       open
       onClose={onClose}
+      onRequestClose={requestClose}
+      afterForm={discardDialog}
       onSubmit={handleSubmit}
       submitLabel={saving ? "Сохранение…" : "Сохранить"}
       wide

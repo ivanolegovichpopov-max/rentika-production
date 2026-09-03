@@ -770,19 +770,21 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    заголовок кликабелен (сворачивает/разворачивает содержимое категории —
    тот же принцип, что и .cat-filter-option: <button> со сброшенными
    браузерными стилями, а не голый div). */
-/* Без заливки в состоянии покоя (третий обзор той же формы, "слишком
-   много серого") — раньше .eq-pick-group был залит тем же var(--surface-2),
-   что и поле поиска/чипы/сами инпуты формы, и на фоне повторяющихся
-   заголовков категорий (особенно при многих категориях) это делало всю
-   форму одним сплошным серым полем без структуры. Серый оставлен только
-   как обратная связь на наведение (:hover) — там, где он действительно
-   значит "сюда можно кликнуть", а не как фон структурного заголовка. */
+/* Постоянная серая заливка в состоянии покоя (повторный обзор формы,
+   "покрась в постоянный серый цвет") — ранее заливку убирали совсем
+   ("слишком много серого"), оставляя серый только на :hover, но по итогам
+   ещё одного обзора пользователь явно попросил вернуть постоянный фон —
+   заголовок категории должен визуально читаться как структурный элемент
+   списка всегда, а не только при наведении. При этом наведение всё равно
+   должно давать заметную обратную связь, поэтому hover — на тон темнее
+   базовой заливки (var(--border), тот же приём, что и в остальных местах
+   проекта для "ещё темнее, чем surface-2"). */
 .eq-pick-group {
   display: flex; align-items: center; gap: 6px; width: 100%; border: none; text-align: left; font: inherit;
   padding: 6px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em;
-  color: var(--muted); background: none; border-bottom: 1px solid var(--border); cursor: pointer;
+  color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--border); cursor: pointer;
 }
-.eq-pick-group:hover { background: var(--surface-2); }
+.eq-pick-group:hover { background: var(--border); }
 .eq-pick-group svg { width: 12px; height: 12px; transition: transform 0.1s; flex: none; }
 .eq-pick-group.collapsed svg { transform: rotate(-90deg); }
 /* Само название категории чуть легче, чем базовый вес заголовка (четвёртый
