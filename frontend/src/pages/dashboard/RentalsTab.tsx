@@ -10,7 +10,6 @@ import {
   IconClose,
   IconAlert,
   IconCalendar,
-  IconChevronRight,
   IconChevronDown,
   IconCheck,
   IconShield,
@@ -2122,15 +2121,6 @@ export function RentalsTab({
             {soonBadge && <Badge meta={soonBadge} />}
             {partialBadge && <Badge meta={partialBadge} />}
             {depositBadge && <Badge meta={depositBadge} />}
-            {/* Намёк, что карточка целиком кликабельна (40-й проход, по
-                итогам обзора: раньше это было незаметно — только
-                hover-эффект самой карточки, который пользователь мог
-                заметить, только уже наведясь). margin-left: auto
-                прижимает шеврон к правому краю строки, не трогая
-                grid-раскладку самой карточки. */}
-            <span className="rental-open-hint" title="Открыть детали аренды">
-              <IconChevronRight />
-            </span>
           </div>
           <div className="rental-items">{itemNames}</div>
           <div className="rental-meta">
