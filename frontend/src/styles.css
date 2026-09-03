@@ -266,6 +266,15 @@ nav.nav { display: flex; flex-direction: column; gap: 2px; }
 .search-box:focus-within { background: var(--surface); border-color: var(--accent); color: var(--ink); }
 .search-box input { border: none; background: none; padding: 0; flex: 1; font-size: 13.5px; color: inherit; }
 .search-box input:focus { border: none; }
+/* :focus-within выше уже даёт свою, всей пилюли, подсветку фокуса (смена
+   фона+рамки) — глобальное правило ":focus-visible { box-shadow:
+   var(--focus-ring); border-radius: 4px }" (см. начало файла) добавляло
+   ВТОРОЙ, почти прямоугольный индикатор поверх самого <input>, не
+   совпадающий по форме с закруглением пилюли (24px против 4px) — снаружи
+   плавный овал, внутри отдельная синяя рамка помельче. Доступность не
+   страдает: видимый индикатор фокуса остаётся, просто один — на самой
+   .search-box, а не дублируется на вложенном инпуте. */
+.search-box input:focus-visible { outline: none; box-shadow: none; }
 
 /* ---------- Статистические плашки ---------- */
 .stat-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; margin-bottom: 16px; }
