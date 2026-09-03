@@ -42,7 +42,7 @@ import type { Rental } from "../../../api/types";
 import { useData } from "../../../context/DataContext";
 import { RENTAL_META, Badge, rentalDisplayStatus } from "../../../lib/statusMeta";
 import { money, fmtDate, todayISO } from "../../../lib/format";
-import { IconClose, IconUser, IconEdit, IconRepeat, IconCalendar } from "../../../lib/icons";
+import { IconClose, IconUser, IconEdit, IconRepeat, IconCalendar, IconCard } from "../../../lib/icons";
 import { itemRateLabel, itemRateLabelTitle } from "./helpers";
 import { api, ApiError } from "../../../api/client";
 import { normalizePhoneDigits } from "../clients/helpers";
@@ -619,10 +619,13 @@ export function RentalDetailPanel({
             {money(rental.total)}
           </span>
           <span className="k">Оплачено</span>
-          <span className="mono" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "10px" }}>
+          <span className="mono" style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "8px" }}>
             {money(rental.paid_amount)}
-            <button className="btn btn-sm" type="button" onClick={() => setPaymentModalOpen(true)}>
-              Записать платёж
+            {/* Иконка вместо текстовой кнопки (48-й проход, обратная связь
+                по карточке аренды) — в строке "Оплачено" рядом с суммой
+                текстовая кнопка выглядела тяжелее самого значения. */}
+            <button className="icon-btn" type="button" title="Записать платёж" onClick={() => setPaymentModalOpen(true)}>
+              <IconCard />
             </button>
           </span>
           {rental.paid_amount < rental.total && (

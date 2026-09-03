@@ -206,3 +206,11 @@ export const IconHistory = (p: SVGProps<SVGSVGElement>) => (
 export const IconShield = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></Svg>
 );
+
+// 48-й проход, обратная связь по карточке аренды: "Записать платёж" была
+// текстовой кнопкой в узкой строке "Оплачено" — заметно тяжелее остальных
+// значений блока "Финансы". Карта/платёж (Feather "credit-card") — тот же
+// компактный icon-btn, что и у остальных редких действий в карточке.
+export const IconCard = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}><rect x="1" y="4" width="22" height="16" rx="2" /><line x1="1" y1="10" x2="23" y2="10" /></Svg>
+);

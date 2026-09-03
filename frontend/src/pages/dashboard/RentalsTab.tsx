@@ -1181,8 +1181,15 @@ function EditRentalModal({
           <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
         </div>
       </div>
+      {/* Без style={{ marginTop: -8 }} — этот отрицательный отступ ничем не
+          компенсировался (у .field-row нет собственного margin-bottom) и
+          физически затягивал текст подсказки на 8px внутрь полей дат выше
+          (обратная связь по карточке аренды, 48-й проход; подтверждено
+          локальным Playwright-замером getBoundingClientRect). Без
+          переопределения остаётся обычный margin-top: 4px у .field-hint,
+          как и у всех остальных подсказок под полями. */}
       {isActive && (
-        <div className="field-hint" style={{ marginTop: -8 }}>
+        <div className="field-hint">
           Дата начала зафиксирована: оборудование уже выдано клиенту.
         </div>
       )}
@@ -2557,14 +2564,17 @@ export function RentalsTab({
           businessId={businessId}
           rentalId={openRentalId}
           onClose={() => setOpenRentalId(null)}
-          onOpenClient={(clientId) => {
-            setOpenRentalId(null);
-            onOpenClient(clientId);
-          }}
-          onOpenEquipment={(equipmentId) => {
-            setOpenRentalId(null);
-            onOpenEquipment(equipmentId);
-          }}
+          // Карточка клиента/оборудования (обратная связь пользователя,
+          // 43-й проход — "закрыл карточку клиента, а карточка аренды тоже
+          // закрылась"): раньше здесь стоял setOpenRentalId(null) перед
+          // открытием — панель клиента/оборудования рендерится в
+          // Dashboard.tsx отдельным слайдовером ПОВЕРХ этого (тот же
+          // z-index, но позже в DOM), так что оставлять openRentalId как
+          // есть — этого достаточно, чтобы после закрытия верхней панели
+          // снова стала видна карточка аренды под ней, без отдельного
+          // стека "куда вернуться".
+          onOpenClient={(clientId) => onOpenClient(clientId)}
+          onOpenEquipment={(equipmentId) => onOpenEquipment(equipmentId)}
           // Продление (41-й проход) НЕ закрывает панель — быстрое действие,
           // после которого логично остаться на месте и увидеть обновлённые
           // даты в самой панели (rentals перечитываются из контекста).
@@ -2592,11 +2602,13 @@ export function RentalsTab({
             const r = rentals.find((x) => x.id === rentalId);
             if (r) setCancelRental(r);
           }}
-          // "Повторить аренду" — навигационное действие (открывает другую
-          // форму на весь экран), поэтому панель закрывается первой — тот же
-          // принцип, что и у onOpenClient/onOpenEquipment выше.
+          // "Повторить аренду" открывает форму как нативный <dialog> — она
+          // и так рендерится в top layer браузера поверх слайдовера (тот же
+          // принцип, что и onEdit/onExtend и т.п. выше: не трогаем
+          // openRentalId, обратная связь 43-го прохода). Раньше панель
+          // закрывалась перед открытием формы, и после отмены формы
+          // карточка аренды пропадала целиком.
           onRepeat={(clientId, equipmentIds) => {
-            setOpenRentalId(null);
             setRepeatDraft({ clientId, equipmentIds });
             setShowCreate(true);
           }}
