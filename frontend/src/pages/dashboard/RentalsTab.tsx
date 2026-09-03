@@ -1528,63 +1528,72 @@ export function RentalsTab({
     <div>
       <div className="tab-toolbar-grid">
         {/* Левый кластер: две строки (45-й проход, по итогам обзора верхней
-            части "Аренды"/"Клиенты"/"Оборудование" разом) — раньше сегменты
-            статусов и сортировка/переключатели стояли в одном ряду через
-            .toolbar-divider (44-й проход) и переносились по ширине сами по
-            себе, из-за чего у разных вкладок получалось разное число строк
-            в зависимости от того, сколько контролов помещалось. Теперь
-            граница между "основными фильтрами" (сегменты) и
-            "дополнительными" (сортировка + переключатели) — фиксированная,
-            не зависит от ширины окна: сегменты всегда в своей строке,
-            остальное — всегда во второй, как и на "Оборудовании"/
-            "Клиентах" (см. те же файлы). Разделитель .toolbar-divider тут
-            больше не нужен — строки уже разделены переносом. */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          <div className="segmented">
-            {FILTERS.map((f) => (
-              <button key={f.id} type="button" className={filter === f.id ? "active" : ""} onClick={() => setFilter(f.id)}>
-                {f.label}
-              </button>
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <Dropdown
-              value={sort}
-              onChange={setSort}
-              placeholder={SORTS[0]?.label ?? ""}
-              options={SORTS.map((s) => ({ value: s.id, label: s.label }))}
-            />
+            части "Аренды"/"Клиенты"/"Оборудование" разом; 46-й проход —
+            фикс регрессии + перестановка). "align-items: flex-start" на
+            колоночном флекс-контейнере обязателен: без него у флекс-детей
+            действует значение по умолчанию "stretch" — сегменты (div
+            .segmented, сам по себе inline-flex и должен занимать только
+            свою ширину) как флекс-item колоночного родителя растягивались
+            на всю ширину строки, вместе с собственной серой рамкой/фоном
+            .segmented — рамка "заливала" всю строку до конца, а не только
+            область вокруг вкладок. Ровно то, на что жаловался пользователь
+            (скриншот) — эта же поправка нужна и в ClientsTab.tsx, там та
+            же причина.
+
+            Три кнопки-переключателя (риск/скоро истекает/депозит) переехали
+            из второй строки в первую, к сегментам статусов (через
+            .toolbar-divider — тот же приём, что и "Недавние" на
+            ClientsTab.tsx) — по просьбе пользователя. Вторая строка теперь
+            содержит только сортировку. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px", alignItems: "flex-start" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            <div className="segmented">
+              {FILTERS.map((f) => (
+                <button key={f.id} type="button" className={filter === f.id ? "active" : ""} onClick={() => setFilter(f.id)}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <div className="toolbar-divider" />
             {/* icon-only (41-й проход) — подсказка (title) и так объясняет
                 смысл кнопки при наведении, текстовая подпись была бы
                 избыточна в и без того плотном ряду. */}
-            <button
-              type="button"
-              className={"btn btn-icon-only" + (riskOnly ? " btn-primary" : "")}
-              title="Показать только клиентов «на контроле» или из чёрного списка"
-              aria-label="Только рискованные"
-              onClick={() => setRiskOnly((v) => !v)}
-            >
-              <IconAlert />
-            </button>
-            <button
-              type="button"
-              className={"btn btn-icon-only" + (expiringOnly ? " btn-primary" : "")}
-              title="Показать только аренды в работе, которые истекают в ближайшие 2 дня"
-              aria-label="Истекает скоро"
-              onClick={() => setExpiringOnly((v) => !v)}
-            >
-              <IconCalendar />
-            </button>
-            <button
-              type="button"
-              className={"btn btn-icon-only" + (depositDueOnly ? " btn-primary" : "")}
-              title="Показать только закрытые аренды с невозвращённым депозитом"
-              aria-label="Депозит не возвращён"
-              onClick={() => setDepositDueOnly((v) => !v)}
-            >
-              <IconShield />
-            </button>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <button
+                type="button"
+                className={"btn btn-icon-only" + (riskOnly ? " btn-primary" : "")}
+                title="Показать только клиентов «на контроле» или из чёрного списка"
+                aria-label="Только рискованные"
+                onClick={() => setRiskOnly((v) => !v)}
+              >
+                <IconAlert />
+              </button>
+              <button
+                type="button"
+                className={"btn btn-icon-only" + (expiringOnly ? " btn-primary" : "")}
+                title="Показать только аренды в работе, которые истекают в ближайшие 2 дня"
+                aria-label="Истекает скоро"
+                onClick={() => setExpiringOnly((v) => !v)}
+              >
+                <IconCalendar />
+              </button>
+              <button
+                type="button"
+                className={"btn btn-icon-only" + (depositDueOnly ? " btn-primary" : "")}
+                title="Показать только закрытые аренды с невозвращённым депозитом"
+                aria-label="Депозит не возвращён"
+                onClick={() => setDepositDueOnly((v) => !v)}
+              >
+                <IconShield />
+              </button>
+            </div>
           </div>
+          <Dropdown
+            value={sort}
+            onChange={setSort}
+            placeholder={SORTS[0]?.label ?? ""}
+            options={SORTS.map((s) => ({ value: s.id, label: s.label }))}
+          />
         </div>
         {/* Колонка кнопок в .tab-toolbar-grid — тот же фикс, что и в
             ClientsTab.tsx/EquipmentTab.tsx (30-й проход): держит эту
