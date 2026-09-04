@@ -689,14 +689,24 @@ tr.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background
 /* 63-й проход, обзор — "штриховка обслуживания слишком бледная, легко
    принять за пустую ячейку": раньше вторая полоса была var(--surface-3)
    (нейтральный серый, тот же, что и зебра выходных, — на глаз паттерн
-   читался скорее как "серое", а не "жёлтое"); теперь обе полосы жёлтые —
-   var(--warning-soft) чередуется с самим var(--warning) вместо нейтрального
-   серого, тот же по смыслу приём, что и у самой плашки "Просрочено" (сплошной
-   насыщенный тон), только полосами, а не заливкой целиком — полосы можно
-   различить издалека, не путая с занятой/свободной ячейкой. Swatch в легенде
-   (CalendarTab.tsx) дублирует тот же градиент инлайн-стилем — поправлен туда
-   же, чтобы не разойтись с самими ячейками. */
-.cal-fill.st-maintenance { background: repeating-linear-gradient(45deg, var(--warning-soft), var(--warning-soft) 4px, var(--warning) 4px, var(--warning) 8px); }
+   читался скорее как "серое", а не "жёлтое"). Первая попытка (var(--warning)
+   чистым, без смешивания) оказалась обратной крайностью — по прямому
+   отзыву "неприятно для глаза", тёмно-коричневая полоса выглядела слишком
+   резко/тяжело рядом с остальной, гораздо более спокойной палитрой сетки.
+   Сошлись на color-mix(): вторая полоса — не сам var(--warning), а его смесь
+   с var(--warning-soft) (55% насыщенного цвета на светлой подложке) —
+   заметно теплее и контрастнее исходной серой версии, но мягче литого
+   насыщенного тона. Swatch в легенде (CalendarTab.tsx) дублирует тот же
+   градиент инлайн-стилем — поправлен туда же, чтобы не разойтись с самими
+   ячейками. */
+.cal-fill.st-maintenance {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--warning-soft), var(--warning-soft) 5px,
+    color-mix(in srgb, var(--warning) 55%, var(--warning-soft)) 5px,
+    color-mix(in srgb, var(--warning) 55%, var(--warning-soft)) 10px
+  );
+}
 .cal-fill-label { display: inline-flex; align-items: center; gap: 2px; font-size: 9px; font-weight: 700; color: #fff; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; padding: 0 2px; }
 .cal-fill-label.dark { color: var(--info); }
 /* Флажок "клиент в чёрном списке" (63-й проход, обзор — "цвет ячейки не

@@ -1157,7 +1157,7 @@ export function CalendarTab({
             <span className="item"><span className="sw" style={{ background: "var(--info-soft)", border: "1px dashed var(--info)" }} />Забронировано</span>
             <span className="item"><span className="sw" style={{ background: "var(--accent)" }} />В аренде</span>
             <span className="item"><span className="sw" style={{ background: "var(--critical)" }} />Просрочено</span>
-            <span className="item"><span className="sw" style={{ background: "repeating-linear-gradient(45deg,var(--warning-soft),var(--warning-soft) 3px,var(--warning) 3px,var(--warning) 6px)" }} />Обслуживание</span>
+            <span className="item"><span className="sw" style={{ background: "repeating-linear-gradient(45deg,var(--warning-soft),var(--warning-soft) 4px,color-mix(in srgb,var(--warning) 55%,var(--warning-soft)) 4px,color-mix(in srgb,var(--warning) 55%,var(--warning-soft)) 8px)" }} />Обслуживание</span>
             <span className="item"><span className="sw" style={{ background: "transparent", border: "2px solid var(--today)" }} />Сегодня</span>
             {/* 63-й проход — тот же флажок, что и в самих ячейках (cal-fill-flag),
                 на нейтральной подложке .sw, чтобы объяснить точку саму по себе,
