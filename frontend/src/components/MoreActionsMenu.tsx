@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { IconChevronDown, IconMore } from "../lib/icons";
 
 export interface MoreAction {
@@ -18,11 +19,11 @@ export interface MoreAction {
  * Прячет их за одной кнопкой, оставляя на виду только то, что действительно
  * часто нужно.
  *
- * Тот же idiom клика вне панели и те же классы .cat-filter-panel/-option,
- * что и у components/Dropdown.tsx (единственный выпадающий список в
- * проекте) — но список опций здесь произвольные действия (onClick), а не
- * выбор одного значения, поэтому отдельный компонент, а не повторное
- * использование Dropdown с "фиктивным" value.
+ * Те же классы .cat-filter-panel/-option, что и у components/Dropdown.tsx
+ * (единственный выпадающий список в проекте) — но список опций здесь
+ * произвольные действия (onClick), а не выбор одного значения, поэтому
+ * отдельный компонент, а не повторное использование Dropdown с "фиктивным"
+ * value.
  *
  * Сама кнопка-триггер НЕ переиспользует .cat-filter-btn (29-й проход, ещё
  * один повторный обзор — пользователь справедливо заметил, что кнопка
@@ -37,6 +38,13 @@ export interface MoreAction {
  * текста) — а выпадающая панель и её пункты остаются на общих
  * .cat-filter-panel/.cat-filter-option, чтобы не плодить лишний CSS для
  * того, что и так выглядит правильно.
+ *
+ * ПАНЕЛЬ ПОРТИРУЕТСЯ В document.body (51-й проход — см. подробный разбор
+ * ниже, "почему портал"). Раньше панель была `position: absolute` внутри
+ * обычного `<div className="cat-filter">` рядом с кнопкой — тем же
+ * способом, каким этот компонент жил с самого начала. Разбор бага "в
+ * выпадающем меню просвечивается следующее 'Ещё'" показал, что этого
+ * недостаточно в принципе, не только в этом конкретном случае.
  */
 export function MoreActionsMenu({
   actions,
@@ -67,118 +75,163 @@ export function MoreActionsMenu({
   iconOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left?: number; right?: number } | null>(null);
+  // Куда портировать панель — обычно document.body, но если кнопка внутри
+  // открытого <dialog> (RentalDetailPanel/ClientDetailPanel/EquipmentDetailPanel
+  // рендерятся именно так, см. useModalDialog.ts), портал в body рисуется ПОД
+  // диалогом: открытый <dialog> уходит в отдельный слой браузера ("top
+  // layer"), который красится поверх ВСЕГО обычного содержимого страницы
+  // независимо от z-index. Тот же приём и та же причина, что и в
+  // CategoryAutocomplete.tsx (17-й проход) — портал в САМ `<dialog>` решает
+  // это, оставляя панель в top layer'е вместе с диалогом.
+  const [portalTarget, setPortalTarget] = useState<Element | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  // Досчитанный нижний отступ панели — не 0 только когда прямо под открытой
-  // панелью, при закрытии, окажется частично перекрытый триггер ДРУГОГО
-  // экземпляра MoreActionsMenu (см. комментарий у useLayoutEffect ниже).
-  const [extraBottom, setExtraBottom] = useState(0);
+
+  function openMenu() {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos(
+      align === "right" ? { top: r.bottom + 4, right: window.innerWidth - r.right } : { top: r.bottom + 4, left: r.left }
+    );
+    setPortalTarget(el.closest("dialog") || document.body);
+    setOpen(true);
+  }
 
   useEffect(() => {
     if (!open) return;
-    function onDocClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    function onDocMouseDown(e: MouseEvent) {
+      if (triggerRef.current?.contains(e.target as Node)) return;
+      if (panelRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
     }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    // Закрытие по скроллу/ресайзу (тот же приём, что и в
+    // CategoryAutocomplete.tsx) — position:fixed привязана к координатам на
+    // момент открытия, при скролле она "отклеится" от кнопки-триггера, если
+    // не закрыть. capture:true — чтобы поймать скролл ВНУТРИ узкого
+    // контейнера (например, тела .slideover), а не только скролл окна.
+    function onScrollOrResize() {
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
   }, [open]);
 
   /**
    * 51-й проход — точная причина бага "в выпадающем меню просвечивается
-   * следующее 'Ещё'" (репортился дважды, второй раз — с 4 скриншотами на
-   * разных карточках, с явным требованием найти точную причину без
-   * затемнения). Живой замер в DOM (getBoundingClientRect +
-   * elementsFromPoint) показал: панель НЕ прозрачная и НЕ ниже по
-   * z-index — в точке стыка она честно оказывается самым верхним
-   * элементом. Настоящая причина другая — карточки идут плотно
-   * (margin-bottom всего 10px), и КАЖДАЯ заканчивается собственной кнопкой
-   * "Ещё"/"⋯" в том же столбце, где раскрывается панель. Панель меню
-   * (~120px высотой у списка из 3 пунктов) при открытии геометрически
-   * задевает верхнюю часть такой же кнопки соседней карточки, но только
-   * ЧАСТИЧНО — нижняя часть её подписи/шеврона остаётся видна сразу под
-   * краем панели. Именно это частичное (не полное) перекрытие двух честных
-   * непрозрачных слоёв и читается как "слои перемешались". Смена
-   * направления раскрытия не решает проблему — тем же замером
-   * подтверждено, что вверх панель ровно так же перекрывает "Ещё"
-   * предыдущей карточки (структура одинаковая у всех карточек).
+   * следующее 'Ещё'" (репортился трижды: сначала со скриншотами, потом с
+   * явным требованием найти точную причину без затемнения, и в конце — с
+   * новым наблюдением, что при наведении на соседнее "Ещё" открытое меню
+   * начинает МОРГАТЬ). Первая версия фикса (просто досчитать панели нижний
+   * отступ) была основана на неверном диагнозе и не решила проблему до
+   * конца — именно моргание при наведении это и вскрыло. Настоящая причина
+   * нашлась только через точный замер живого DOM (getBoundingClientRect +
+   * elementsFromPoint, на несжатом окне — не через скриншоты):
    *
-   * Фикс — не затемнение (пользователь явно отверг его как костыль,
-   * которого нет больше нигде на сайте), а устранение самой причины
-   * частичного перекрытия: после открытия меряем реальную геометрию,
-   * ищем через elementsFromPoint вдоль нижнего края панели триггер ДРУГОГО
-   * экземпляра этого же компонента (маркер data-more-trigger — не
-   * произвольная кнопка со случайно совпавшим классом, и не наш
-   * собственный триггер, см. !ref.current?.contains) и, если он перекрыт
-   * лишь частично, досчитываем панели ровно столько нижнего отступа,
-   * чтобы накрыть его целиком — частичное перекрытие становится полным
-   * (без обрезанного "хвоста" подписи) либо, если места хватает, не
-   * задевает соседа вовсе. Эффект молчит (extraBottom = 0) везде, где
-   * рядом нет второй такой же кнопки — тулбары "Клиенты"/"Оборудование",
-   * панели карточек и т.п. не затронуты.
+   * Панель была `position: absolute` ВНУТРИ `<div className="cat-filter">`
+   * этой конкретной карточки, с `z-index: 5`. Соседняя карточка ниже — со
+   * своей ТАКОЙ ЖЕ кнопкой "Ещё" — тоже обычный `<div className="cat-filter">`
+   * с `position: relative`, но БЕЗ z-index (auto). По правилам CSS
+   * z-index сравнивается только МЕЖДУ элементами внутри одного контекста
+   * наложения — а `position:relative` без явного z-index (как у обеих
+   * .cat-filter-обёрток) СВОЙ контекст наложения не создаёт. Значит, с
+   * точки зрения общего (корневого) контекста наложения страницы, ЦЕЛИКОМ
+   * .cat-filter-обёртка этой карточки (вместе со своей z-index:5 панелью
+   * внутри) и .cat-filter-обёртка соседней карточки — это два ОДИНАКОВЫХ
+   * "auto"-уровня, а между элементами одного уровня порядок отрисовки
+   * решает ПОРЯДОК В DOM, а не то, что z-index:5 стоит где-то глубоко
+   * внутри одной из них. Карточка ниже в DOM идёт ПОСЛЕ текущей — значит
+   * её кнопка "Ещё" рисуется ПОВЕРХ всей нашей открытой панели целиком,
+   * z-index:5 внутри панели тут ни при чём (он "работает" только против
+   * СОБСТВЕННЫХ соседей внутри той же .cat-filter, а других там нет).
+   *
+   * Именно поэтому баг выглядел как "частичное просвечивание": у
+   * `.more-menu-btn` нет фона, пока по ней не навести (`background: none`,
+   * только на `:hover` появляется заливка) — она и правда была ВСЕГДА
+   * поверх панели, но пока не в фокусе мыши сквозь неё было видно только
+   * текст/иконку (у них заливки не бывает), а не прямоугольник целиком.
+   * При наведении на неё включался `:hover`-фон `.more-menu-btn` —
+   * ВНЕЗАПНО появлялся непрозрачный прямоугольник поверх части нашей
+   * панели ровно там, где курсор — это и есть "моргание", которое заметил
+   * пользователь. Смена направления раскрытия не решает проблему — при
+   * открытии вверх та же логика играет против ПРЕДЫДУЩЕЙ карточки.
+   *
+   * Фикс — не затемнение и не подгонка отступов "на глаз" (пользователь
+   * явно отверг костыли), а устранение самой причины: панель рендерится
+   * ПОРТАЛОМ в document.body (через createPortal), с `position: fixed` и
+   * координатами из getBoundingClientRect() кнопки-триггера — точно тем же
+   * приёмом, каким в этом проекте уже решена ровно такая же по природе
+   * проблема (CategoryAutocomplete.tsx, 16-й/17-й проход, .autocomplete-panel).
+   * Портированная в body панель — прямой потомок body, а не глубоко вложенный
+   * элемент внутри .rental-card — и однозначно выигрывает сравнение
+   * z-index против ЛЮБОГО обычного содержимого страницы, независимо от
+   * того, какая карточка раньше или позже в DOM.
    */
-  useLayoutEffect(() => {
-    if (!open) {
-      setExtraBottom(0);
-      return;
-    }
-    const panelEl = panelRef.current;
-    if (!panelEl) return;
-    const panelRect = panelEl.getBoundingClientRect();
-    // Несколько точек вдоль нижнего края, а не только центр — соседняя
-    // кнопка может оказаться у любого края панели в зависимости от align.
-    const xs = [panelRect.left + 4, (panelRect.left + panelRect.right) / 2, panelRect.right - 4];
-    let extra = 0;
-    for (const x of xs) {
-      const hit = document
-        .elementsFromPoint(x, panelRect.bottom - 1)
-        .find((el) => el instanceof HTMLElement && el.hasAttribute("data-more-trigger") && !ref.current?.contains(el));
-      if (!hit) continue;
-      const hitRect = hit.getBoundingClientRect();
-      // Перекрытие именно частичное: нижний край соседней кнопки ниже
-      // нижнего края панели, а верхний — выше него. Иначе перекрытия либо
-      // нет, либо оно уже полное — дорабатывать нечего.
-      if (hitRect.bottom > panelRect.bottom && hitRect.top < panelRect.bottom) {
-        extra = Math.max(extra, Math.ceil(hitRect.bottom - panelRect.bottom) + 2);
-      }
-    }
-    setExtraBottom(extra);
-  }, [open]);
-
   return (
-    <div className="cat-filter" ref={ref}>
+    <>
       {iconOnly ? (
-        <button type="button" className="icon-btn" title={label} data-more-trigger onClick={() => setOpen((v) => !v)}>
+        <button
+          type="button"
+          ref={triggerRef}
+          className="icon-btn"
+          title={label}
+          onClick={() => (open ? setOpen(false) : openMenu())}
+        >
           <IconMore />
         </button>
       ) : (
-        <button type="button" className="more-menu-btn" data-more-trigger onClick={() => setOpen((v) => !v)}>
+        <button
+          type="button"
+          ref={triggerRef}
+          className="more-menu-btn"
+          onClick={() => (open ? setOpen(false) : openMenu())}
+        >
           <span>{label}</span>
           <IconChevronDown />
         </button>
       )}
-      {open && (
-        <div
-          ref={panelRef}
-          className={"cat-filter-panel" + (align === "right" ? " cat-filter-panel-right" : "")}
-          style={extraBottom ? { paddingBottom: 6 + extraBottom } : undefined}
-        >
-          {actions.map((a) => (
-            <button
-              type="button"
-              key={a.key}
-              className="cat-filter-option"
-              disabled={a.disabled}
-              onClick={() => {
-                setOpen(false);
-                a.onClick();
-              }}
-            >
-              {a.icon}
-              <span className="cat-filter-name">{a.label}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={panelRef}
+            className="cat-filter-panel"
+            // z-index:300 инлайном — перебивает CSS-правило .cat-filter-panel
+            // (z-index:5, рассчитанное на обычное, непортированное положение
+            // внутри узкого локального контекста наложения тулбара). Здесь
+            // панель — прямой потомок body/<dialog> и сравнивается уже с
+            // ЕГО соседями: .slideover-панель карточки клиента/оборудования
+            // стоит на z-index:41 — без явного перебития наше меню оказалось
+            // бы отрисовано ПОД ней и было бы не видно. 300 — то же
+            // значение, что и у .autocomplete-panel (CategoryAutocomplete.tsx),
+            // другого портированного в body выпадающего списка в проекте.
+            style={{ position: "fixed", top: pos.top, left: pos.left, right: pos.right, zIndex: 300 }}
+          >
+            {actions.map((a) => (
+              <button
+                type="button"
+                key={a.key}
+                className="cat-filter-option"
+                disabled={a.disabled}
+                onClick={() => {
+                  setOpen(false);
+                  a.onClick();
+                }}
+              >
+                {a.icon}
+                <span className="cat-filter-name">{a.label}</span>
+              </button>
+            ))}
+          </div>,
+          portalTarget || document.body
+        )}
+    </>
   );
 }
