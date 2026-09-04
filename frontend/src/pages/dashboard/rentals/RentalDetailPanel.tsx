@@ -42,7 +42,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Rental } from "../../../api/types";
 import { useData } from "../../../context/DataContext";
 import { RENTAL_META, Badge, rentalDisplayStatus } from "../../../lib/statusMeta";
-import { money, fmtDate, todayISO } from "../../../lib/format";
+import { money, fmtDate, todayISO, isoAddDays } from "../../../lib/format";
 import { IconClose, IconUser, IconEdit, IconRepeat, IconCalendar, IconCard } from "../../../lib/icons";
 import { itemRateLabel, itemRateLabelTitle } from "./helpers";
 import { api, ApiError } from "../../../api/client";
@@ -382,6 +382,14 @@ export function RentalDetailPanel({
   // аренду целиком, для этого уже есть "Принять возврат" выше, отдельный
   // путь к тому же результату только запутывает.
   const canPartialReturn = (st === "active" || st === "overdue") && rental.items.length > 1;
+  // Выдать заранее, до наступления даты начала (57-й проход, обзор с
+  // Календаря) — по прямому указанию пользователя буфер в 1 день ("иногда
+  // отдают на день-два раньше"), 1:1 с guard'ом на бэкенде (issue_rental,
+  // app/api/routes/rentals.py) — здесь только UX-слой поверх той же
+  // проверки: кнопку не прячем совсем (бронь по-прежнему нужно будет
+  // выдать), просто дизейблим заранее с подсказкой, чтобы не приходилось
+  // сначала заполнять форму и только потом узнавать об ошибке.
+  const canIssueNow = rental.start_date <= isoAddDays(todayISO(), 1);
 
   function toggleReturnSelect(equipmentId: string) {
     setSelectedReturnIds((prev) => (prev.includes(equipmentId) ? prev.filter((id) => id !== equipmentId) : [...prev, equipmentId]));
@@ -552,7 +560,13 @@ export function RentalDetailPanel({
             от "active" (см. rentalDisplayStatus), но по факту это та же
             "active"-аренда в БД. */}
         {st === "booked" && (
-          <button className="btn btn-primary btn-sm" type="button" onClick={() => onIssue(rental.id)}>
+          <button
+            className="btn btn-primary btn-sm"
+            type="button"
+            onClick={() => onIssue(rental.id)}
+            disabled={!canIssueNow}
+            title={canIssueNow ? undefined : `Можно выдать не раньше ${fmtDate(isoAddDays(rental.start_date, -1))}`}
+          >
             Выдать
           </button>
         )}

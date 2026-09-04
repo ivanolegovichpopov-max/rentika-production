@@ -61,8 +61,14 @@ def test_full_rental_cycle_matches_reference_price(client):
         json={
             "client_id": client_id,
             "equipment_ids": [equipment_id],
-            "start_date": _future(30),
-            "end_date": _future(58),  # 30..58 включительно — 29 дней, тот же эталонный пример
+            # 1..29 включительно — 29 дней, тот же эталонный пример; start
+            # сдвинут с _future(30) на _future(1) в 57-м проходе — /issue
+            # ниже теперь требует, чтобы дата начала брони была не дальше
+            # чем на 1 день в будущем (см. guard в issue_rental,
+            # app/api/routes/rentals.py), а сама сумма 1287 ₽ зависит только
+            # от количества дней (29), не от конкретных календарных дат.
+            "start_date": _future(1),
+            "end_date": _future(29),
         },
         headers=headers,
     )
@@ -90,8 +96,8 @@ def test_full_rental_cycle_matches_reference_price(client):
         json={
             "client_id": conflict_client["id"],
             "equipment_ids": [equipment_id],
-            "start_date": _future(34),
-            "end_date": _future(40),
+            "start_date": _future(5),
+            "end_date": _future(11),
         },
         headers=headers,
     )
@@ -103,7 +109,7 @@ def test_full_rental_cycle_matches_reference_price(client):
 
     return_resp = client.post(
         f"/api/businesses/{business_id}/rentals/{rental_id}/return",
-        json={"actual_return": _future(58), "damage_fee": 0},
+        json={"actual_return": _future(29), "damage_fee": 0},
         headers=headers,
     )
     assert return_resp.status_code == 200
@@ -134,8 +140,10 @@ def test_return_with_damage_fee_and_discount_reflects_in_breakdown(client):
         json={
             "client_id": client_id,
             "equipment_ids": [eq["id"]],
-            "start_date": _future(10),
-            "end_date": _future(12),
+            # start сдвинут с _future(10) на _future(1) в 57-м проходе — см.
+            # тот же комментарий в test_full_rental_cycle_matches_reference_price.
+            "start_date": _future(1),
+            "end_date": _future(3),
         },
         headers=headers,
     ).json()
@@ -148,7 +156,7 @@ def test_return_with_damage_fee_and_discount_reflects_in_breakdown(client):
 
     return_resp = client.post(
         f"/api/businesses/{business_id}/rentals/{rental_id}/return",
-        json={"actual_return": _future(12), "damage_fee": 200, "discount": 300},
+        json={"actual_return": _future(3), "damage_fee": 200, "discount": 300},
         headers=headers,
     )
     assert return_resp.status_code == 200
@@ -309,7 +317,11 @@ def test_issue_and_return_notes_use_demo_defaults_when_omitted(client):
     headers = auth_headers(owner["access_token"])
     business_id = _get_business_id(client, owner["access_token"])
 
-    _, _, rental = _setup_rental(client, headers, business_id)
+    # start/end переопределены явно (57-й проход) — /issue ниже требует,
+    # чтобы дата начала брони была не дальше чем на 1 день в будущем (см.
+    # guard в issue_rental, app/api/routes/rentals.py); дефолт _setup_rental
+    # (_future(30)) для этого теста больше не подходит.
+    _, _, rental = _setup_rental(client, headers, business_id, start=_future(1), end=_future(3))
     rental_id = rental["id"]
     assert rental["issue_notes"] is None
     assert rental["return_notes"] is None
@@ -320,7 +332,7 @@ def test_issue_and_return_notes_use_demo_defaults_when_omitted(client):
 
     return_resp = client.post(
         f"/api/businesses/{business_id}/rentals/{rental_id}/return",
-        json={"actual_return": _future(32)},
+        json={"actual_return": _future(3)},
         headers=headers,
     )
     assert return_resp.status_code == 200
@@ -332,7 +344,9 @@ def test_issue_and_return_notes_persist_custom_text(client):
     headers = auth_headers(owner["access_token"])
     business_id = _get_business_id(client, owner["access_token"])
 
-    _, _, rental = _setup_rental(client, headers, business_id)
+    # start/end переопределены явно (57-й проход) — см. комментарий в
+    # test_issue_and_return_notes_use_demo_defaults_when_omitted выше.
+    _, _, rental = _setup_rental(client, headers, business_id, start=_future(1), end=_future(3))
     rental_id = rental["id"]
 
     issue_resp = client.post(
@@ -345,7 +359,7 @@ def test_issue_and_return_notes_persist_custom_text(client):
 
     return_resp = client.post(
         f"/api/businesses/{business_id}/rentals/{rental_id}/return",
-        json={"actual_return": _future(32), "return_notes": "Вернули с трещиной на кожухе."},
+        json={"actual_return": _future(3), "return_notes": "Вернули с трещиной на кожухе."},
         headers=headers,
     )
     assert return_resp.status_code == 200
@@ -379,12 +393,15 @@ def test_edit_rejects_when_rental_returned_or_cancelled(client):
     )
     assert patch_resp.status_code == 400
 
-    _, _, rental2 = _setup_rental(client, headers, business_id)
+    # start/end переопределены явно (57-й проход) — эту аренду ниже выдают
+    # ("/issue"), см. комментарий в
+    # test_issue_and_return_notes_use_demo_defaults_when_omitted выше.
+    _, _, rental2 = _setup_rental(client, headers, business_id, start=_future(1), end=_future(3))
     rental2_id = rental2["id"]
     client.post(f"/api/businesses/{business_id}/rentals/{rental2_id}/issue", headers=headers)
     client.post(
         f"/api/businesses/{business_id}/rentals/{rental2_id}/return",
-        json={"actual_return": _future(32)},
+        json={"actual_return": _future(3)},
         headers=headers,
     )
     patch_resp2 = client.patch(
@@ -398,7 +415,9 @@ def test_edit_ignores_start_date_change_on_active_rental(client):
     headers = auth_headers(owner["access_token"])
     business_id = _get_business_id(client, owner["access_token"])
 
-    _, _, rental = _setup_rental(client, headers, business_id)
+    # start/end переопределены явно (57-й проход) — см. комментарий в
+    # test_issue_and_return_notes_use_demo_defaults_when_omitted выше.
+    _, _, rental = _setup_rental(client, headers, business_id, start=_future(1), end=_future(3))
     rental_id = rental["id"]
     original_start = rental["start_date"]
 
@@ -1026,7 +1045,9 @@ def test_rental_history_lists_lifecycle_actions_with_meta(client):
     headers = auth_headers(owner["access_token"])
     business_id = _get_business_id(client, owner["access_token"])
 
-    _, _, rental = _setup_rental(client, headers, business_id)
+    # start/end переопределены явно (57-й проход) — см. комментарий в
+    # test_issue_and_return_notes_use_demo_defaults_when_omitted выше.
+    _, _, rental = _setup_rental(client, headers, business_id, start=_future(1), end=_future(3))
     rental_id = rental["id"]
     original_end = rental["end_date"]
 

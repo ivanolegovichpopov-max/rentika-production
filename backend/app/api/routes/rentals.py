@@ -1,6 +1,6 @@
 import base64
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -226,6 +226,20 @@ async def issue_rental(
     rental = _get_rental_or_404(db, ctx, rental_id)
     if rental.status != RentalStatus.booked:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Выдать можно только бронь")
+    # 57-й проход, обзор с Календаря: раньше можно было выдать бронь с
+    # датой начала в далёком будущем — статус аренды становился "в работе",
+    # а оборудование "в аренде" ещё до начала самого периода аренды, хотя по
+    # факту его никто не забирал. Буфер в 1 день — по прямому указанию
+    # пользователя: "иногда отдают на день-два раньше", после уточнения
+    # зафиксировали ровно 1 день, а не 2. Тот же принцип источника истины на
+    # бэкенде, что и у guard'а на equipment.py (перевод в "На обслуживании"
+    # при открытой аренде) — проверка здесь работает независимо от того, с
+    # какой вкладки пришёл запрос (Календарь/Аренды).
+    if rental.start_date > date.today() + timedelta(days=1):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Нельзя выдать бронь больше чем за день до даты начала — дождитесь начала периода аренды.",
+        )
     rental.status = RentalStatus.active
     rental.issue_notes = (body.issue_notes if body and body.issue_notes else None) or DEFAULT_ISSUE_NOTES
     for it in db.scalars(select(RentalItem).where(RentalItem.rental_id == rental.id)):

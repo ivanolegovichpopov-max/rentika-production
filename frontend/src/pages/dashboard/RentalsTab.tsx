@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../../api/client";
 import { useData } from "../../context/DataContext";
 import type { Rental } from "../../api/types";
-import { money, fmtDate, fmtDateRange, dayDiff } from "../../lib/format";
+import { money, fmtDate, fmtDateRange, dayDiff, isoAddDays } from "../../lib/format";
 import { RENTAL_META, Badge, rentalDisplayStatus, type StatusMeta } from "../../lib/statusMeta";
 import {
   IconPrinter,
@@ -518,7 +518,18 @@ export function RentalsTab({
         <div className="rental-actions" onClick={(e) => e.stopPropagation()}>
           {r.status === "booked" && (
             <>
-              <button className="btn btn-primary btn-sm" type="button" onClick={() => setIssueRental(r)}>
+              {/* Дизейблим заранее, до даты начала минус 1 день (57-й
+                  проход, обзор с Календаря — "выдать будущей датой") — тот
+                  же приём и та же формула (буфер 1 день), что и в
+                  RentalDetailPanel.tsx, guard на бэкенде общий для обоих
+                  мест (issue_rental, app/api/routes/rentals.py). */}
+              <button
+                className="btn btn-primary btn-sm"
+                type="button"
+                onClick={() => setIssueRental(r)}
+                disabled={dayDiff(r.start_date) > 1}
+                title={dayDiff(r.start_date) > 1 ? `Можно выдать не раньше ${fmtDate(isoAddDays(r.start_date, -1))}` : undefined}
+              >
                 Выдать
               </button>
               <button className="btn btn-sm" type="button" onClick={() => setEditRental(r)}>
