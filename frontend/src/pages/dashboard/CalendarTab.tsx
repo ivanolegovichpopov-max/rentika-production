@@ -495,6 +495,31 @@ export function CalendarTab({
     return result;
   }, [usable]);
 
+  // Первая/последняя строка своей категории среди РЕАЛЬНО отрисованных
+  // (63-й проход, уточнение по обводке "сегодня" — "ограничим категориями",
+  // см. .cal-cell.today выше в styles.css): верх/низ обводки нужен только
+  // на границах видимого блока группы, а не на каждой строке. "Видимый
+  // блок" — это usable за вычетом строк свёрнутых категорий (та же
+  // проверка, что и у самого условия пропуска строки в рендере ниже), иначе
+  // при свёрнутой соседней категории граница считалась бы неверно. Когда
+  // группировки нет вовсе (grouping=false — выбрана ровно одна категория,
+  // без заголовков секций), вся видимая таблица — один такой блок: первая
+  // строка получает "первый", последняя — "последний", как и у категории с
+  // одной позицией внутри (там оба модификатора сработают на одной и той же
+  // строке — см. комментарий у --today-cap-top/bottom в styles.css).
+  const { groupFirstIds, groupLastIds } = useMemo(() => {
+    const visible = usable.filter((e) => !(grouping && collapsedCategories.includes(e.category)));
+    const firstIds = new Set<string>();
+    const lastIds = new Set<string>();
+    visible.forEach((e, i) => {
+      const prev = visible[i - 1];
+      const next = visible[i + 1];
+      if (!prev || (grouping && prev.category !== e.category)) firstIds.add(e.id);
+      if (!next || (grouping && next.category !== e.category)) lastIds.add(e.id);
+    });
+    return { groupFirstIds: firstIds, groupLastIds: lastIds };
+  }, [usable, grouping, collapsedCategories]);
+
   function colSel(d: string): boolean {
     if (!calColStart || !calColEnd) return false;
     const lo = calColStart < calColEnd ? calColStart : calColEnd;
@@ -1126,6 +1151,8 @@ export function CalendarTab({
                             className={
                               "cal-cell clickable" +
                               (isToday ? " today" : "") +
+                              (isToday && groupFirstIds.has(e.id) ? " today-group-first" : "") +
+                              (isToday && groupLastIds.has(e.id) ? " today-group-last" : "") +
                               (weekend ? " weekend" : "") +
                               (colSel(d) ? " col-selected" : "")
                             }

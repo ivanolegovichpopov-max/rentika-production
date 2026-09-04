@@ -651,18 +651,42 @@ tr.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background
 .cal-row.head .cal-cell[data-action="cal-col-select"] { cursor: pointer; }
 .cal-row.head .cal-cell[data-action="cal-col-select"]:hover { background: var(--surface-3); }
 /* Обводка "сегодня" — псевдоэлемент рисуется поверх .cal-fill и поверх подсветки выбора (z-index:2), поэтому не прячется под ними.
-   63-й проход, обзор — "выглядит грязно, как стопка отдельных коробок, а не один столбец": раньше рамка была
-   со всех четырёх сторон (inset 0 0 0 2px) — у каждой ячейки строки рисовались собственные верх/низ, и на границе
-   между соседними строками получался видимый шов. Убраны верх/низ, остались только левая и правая стороны — у
-   соседних по вертикали ячеек одной колонки они складываются в две сплошные линии от шапки до последней строки,
-   без швов между строками, независимо от количества категорий/групп (эффект общий на всю таблицу, не только
-   в рамках одной категории — что при проверке смотрится даже логичнее, чем прерывающаяся по группам линия). */
+   63-й проход, первый заход — "выглядит грязно, как стопка отдельных коробок, а не один столбец": раньше рамка
+   была со всех четырёх сторон (inset 0 0 0 2px) — у каждой ячейки строки рисовались собственные верх/низ, и на
+   границе между соседними строками получался видимый шов. Убрали верх/низ, оставили только левую и правую
+   стороны — сплошные линии на всю таблицу.
+   63-й проход, второй заход, прямое уточнение — "ограничим категориями": сплошная линия через ВСЮ таблицу
+   оказалась слишком широким толкованием "единого столбца" — по факту одна категория воспринимается как свой
+   законченный блок (как и группы уже визуально отделены строкой-заголовком), значит и обводка должна замыкаться
+   в свой блок на каждую категорию, а не идти общей нитью через все группы подряд. Верх/низ вернули, но не
+   поячеечно, как в самом начале, а только у ПЕРВОЙ и ПОСЛЕДНЕЙ строки каждой группы (today-group-first/
+   today-group-last, проставляются в CalendarTab.tsx через groupFirstIds/groupLastIds) — через переменные
+   --today-cap-top/--today-cap-bottom с дефолтом 0 (нулевая тень ничего не рисует), чтобы не городить 4 разных
+   явных box-shadow-правила на все сочетания first/last/middle/single-row. У группы из одной строки сработают
+   оба модификатора сразу — получится замкнутая рамка на один ряд, что логично: у неё "первая" строка и
+   "последняя" строка совпадают. */
 .cal-cell.today::after {
-  content: ""; position: absolute; inset: 0; z-index: 2; box-shadow: inset 2px 0 0 0 var(--today), inset -2px 0 0 0 var(--today); pointer-events: none;
+  content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  box-shadow:
+    inset 2px 0 0 0 var(--today),
+    inset -2px 0 0 0 var(--today),
+    inset 0 var(--today-cap-top, 0px) 0 0 var(--today),
+    inset 0 var(--today-cap-bottom, 0px) 0 0 var(--today);
 }
+.cal-cell.today.today-group-first { --today-cap-top: 2px; }
+.cal-cell.today.today-group-last { --today-cap-bottom: -2px; }
 .cal-row.head .cal-cell.today { background: var(--today-soft); color: var(--today); }
 .cal-cell.clickable { cursor: pointer; }
-.cal-cell.clickable:hover { box-shadow: inset 0 0 0 1.5px var(--border-strong); }
+/* Подсветка наведения (63-й проход, обзор — "на занятой ячейке рамка курсора не видна, потому что она за
+   плашкой брони"): раньше рамка была box-shadow на самой .cal-cell, а .cal-fill — отдельный ребёнок внутри
+   неё, который в порядке отрисовки всегда красится поверх собственного фона/тени родителя — на пустой ячейке
+   (прозрачный .cal-fill) это было незаметно, а на любой закрашенной плашке рамка полностью пряталась под ней.
+   Тот же приём, что и у обводки "сегодня" выше, — псевдоэлемент поверх заливки (z-index:2), но не ::after (он
+   уже занят под "сегодня"), а ::before, и создаётся только на :hover, а не всегда пустым — так на большинстве
+   ячеек в DOM нет лишнего слоя. */
+.cal-cell.clickable:hover::before {
+  content: ""; position: absolute; inset: 0; z-index: 2; box-shadow: inset 0 0 0 1.5px var(--border-strong); pointer-events: none;
+}
 .cal-cell.drag-highlight { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
 .cal-col-indicator {
   display: inline-flex; align-items: center; gap: 4px; padding: 5px 5px 5px 12px; border-radius: 16px;
