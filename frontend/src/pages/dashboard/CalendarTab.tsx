@@ -40,16 +40,14 @@
  *     "Сегодня" убраны под общий "Ещё" — тот же принцип разгрузки шапки,
  *     что и на "Оборудовании"/"Клиентах".
  */
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useData } from "../../context/DataContext";
-import { api, ApiError } from "../../api/client";
 import type { Client, Equipment, Rental } from "../../api/types";
-import { todayISO, isoAddDays, dayDiff, ymd, fmtDate, money, spanDays } from "../../lib/format";
+import { todayISO, isoAddDays, dayDiff, ymd, fmtDate, money } from "../../lib/format";
 import { toCsv } from "../../lib/csv";
 import { IconChevronDown, IconGrip, IconClose, IconAlert } from "../../lib/icons";
 import { useToast } from "../../components/Toast";
 import { useConfirm } from "../../components/ConfirmDialog";
-import { Dropdown } from "../../components/Dropdown";
 import { MultiDropdown } from "../../components/MultiDropdown";
 import { MoreActionsMenu } from "../../components/MoreActionsMenu";
 import { usePersistedState } from "../../lib/persist";
@@ -198,12 +196,6 @@ function overlapDays(aStart: string, aEnd: string, bStart: string, bEnd: string)
   return dayDiff(hi) - dayDiff(lo) + 1;
 }
 
-interface QuickBookTarget {
-  equipmentId: string;
-  startDate: string;
-  endDate: string;
-}
-
 export function CalendarTab({
   businessId,
   search,
@@ -249,8 +241,6 @@ export function CalendarTab({
   // не "утекать" между разными бизнесами одного аккаунта.
   const [categoryOrder, setCategoryOrder] = usePersistedState<string[] | null>(`cal-cat-order:${businessId}`, null);
   const [collapsedCategories, setCollapsedCategories] = usePersistedState<string[]>(`cal-collapsed:${businessId}`, []);
-
-  const [quickBook, setQuickBook] = useState<QuickBookTarget | null>(null);
 
   // Действия по аренде из RentalDetailPanel, открытой по клику на занятую
   // ячейку (53-й проход) — тот же набор состояний и та же схема, что и в
@@ -553,7 +543,16 @@ export function CalendarTab({
           const hi = anchorDate < endD ? endD : anchorDate;
           const eq = equipment.find((x) => x.id === eqId);
           if (eq && eq.status !== "retired" && !isUnderMaintenanceOn(eq, lo) && isEquipmentFree(eqId, lo, hi, rentals)) {
-            setQuickBook({ equipmentId: eqId, startDate: lo, endDate: hi });
+            // Раньше здесь открывался отдельный облегчённый QuickBookModal —
+            // теперь та же полноценная CreateRentalModal, что и у
+            // "Забронировать"/"Повторить аренду" ниже (56-й проход: клик и
+            // протяжка по ячейке открывали форму без поиска клиента, без
+            // "+ Добавить нового клиента", без скидки/доп. услуг — просили
+            // перенести все функции, а не дублировать их во втором
+            // компоненте). equipmentIds — только кликнутая позиция, ровно
+            // как раньше equipmentId в QuickBookModal.
+            setCreateDraft({ equipmentIds: [eqId], startDate: lo, endDate: hi });
+            setShowCreate(true);
           } else {
             notify("В выбранном диапазоне есть занятые дни — выберите другой период");
           }
@@ -605,7 +604,8 @@ export function CalendarTab({
       calSuppressNextClickRef.current = false;
       return;
     }
-    setQuickBook({ equipmentId: eqId, startDate: date, endDate: date });
+    setCreateDraft({ equipmentIds: [eqId], startDate: date, endDate: date });
+    setShowCreate(true);
   }
 
   function navPrev() {
@@ -634,11 +634,6 @@ export function CalendarTab({
 
   const collapseAllAvailable = grouping && orderedCategories.length > 1;
   const allCollapsed = collapseAllAvailable && orderedCategories.every((c) => collapsedCategories.includes(c));
-
-  async function afterBooked() {
-    setQuickBook(null);
-    await Promise.all([reloadRentals(), reloadEquipment()]);
-  }
 
   return (
     <div>
@@ -1045,28 +1040,19 @@ export function CalendarTab({
         </>
       )}
 
-      {quickBook && (
-        <QuickBookModal
-          businessId={businessId}
-          equipmentId={quickBook.equipmentId}
-          equipment={equipment}
-          clients={clients}
-          startDate={quickBook.startDate}
-          endDate={quickBook.endDate}
-          onClose={() => setQuickBook(null)}
-          onBooked={afterBooked}
-        />
-      )}
-
-      {/* Полноценная форма "Новая аренда" (53-й проход) — кнопка "+ Новая
-          аренда" в тулбаре, "Повторить аренду" из RentalDetailPanel и
-          "Забронировать" из сводки по выделенному диапазону столбцов (все
-          три — ниже по файлу) используют одну и ту же форму, тем же
-          принципом, что и в RentalsTab.tsx: createDraft заполняет её
-          клиентом/позициями/датами, при обычном "+" остаётся null.
-          QuickBookModal (клик/протяжка по одной ячейке) — сознательно
-          отдельная облегчённая форма, см. её докстринг ниже, а не замена
-          этой. */}
+      {/* Полноценная форма "Новая аренда" (53-й проход, расширено в 56-м) —
+          кнопка "+ Новая аренда" в тулбаре, "Повторить аренду" из
+          RentalDetailPanel, "Забронировать" из сводки по выделенному
+          диапазону столбцов, а теперь и клик/протяжка по отдельной ячейке
+          (см. handleCellClick/onMouseUp выше) — используют одну и ту же
+          форму, тем же принципом, что и в RentalsTab.tsx: createDraft
+          заполняет её клиентом/позициями/датами, при обычном "+" остаётся
+          null. Раньше клик/протяжка по ячейке открывали отдельный
+          облегчённый QuickBookModal без поиска клиента, быстрого добавления
+          клиента, скидки и доп. услуг — по итогам обзора это посчитали
+          несогласованностью и решили не дублировать функциональность формы
+          во втором компоненте, а просто переиспользовать эту же форму с
+          предзаполненной одной позицией оборудования. */}
       {showCreate && (
         <CreateRentalModal
           businessId={businessId}
@@ -1229,141 +1215,5 @@ export function CalendarTab({
 
       {confirmDialog}
     </div>
-  );
-}
-
-/**
- * Форма быстрой брони по клику/протяжке ячейки календаря.
- *
- * Демо в этом месте открывает общую модалку "Новая аренда" (addRentalForm)
- * с чекбокс-списком ВСЕГО оборудования и выбором клиента. С 52-го прохода
- * (разноска RentalsTab.tsx по модулям) полноценная форма создания аренды —
- * уже отдельный переиспользуемый компонент (CreateRentalModal, используется
- * здесь же кнопкой "+ Новая аренда" и "Повторить аренду" — см. ниже по
- * файлу), но для клика/протяжки по конкретной ячейке она остаётся избыточной
- * — оборудование здесь и так уже выбрано кликом, открывать полный чекбокс-
- * список всего каталога поверх уже сделанного выбора не нужно. Поэтому для
- * этого конкретного сценария — облегчённая версия: только выбор клиента и
- * дат (предзаполненных из клика/протяжки), одно оборудование. Сознательный
- * компромисс по UX, не техническое ограничение.
- */
-function QuickBookModal({
-  businessId,
-  equipmentId,
-  equipment,
-  clients,
-  startDate,
-  endDate,
-  onClose,
-  onBooked,
-}: {
-  businessId: string;
-  equipmentId: string;
-  equipment: Equipment[];
-  clients: Client[];
-  startDate: string;
-  endDate: string;
-  onClose: () => void;
-  onBooked: () => void;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const eq = equipment.find((e) => e.id === equipmentId);
-  const [clientId, setClientId] = useState("");
-  const [start, setStart] = useState(startDate);
-  const [end, setEnd] = useState(endDate);
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (!dialog.open) dialog.showModal();
-    return () => {
-      if (dialog.open) dialog.close();
-    };
-  }, []);
-
-  const days = spanDays(start, end);
-  const cost = eq ? itemCostForDays(eq, days) : 0;
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!clientId) { setError("Выберите клиента"); return; }
-    if (end < start) { setError("Дата окончания раньше начала"); return; }
-    setSubmitting(true);
-    setError(null);
-    try {
-      await api.post(`/businesses/${businessId}/rentals`, {
-        client_id: clientId,
-        equipment_ids: [equipmentId],
-        start_date: start,
-        end_date: end,
-      });
-      onBooked();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Не удалось создать аренду");
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <dialog id="modal" ref={ref} onClose={onClose} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <form onSubmit={handleSubmit}>
-        <div className="modal-head">
-          <h3>Новая аренда — {eq?.name ?? "оборудование"}</h3>
-          <button type="button" className="icon-btn" onClick={onClose}><IconClose /></button>
-        </div>
-        <div className="modal-body">
-          {clients.length === 0 ? (
-            <div className="empty-note">Сначала добавьте клиента на вкладке «Клиенты».</div>
-          ) : (
-            <div className="field">
-              <label>Клиент</label>
-              <Dropdown
-                value={clientId}
-                onChange={setClientId}
-                placeholder="Выберите клиента"
-                options={clients.map((c) => ({ value: c.id, label: c.name + (c.phone ? ` · ${c.phone}` : "") }))}
-              />
-              {/* 26-й проход — тот же баннер, что и в CreateRentalModal
-                  (RentalsTab.tsx): предупреждение о чёрном списке должно
-                  всплывать везде, где можно создать новую аренду, а не
-                  только в одном из двух мест. */}
-              {clients.find((c) => c.id === clientId)?.rating === "blacklist" && (
-                <div className="form-error" style={{ marginTop: "6px" }}>
-                  Клиент в чёрном списке
-                  {clients.find((c) => c.id === clientId)?.blacklist_reason
-                    ? `: ${clients.find((c) => c.id === clientId)?.blacklist_reason}`
-                    : ""}
-                </div>
-              )}
-            </div>
-          )}
-          <div className="field-row">
-            <div className="field">
-              <label>Начало</label>
-              <input type="date" required value={start} onChange={(e) => setStart(e.target.value)} />
-            </div>
-            <div className="field">
-              <label>Окончание</label>
-              <input type="date" required value={end} onChange={(e) => setEnd(e.target.value)} />
-            </div>
-          </div>
-          <div className="summary-box">
-            <div className="summary-row">
-              <span>Аренда, {days} {pluralRu(days, "день", "дня", "дней")}</span>
-              <span className="v">{money(cost)}</span>
-            </div>
-          </div>
-          {error && <div className="form-error">{error}</div>}
-        </div>
-        <div className="modal-foot">
-          <button type="button" className="btn" onClick={onClose}>Отмена</button>
-          <button type="submit" className="btn btn-primary" disabled={submitting || clients.length === 0}>
-            Забронировать
-          </button>
-        </div>
-      </form>
-    </dialog>
   );
 }
