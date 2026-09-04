@@ -880,7 +880,12 @@ export function CalendarTab({
                         <span className="cal-group-sticky">
                           <span className="cal-group-chevron"><IconChevronDown /></span>
                           <span className="cal-group-drag"><IconGrip /></span>
-                          {cat}
+                          {/* Название категории обёрнуто в свой span (55-й
+                              проход, обзор по скриншоту — "выглядит
+                              неаккуратно") — раньше это был голый текстовый
+                              узел, к которому нельзя привязать точечный CSS
+                              (см. .cal-group-name ниже в styles.css). */}
+                          <span className="cal-group-name">{cat}</span>
                           <span className="cal-group-count">{count} шт.</span>
                         </span>
                       </div>

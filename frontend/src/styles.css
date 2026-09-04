@@ -582,6 +582,17 @@ tbody tr[data-clickable="true"]:hover { background: var(--surface-2); }
 .cal-group-row.collapsed .cal-group-chevron { transform: rotate(-90deg); }
 .cal-group-drag { display: flex; color: var(--muted); flex: none; cursor: grab; }
 .cal-group-drag:active { cursor: grabbing; }
+/* Оптическая доводка вертикали (55-й проход, обзор по скриншоту — "выглядит
+   неаккуратно"): .cal-group-sticky центрирует все элементы по высоте бокса
+   (align-items:center), и шеврон/ручка перетаскивания встают строго по
+   центру — но у текста центр СВОЕГО бокса не совпадает с центром видимых
+   глифов (у шрифта резерв под нижние выносные элементы снизу больше, чем
+   сверху, — стандартная асимметрия метрик шрифта, не зависит от line-height).
+   На живой странице замерено (getBoundingClientRect): без поправки текст
+   («МЕДИЦИНСКОЕ ОБОРУДОВАНИЕ» и «10 шт.») сидит на 0.75–0.9px выше центра
+   иконок; сдвиг на 0.8px вниз возвращает обе надписи на ту же линию, что и
+   иконки (проверено тем же замером на реальных данных до и после). */
+.cal-group-name, .cal-group-count { position: relative; top: 0.8px; }
 .cal-group-count { font-family: "Roboto Mono"; font-weight: 500; color: var(--muted); font-size: 10.5px; }
 
 /* Ручной порядок строк в таблицах (категории/склады оборудования,
