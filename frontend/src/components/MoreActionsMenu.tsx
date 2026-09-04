@@ -75,7 +75,7 @@ export function MoreActionsMenu({
   iconOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left?: number; right?: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number | "auto"; right: number | "auto" } | null>(null);
   // Куда портировать панель — обычно document.body, но если кнопка внутри
   // открытого <dialog> (RentalDetailPanel/ClientDetailPanel/EquipmentDetailPanel
   // рендерятся именно так, см. useModalDialog.ts), портал в body рисуется ПОД
@@ -92,8 +92,16 @@ export function MoreActionsMenu({
     const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
+    // left И right заданы явно в ОБОИХ случаях (одно из двух — "auto"), а не
+    // просто пропущено то, что не нужно (52-й проход — регрессия после
+    // портала: без явного left:"auto" при align="right" в игру вступал
+    // унаследованный из CSS `.cat-filter-panel { left: 0 }` — с одновременно
+    // заданными непустыми left И right и шириной auto браузер растягивает
+    // блок между ними на всю ширину экрана вместо auto-ширины по контенту).
     setPos(
-      align === "right" ? { top: r.bottom + 4, right: window.innerWidth - r.right } : { top: r.bottom + 4, left: r.left }
+      align === "right"
+        ? { top: r.bottom + 4, left: "auto", right: window.innerWidth - r.right }
+        : { top: r.bottom + 4, left: r.left, right: "auto" }
     );
     setPortalTarget(el.closest("dialog") || document.body);
     setOpen(true);
