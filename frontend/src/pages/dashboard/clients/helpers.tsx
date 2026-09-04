@@ -275,6 +275,22 @@ export function clientDisplayRating(c: Client, rentals: Rental[]): Client["ratin
   return "normal";
 }
 
+/** CSS-класс аватарки клиента по фактическому рейтингу (62-й проход, прямое
+ * указание — "цвет аватарки клиента такой же, какой рейтинг у него
+ * выставлен", и в списке "Клиенты", и в самой карточке). Принимает именно
+ * РЕЗУЛЬТАТ clientDisplayRating (вычисленный, "живой" рейтинг — normal/
+ * watch/blacklist), а не сырое Client.rating из базы: у watch нет
+ * собственного хранимого значения (см. докстринг clientDisplayRating выше),
+ * так что аватар обязан краситься по тому же вычисленному статусу, что и
+ * бейдж рейтинга рядом с ним — иначе цвет кружка и бейдж могли бы разойтись
+ * для клиента с активной просрочкой при нормальном рейтинге в базе.
+ * .avatar-rating-* — в styles.css, сразу после .avatar; тот же набор тонов
+ * (good/warning/critical), что и у RATING_META, просто применённый к фону
+ * кружка, а не к бейджу. */
+export function ratingAvatarClass(rating: Client["rating"]): string {
+  return "avatar-rating-" + rating;
+}
+
 /** Нормализация телефона до одних цифр — общая мелкая функция, используется
  * и при поиске дублей (clients/duplicates.ts), и в ссылках на WhatsApp
  * (ClientDetailPanel). */

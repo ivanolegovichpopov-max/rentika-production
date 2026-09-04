@@ -56,6 +56,7 @@ import {
   isDormantClient,
   isIncompleteProfile,
   lastRentalDate,
+  ratingAvatarClass,
   renderClientCell,
   sortClientList,
   visibleClientColumns,
@@ -809,11 +810,18 @@ export function ClientsTab({
                     </td>
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        {/* Аватар из инициалов, нейтральный цвет — тот же приём,
-                            что и у сотрудников в сайдбаре (initials из
-                            lib/format.ts), 25-й проход, п.3 обзора; цвет сделан
-                            единым (37-й проход) — см. .avatar в styles.css. */}
-                        <span className="avatar">{initials(c.name)}</span>
+                        {/* Аватар из инициалов (initials из lib/format.ts,
+                            25-й проход, п.3 обзора). Цвет по рейтингу (62-й
+                            проход, прямое указание) — та же логика, что и у
+                            37-го прохода, только развёрнутая наоборот: тогда
+                            цвет по id клиента убрали именно потому, что он
+                            был случайным и ничего не значил ("таблица
+                            выглядела пёстрой"); сейчас цвет снова переменный,
+                            но осмысленный — совпадает с тем же
+                            displayRating, что красит бейдж рейтинга в
+                            соседней колонке (см. ratingAvatarClass в
+                            clients/helpers.tsx). */}
+                        <span className={"avatar " + ratingAvatarClass(cellCtx.displayRating)}>{initials(c.name)}</span>
                         <div>
                           {/* cell-name-wrap (32-й проход — обзор оформления,
                               п. "Удалить съезжает за край экрана"): у клиента с

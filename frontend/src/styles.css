@@ -307,6 +307,22 @@ nav.nav { display: flex; flex-direction: column; gap: 2px; }
    переменных, что и акцентные кнопки (--accent/--accent-ink) — единообразно
    со стилем интерфейса и само подстраивается под тёмную тему. */
 .avatar { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: var(--accent-ink); font-size: 10.5px; font-weight: 700; flex: none; }
+/* Аватар клиента по рейтингу (62-й проход, прямое указание — только на
+   вкладке "Клиенты" и в карточке клиента, см. ratingAvatarClass в
+   clients/helpers.tsx; сотрудники/сообщения и т.д. остаются на обычном
+   .avatar с единым акцентным цветом выше — там красить не по чему, рейтинга
+   у них нет). Реюзаем те же токены тонов, что и у бейджа рейтинга
+   (RATING_META/--good/--warning/--critical), только как заливку кружка, а
+   не фон бейджа — и var(--accent-ink) для текста инициалов вместо
+   выделенного good/warning/critical-ink: у тех токенов назначение другое
+   (текст НА светлой soft-подложке бейджа), а --accent-ink уже готовый,
+   верно инвертирующийся между темами токен именно "текст на насыщенной
+   заливке" (белый в светлой теме, тёмный в тёмной — оба варианта уже
+   учитывают, что --good/--warning/--critical сами тоже меняют яркость по
+   теме, см. :root[data-theme="dark"] ниже). */
+.avatar-rating-normal { background: var(--good); color: var(--accent-ink); }
+.avatar-rating-watch { background: var(--warning); color: var(--accent-ink); }
+.avatar-rating-blacklist { background: var(--critical); color: var(--accent-ink); }
 .team-name { font-size: 12.5px; color: var(--ink-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reset-link { font-size: 11.5px; color: var(--muted); background: none; border: none; cursor: pointer; padding: 6px; text-align: left; }
 .reset-link:hover { color: var(--critical); }

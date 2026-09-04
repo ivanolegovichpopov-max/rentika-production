@@ -21,6 +21,7 @@ import {
   isIncompleteProfile,
   lastRentalDate,
   normalizePhoneDigits,
+  ratingAvatarClass,
   VALUE_TIER_META,
 } from "./helpers";
 import { pickSummaryRental, buildRentalSummaryText } from "./summary";
@@ -156,7 +157,11 @@ export function ClientDetailPanel({
     <div className="slideover">
       <div className="slideover-head">
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span className="avatar" style={{ width: 36, height: 36, fontSize: "14px" }}>
+          {/* Цвет по рейтингу (62-й проход, прямое указание — "в карточке
+              тоже поменяй") — тот же displayRating, что и у бейджа "На
+              контроле" ниже (см. ratingAvatarClass в clients/helpers.tsx),
+              единообразно со списком клиентов (ClientsTab.tsx). */}
+          <span className={"avatar " + ratingAvatarClass(displayRating)} style={{ width: 36, height: 36, fontSize: "14px" }}>
             {initials(client.name)}
           </span>
           <div>
