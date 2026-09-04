@@ -45,14 +45,14 @@ import { useData } from "../../context/DataContext";
 import type { Client, Equipment, Rental } from "../../api/types";
 import { todayISO, isoAddDays, dayDiff, ymd, fmtDate, money } from "../../lib/format";
 import { toCsv } from "../../lib/csv";
-import { IconChevronDown, IconGrip, IconClose, IconAlert } from "../../lib/icons";
+import { IconChevronDown, IconGrip, IconClose, IconAlert, IconPrinter } from "../../lib/icons";
 import { useToast } from "../../components/Toast";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { MultiDropdown } from "../../components/MultiDropdown";
 import { MoreActionsMenu } from "../../components/MoreActionsMenu";
 import { usePersistedState } from "../../lib/persist";
 import { isUnpaid } from "./rentals/helpers";
-import { DocModal, buildIssueDoc, buildReturnDoc } from "./documents";
+import { DocModal, buildIssueDoc, buildReturnDoc, buildContractDoc } from "./documents";
 import { RentalDetailPanel, PaymentModal } from "./rentals/RentalDetailPanel";
 import { CreateRentalModal } from "./rentals/CreateRentalModal";
 import { EditRentalModal } from "./rentals/EditRentalModal";
@@ -178,6 +178,58 @@ function exportCalendarCsv(list: Equipment[], daysList: string[], rentals: Renta
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Печать видимого диапазона календаря прямо из браузера (56-й проход, п.1
+ * обзора — "нужна именно физическая печать", CSV-экспорт выше это не
+ * закрывает: он про файл для Excel, а не про то, что можно сразу отдать в
+ * руки/приложить к документам). Тот же DocModal/window.print(), что и у
+ * договоров/актов/отчёта Финансов (documents.tsx) — тот же принцип "готовая
+ * .doc-page внутри общей печатной модалки", просто с широкой таблицей
+ * вместо десятка узких. Данные и порядок строк/столбцов — те же, что и в
+ * exportCalendarCsv (та же equipmentDayStatus().title на пересечении строки
+ * и столбца), с одним отличием: "Свободно" не печатается в каждой пустой
+ * ячейке — так таблица меньше рябит, свободная ячейка и так видна как
+ * пустая (тот же смысл, что и у пустых ячеек самого календаря на экране).
+ *
+ * Ширина: при диапазоне "Месяц" (30-31 колонка) таблица заведомо не влезет
+ * в книжную ориентацию листа A4 — класс cal-print-page задаёт CSS Paged
+ * Media именованную страницу (@page cal-landscape, styles.css) с альбомной
+ * ориентацией, так печатная модалка сама подсказывает браузеру нужный
+ * разворот, а не полагается на то, что сотрудник сам вспомнит переключить
+ * ориентацию в диалоге печати.
+ */
+function buildCalendarPrintDoc(list: Equipment[], daysList: string[], rentals: Rental[], clients: Client[]): ReactNode {
+  return (
+    <div className="doc-page cal-print-page">
+      <h2>Календарь занятости</h2>
+      <div className="doc-sub">
+        {daysList.length > 0 ? `${fmtDate(daysList[0])} — ${fmtDate(daysList[daysList.length - 1])}` : ""}
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Оборудование</th>
+            {daysList.map((d) => (
+              <th key={d}>{fmtDate(d)}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((e) => (
+            <tr key={e.id}>
+              <td>{e.name}{e.code ? ` · ${e.code}` : ""}</td>
+              {daysList.map((d) => {
+                const title = equipmentDayStatus(e, d, rentals, clients).title;
+                return <td key={d}>{title === "Свободно" ? "" : title}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function isEquipmentFree(equipmentId: string, start: string, end: string, rentals: Rental[]): boolean {
@@ -788,10 +840,13 @@ export function CalendarTab({
         <div style={{ display: "flex", gap: "8px" }}>
           {/* 53-й проход, пункт 4 из "что нужно доработать" — экспорт
               видимого диапазона в CSV (на "Оборудовании"/"Клиентах"/"Арендах"
-              такой экспорт уже есть, у Календаря не было вообще). Раньше меню
-              "Ещё" показывалось только когда есть что сворачивать/
-              разворачивать (>1 категории) — теперь показывается всегда, т.к.
-              экспорт полезен независимо от группировки по категориям. */}
+              такой экспорт уже есть, у Календаря не было вообще); печать
+              таблицы (buildCalendarPrintDoc) добавлена в 56-м проходе тем же
+              принципом — тоже про видимый диапазон, просто на бумагу, а не в
+              файл. Раньше меню "Ещё" показывалось только когда есть что
+              сворачивать/разворачивать (>1 категории) — теперь показывается
+              всегда, т.к. и экспорт, и печать полезны независимо от
+              группировки по категориям. */}
           <MoreActionsMenu
             actions={[
               ...(collapseAllAvailable
@@ -803,6 +858,17 @@ export function CalendarTab({
                     },
                   ]
                 : []),
+              {
+                key: "print",
+                label: "Печать таблицы",
+                icon: <IconPrinter />,
+                disabled: usable.length === 0,
+                // Готовая печатная модалка (56-й проход, п.1 обзора — "нужна
+                // именно физическая печать") — тот же openDoc/DocModal, что и
+                // у актов/договоров ниже по файлу, просто с содержимым от
+                // buildCalendarPrintDoc вместо buildIssueDoc/buildReturnDoc.
+                onClick: () => openDoc("Календарь занятости", buildCalendarPrintDoc(usable, days, rentals, clients)),
+              },
               {
                 key: "export-csv",
                 label: "Экспорт в CSV",
@@ -1067,8 +1133,21 @@ export function CalendarTab({
             setShowCreate(false);
             setCreateDraft(null);
           }}
-          onCreated={async () => {
+          onCreated={async (created) => {
             await Promise.all([reloadRentals(), reloadEquipment()]);
+            // Сразу предложить распечатать договор (56-й проход, п.2 обзора)
+            // — тот же приём, что и автопечать акта частичного возврата в
+            // RentalDetailPanel.tsx: открываем готовый DocModal с
+            // предпросмотром, "предложение" — это сама открывшаяся модалка с
+            // кнопками "Печать"/"Закрыть", а не отдельный да/нет-диалог перед
+            // ней. clients ещё не содержит нового клиента, если он был
+            // добавлен "+ Добавить нового клиента" прямо в этой форме — но
+            // created.client_id при этом всё равно на него ссылается
+            // корректно, просто в договоре имя не подставится до следующей
+            // перезагрузки списка; в подавляющем большинстве случаев клиент
+            // уже существует, и это не проблема.
+            const client = clients.find((c) => c.id === created.client_id);
+            openDoc("Договор аренды", buildContractDoc(created, client, equipment));
           }}
         />
       )}

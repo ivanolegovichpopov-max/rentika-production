@@ -1001,6 +1001,19 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
 .doc-sign { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 30px; }
 .doc-sign .line { border-top: 1px solid #17202A; margin-top: 34px; padding-top: 4px; font-size: 11.5px; color: #556; }
 
+/* Печать таблицы Календаря (56-й проход, п.1 обзора — "нужна именно
+   физическая печать"), buildCalendarPrintDoc в CalendarTab.tsx — тот же
+   .doc-page, что и у договоров/актов, но со своим модификатором: у месячного
+   диапазона до 31 колонки-даты плюс колонка оборудования, обычным
+   table-layout:fixed (как у договоров, где колонок всего 2-3) все они
+   превратились бы в нечитаемые полоски. auto вместо fixed — ширина каждой
+   колонки подстраивается под её контент вместо равного деления, мельче
+   шрифт и отступы — тот же приём, что уже свёл более узкую (но всё же
+   многостолбцовую) таблицу отчёта Финансов к читаемому виду. */
+.doc-page.cal-print-page { font-size: 11px; }
+.doc-page.cal-print-page table { table-layout: auto; }
+.doc-page.cal-print-page th, .doc-page.cal-print-page td { padding: 4px 6px; font-size: 10.5px; }
+
 @media print {
   body > *:not(dialog#modal) { display: none !important; }
   dialog#modal::backdrop { display: none !important; }
@@ -1014,6 +1027,15 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
      потоком внахлёст. Последнему :not(:last-child) разрыв не нужен — иначе
      после него осталась бы пустая страница. */
   .doc-page:not(:last-child) { page-break-after: always; break-after: page; }
+  /* Именованная страница CSS Paged Media (Chrome/Edge поддерживают; Firefox
+     и Safari на момент внедрения — нет, там просто останется книжная
+     ориентация по умолчанию, сотруднику придётся переключить вручную в
+     диалоге печати, деградация не ломает саму печать) — печатная таблица
+     Календаря просит альбомную ориентацию у браузера сама, а не полагается
+     на то, что сотрудник об этом вспомнит. Обычные документы (.doc-page без
+     этого класса) остаются книжными по умолчанию страницы — их не трогаем. */
+  .doc-page.cal-print-page { page: cal-landscape; }
+  @page cal-landscape { size: landscape; margin: 10mm; }
 }
 
 /* ---------- Диапазон дат «Финансы» ---------- */

@@ -53,7 +53,9 @@ export function CreateRentalModal({
   initialStartDate?: string;
   initialEndDate?: string;
   onClose: () => void;
-  onCreated: () => Promise<void>;
+  // Получает только что созданную аренду (56-й проход) — см. комментарий
+  // у await onCreated(created) внутри handleSubmit ниже.
+  onCreated: (rental: Rental) => Promise<void>;
 }) {
   const [clientId, setClientId] = useState(initialClientId ?? "");
   const [startDate, setStartDate] = useState(initialStartDate ?? todayISO());
@@ -251,7 +253,7 @@ export function CreateRentalModal({
     }
     setSaving(true);
     try {
-      await api.post(`/businesses/${businessId}/rentals`, {
+      const created = await api.post<Rental>(`/businesses/${businessId}/rentals`, {
         client_id: clientId,
         equipment_ids: checkedIds,
         start_date: startDate,
@@ -267,7 +269,13 @@ export function CreateRentalModal({
         extra_fee: extraFee.trim() === "" ? undefined : Number(extraFee),
         extra_fee_note: extraFeeNote.trim() === "" ? undefined : extraFeeNote.trim(),
       });
-      await onCreated();
+      // Созданная аренда передаётся в onCreated (56-й проход, п.2 обзора —
+      // "после успешного создания аренды сразу предлагать распечатать
+      // договор") — раньше onCreated ничего не получал, только сигнализировал
+      // "готово, перезагрузи списки". Существующие потребители (RentalsTab.tsx,
+      // Dashboard.tsx), у которых onCreated объявлен без параметров, менять не
+      // пришлось — лишний аргумент для них просто ничего не значит.
+      await onCreated(created);
       onClose();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Не удалось создать аренду");
