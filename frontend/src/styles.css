@@ -664,7 +664,17 @@ tr.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background
    --today-cap-top/--today-cap-bottom с дефолтом 0 (нулевая тень ничего не рисует), чтобы не городить 4 разных
    явных box-shadow-правила на все сочетания first/last/middle/single-row. У группы из одной строки сработают
    оба модификатора сразу — получится замкнутая рамка на один ряд, что логично: у неё "первая" строка и
-   "последняя" строка совпадают. */
+   "последняя" строка совпадают.
+   63-й проход, третий заход, живой отчёт — "у первой строки не видно горизонтальной линии": по computed style
+   в реальном DOM линия рисуется корректно (класс/переменная/box-shadow — всё верно), но у ПЕРВОЙ строки её
+   верхний край приходится РОВНО на ту же границу, где и так уже есть чужой 1px серый border-bottom (у строки-
+   заголовка категории, cal-group-row, — см. её правило ниже) — то есть на одном и том же пикселе сходятся
+   тонкая серая и тонкая фиолетовая линии и на сжатом/подряд экране визуально сливаются в одну невзрачную. У
+   "последней" строки этой проблемы нет — под ней просто пустое место, не соседняя граница с собственным
+   бордером. У сплошных боковых линий (2px) та же коллизия в принципе невозможна — они вертикальные и ни с
+   каким горизонтальным бордером на одной оси не пересекаются. Решение — не темнее/ярче цвет (он уже
+   максимально насыщенный var(--today)), а толщина: верх/низ увеличены до 4px против 2px у боковых — тонкая
+   серая линия рядом с ней при таком перепаде веса уже не размывает восприятие. */
 .cal-cell.today::after {
   content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
   box-shadow:
@@ -673,8 +683,8 @@ tr.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background
     inset 0 var(--today-cap-top, 0px) 0 0 var(--today),
     inset 0 var(--today-cap-bottom, 0px) 0 0 var(--today);
 }
-.cal-cell.today.today-group-first { --today-cap-top: 2px; }
-.cal-cell.today.today-group-last { --today-cap-bottom: -2px; }
+.cal-cell.today.today-group-first { --today-cap-top: 4px; }
+.cal-cell.today.today-group-last { --today-cap-bottom: -4px; }
 .cal-row.head .cal-cell.today { background: var(--today-soft); color: var(--today); }
 .cal-cell.clickable { cursor: pointer; }
 /* Подсветка наведения (63-й проход, обзор — "на занятой ячейке рамка курсора не видна, потому что она за
