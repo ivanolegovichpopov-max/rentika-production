@@ -14,6 +14,7 @@ import {
 } from "../../lib/financeCalc";
 import { DocModal } from "./documents";
 import { IconPrinter } from "../../lib/icons";
+import { DatePicker } from "../../components/DatePicker";
 
 /**
  * Вкладка «Финансы» — перенесена 1:1 из демо-прототипа (renderFinance()).
@@ -102,18 +103,19 @@ export function FinanceTab({
           ))}
         </div>
         <div className="finance-range">
-          <input
-            type="date"
+          <DatePicker
             value={period.from}
             max={period.to}
-            onChange={(e) => setPeriod({ ...period, from: e.target.value, key: "custom" })}
+            compact
+            onChange={(v) => setPeriod({ ...period, from: v, key: "custom" })}
           />
           <span>—</span>
-          <input
-            type="date"
+          <DatePicker
             value={period.to}
             min={period.from}
-            onChange={(e) => setPeriod({ ...period, to: e.target.value, key: "custom" })}
+            compact
+            align="right"
+            onChange={(v) => setPeriod({ ...period, to: v, key: "custom" })}
           />
         </div>
         <button

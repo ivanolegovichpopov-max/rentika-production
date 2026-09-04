@@ -8,6 +8,7 @@ import { api } from "../../../api/client";
 import type { Rental } from "../../../api/types";
 import { todayISO, isoAddDays } from "../../../lib/format";
 import { FormModal } from "./FormModal";
+import { DatePicker } from "../../../components/DatePicker";
 
 /* ---------- Массовое продление (43-й проход, п.8 обзора) ---------- */
 /**
@@ -66,7 +67,7 @@ export function BulkExtendModal({
     >
       <div className="field">
         <label>Новая дата окончания</label>
-        <input type="date" value={endDate} min={isoAddDays(latestCurrentEnd, 1)} onChange={(e) => setEndDate(e.target.value)} />
+        <DatePicker value={endDate} min={isoAddDays(latestCurrentEnd, 1)} onChange={setEndDate} />
       </div>
       <div className="field-hint">
         Применится ко всем выбранным арендам ({rentals.length}) — состав оборудования и скидка не меняются. Если у части

@@ -49,6 +49,7 @@ import { IconChevronDown, IconGrip, IconClose, IconAlert, IconPrinter } from "..
 import { useToast } from "../../components/Toast";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { MultiDropdown } from "../../components/MultiDropdown";
+import { DatePicker } from "../../components/DatePicker";
 import { MoreActionsMenu } from "../../components/MoreActionsMenu";
 import { usePersistedState } from "../../lib/persist";
 import { isUnpaid } from "./rentals/helpers";
@@ -756,13 +757,13 @@ export function CalendarTab({
                 'Сегодня'") — вторая убрана, остался только сам переход к
                 произвольной дате. */}
             <div className="cal-jump">
-              <input
-                type="date"
+              <DatePicker
                 value={start}
                 title="Перейти к дате"
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  setCalOffset(dayDiff(e.target.value));
+                compact
+                onChange={(v) => {
+                  if (!v) return;
+                  setCalOffset(dayDiff(v));
                 }}
               />
             </div>

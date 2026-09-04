@@ -14,6 +14,7 @@ import { api, ApiError } from "../../../api/client";
 import type { Client, Rental, RentalItem } from "../../../api/types";
 import { money, spanDays, dayDiff, todayISO } from "../../../lib/format";
 import { FormModal } from "./FormModal";
+import { DatePicker } from "../../../components/DatePicker";
 
 
 /* ============================================================
@@ -199,7 +200,7 @@ export function ReturnRentalModal({
     >
       <div className="field">
         <label>Фактическая дата возврата</label>
-        <input type="date" value={actualReturn} onChange={(e) => setActualReturn(e.target.value)} />
+        <DatePicker value={actualReturn} onChange={setActualReturn} />
       </div>
       <div className="field">
         <label>Состояние при возврате</label>

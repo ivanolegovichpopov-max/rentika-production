@@ -52,6 +52,7 @@ import { MoreActionsMenu } from "../../../components/MoreActionsMenu";
 import { RentalPhotosSection } from "./RentalPhotosSection";
 import { RentalHistorySection } from "./RentalHistorySection";
 import { DocModal, buildPartialReturnDoc, buildIssueDoc, buildReturnDoc, buildContractDoc } from "../documents";
+import { DatePicker } from "../../../components/DatePicker";
 
 /** Не оплачено (полностью или частично) — 1:1 та же формула, что и isUnpaid
  * в RentalsTab.tsx (бейдж на карточке списка), продублирована здесь, а не
@@ -145,7 +146,7 @@ function ReturnItemsModal({
           </div>
           <div className="field">
             <label>Фактическая дата возврата</label>
-            <input type="date" value={actualReturn} onChange={(e) => setActualReturn(e.target.value)} />
+            <DatePicker value={actualReturn} onChange={setActualReturn} />
           </div>
           <div className="field">
             <label>Состояние при возврате (необязательно)</label>

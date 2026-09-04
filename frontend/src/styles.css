@@ -681,7 +681,6 @@ tr.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background
    "Обслуживания" и пунктир у "Забронировано". */
 .cal-fill-label svg { flex: none; width: 9px; height: 9px; }
 .cal-jump { display: flex; align-items: center; gap: 6px; }
-.cal-jump input[type="date"] { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; color: var(--ink); }
 .cal-legend { display: flex; gap: 16px; margin-top: 10px; padding: 10px 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink-secondary); }
 .cal-legend .item { display: flex; align-items: center; gap: 6px; }
 .cal-legend .sw { width: 12px; height: 12px; border-radius: 3px; }
@@ -775,6 +774,61 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    (двадцатый проход, п.4 обзора). */
 .field-row-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
 .field-hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+
+/* ---------- DatePicker (components/DatePicker.tsx) — свой попап-календарь
+   взамен нативного `<input type="date">` (57-58-й проходы, обзор с
+   Календаря). Закрытое поле — те же токены/размеры, что и .field input
+   (width:100%, surface-2, border, radius 8px, padding 9/11, font-size
+   13.5px), просто на <button> вместо <input> (нужен клик для попапа, а не
+   текстовый ввод). Раскрытый попап — тот же визуальный язык, что и
+   .cat-filter-panel (surface/border/radius/shadow-lg), со своей сеткой дней
+   вместо списка опций. */
+.date-field { position: relative; }
+.date-field-btn {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 11px; font-size: 13.5px; color: var(--ink); font-family: inherit; text-align: left; cursor: pointer;
+}
+.date-field-btn:hover { border-color: var(--accent); }
+.date-field-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.date-field-btn:disabled:hover { border-color: var(--border); }
+.date-field-btn svg { flex: none; opacity: 0.6; }
+.date-field-placeholder { color: var(--muted); }
+/* Уменьшенный вариант (compact) — 1:1 старые размеры
+   .cal-jump/.finance-range input[type="date"], оба теперь заменены на
+   DatePicker с compact — правила ниже, а старые точечные CSS-правила под
+   те инпуты удалены (styles.css больше не содержит input[type="date"]). */
+.date-field-btn-sm { padding: 7px 10px; font-size: 12.5px; }
+.date-field-panel {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 10; width: 264px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--shadow-lg); padding: 10px;
+}
+.date-field-panel-right { left: auto; right: 0; }
+.date-field-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.date-field-head button {
+  background: none; border: none; border-radius: 6px; padding: 2px 10px; font-size: 16px; line-height: 1.4;
+  color: var(--ink-secondary); cursor: pointer;
+}
+.date-field-head button:hover { background: var(--surface-2); color: var(--ink); }
+.date-field-title { font-size: 13px; font-weight: 700; color: var(--ink); }
+.date-field-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.date-field-dow { text-align: center; font-size: 11px; font-weight: 600; color: var(--muted); padding: 4px 0; }
+.date-field-day {
+  display: flex; align-items: center; justify-content: center; height: 30px; border: 1px solid transparent;
+  border-radius: 8px; background: none; font: inherit; font-size: 12.5px; color: var(--ink); cursor: pointer;
+}
+.date-field-day:hover:not(:disabled) { background: var(--surface-2); }
+.date-field-day.muted { color: var(--muted); }
+.date-field-day.today { border-color: var(--accent); }
+.date-field-day.selected { background: var(--accent); color: #fff; font-weight: 700; }
+.date-field-day.selected.today { border-color: transparent; }
+.date-field-day:disabled { opacity: 0.35; cursor: not-allowed; }
+.date-field-foot { display: flex; justify-content: space-between; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.date-field-foot button {
+  background: none; border: none; padding: 2px 4px; font: inherit; font-size: 12.5px; color: var(--accent); cursor: pointer;
+}
+.date-field-foot button:hover { text-decoration: underline; }
 /* Кнопка-ссылка внутри field-hint (напр. "+ Добавить ступенчатый тариф" в
    форме оборудования, 14-й проход) — выглядит как текст, не как кнопка. */
 .link-btn { background: none; border: none; padding: 0; margin: 0; font: inherit; font-size: 11.5px; color: var(--accent); cursor: pointer; text-decoration: underline; }
@@ -1043,11 +1097,6 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    без display:flex/gap блок с датами схлопывался в обычный <div> и садился
    почти вплотную под сегмент-табами 7/30/90 дней (жалоба пользователя). */
 .finance-range { display: flex; align-items: center; gap: 8px; }
-.finance-range input[type="date"] {
-  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
-  padding: 7px 10px; font-size: 12.5px; color: var(--ink);
-}
-.finance-range input[type="date"]:focus-visible { background: var(--surface); }
 .finance-range span { color: var(--muted); font-size: 12.5px; }
 
 /* ---------- Финансовый график ---------- */

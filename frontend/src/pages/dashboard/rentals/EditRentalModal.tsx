@@ -12,6 +12,7 @@ import { useConfirm } from "../../../components/ConfirmDialog";
 import { equipmentCostForDays } from "./helpers";
 import { FormModal } from "./FormModal";
 import { EquipmentPicklist } from "./EquipmentPicklist";
+import { DatePicker } from "../../../components/DatePicker";
 
 /* ---------- Изменить аренду (доступно для "Забронировано" и "В аренде") ---------- */
 export function EditRentalModal({
@@ -157,17 +158,16 @@ export function EditRentalModal({
       <div className="field-row">
         <div className="field">
           <label>Начало</label>
-          <input
-            type="date"
+          <DatePicker
             value={startDate}
             disabled={isActive}
             title={isActive ? "Оборудование уже выдано — дата выдачи зафиксирована" : undefined}
-            onChange={(e) => setStartDate(e.target.value)}
+            onChange={setStartDate}
           />
         </div>
         <div className="field">
           <label>Окончание</label>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          <DatePicker value={endDate} onChange={setEndDate} align="right" />
         </div>
       </div>
       {/* Без style={{ marginTop: -8 }} — этот отрицательный отступ ничем не

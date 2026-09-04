@@ -11,6 +11,7 @@ import type { Client, Equipment, Rental } from "../../../api/types";
 import { money, todayISO, isoAddDays, spanDays, formatPhoneInput, formatPassportInput } from "../../../lib/format";
 import { useConfirm } from "../../../components/ConfirmDialog";
 import { Dropdown } from "../../../components/Dropdown";
+import { DatePicker } from "../../../components/DatePicker";
 import { isEquipmentFreeForRange, equipmentCostForDays } from "./helpers";
 import { FormModal } from "./FormModal";
 import { EquipmentPicklist } from "./EquipmentPicklist";
@@ -299,31 +300,16 @@ export function CreateRentalModal({
     >
       <div className="field">
         <label>Клиент</label>
-        {/* "+ Добавить нового клиента" переставлена слева от самого поля
-            (58-й проход, по итогам обзора: "должна быть размещена слева от
-            выпадающего списка клиентов с небольшим отступом") — раньше
-            ссылка стояла ПОД полем (см. предыдущий комментарий про
-            display:"block", тот раунд решал другую проблему: не давать
-            ссылке вставать СПРАВА от дропдауна на одной строке без явного
-            намерения). Теперь общая строка нужна явно — flex-обёртка с
-            ссылкой фиксированной ширины слева и Dropdown'ом, растянутым на
-            остаток строки справа (flex:1 + style на Dropdown, тот же приём,
-            что и стиль={style} у самого компонента — style ? width:"100%" :
-            undefined в Dropdown.tsx). Пока открыта панель быстрого
-            добавления (quickAddOpen) — ссылку прячем совсем: сама панель
-            открывается под этой строкой, там уже есть свои "Отмена"/
-            "Добавить клиента". */}
+        {/* "+ Добавить нового клиента" — справа от самого поля (58-й проход:
+            слева "выглядит плохо", по итогам обзора предыдущей версии этой
+            же строки — тогда переставили под влиянием другой формулировки
+            того же пожелания, но результат на экране не понравился). Dropdown
+            теперь идёт первым и растягивается на строку (flex:1), ссылка —
+            вторым элементом фиксированной ширины справа от него. Пока
+            открыта панель быстрого добавления (quickAddOpen) — ссылку прячем
+            совсем: сама панель открывается под этой строкой, там уже есть
+            свои "Отмена"/"Добавить клиента". */}
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          {!quickAddOpen && (
-            <button
-              type="button"
-              className="link-btn"
-              style={{ flex: "none", whiteSpace: "nowrap" }}
-              onClick={() => setQuickAddOpen(true)}
-            >
-              + Добавить нового клиента
-            </button>
-          )}
           {/* Поиск (46-й проход, по итогам обзора формы "Новая аренда" — при
               росте базы клиентов простой скролл по кнопкам перестаёт работать)
               — searchable уже был готов в самом Dropdown (используется, например,
@@ -341,6 +327,16 @@ export function CreateRentalModal({
               .map((c) => ({ value: c.id, label: c.name + (c.phone ? ` · ${c.phone}` : "") }))}
             style={{ flex: 1 }}
           />
+          {!quickAddOpen && (
+            <button
+              type="button"
+              className="link-btn"
+              style={{ flex: "none", whiteSpace: "nowrap" }}
+              onClick={() => setQuickAddOpen(true)}
+            >
+              + Добавить нового клиента
+            </button>
+          )}
         </div>
         {/* 26-й проход, проф. обзор: раньше рейтинг "чёрный список" нигде не
             всплывал в момент, когда это важнее всего — при оформлении НОВОЙ
@@ -433,11 +429,11 @@ export function CreateRentalModal({
       <div className="field-row">
         <div className="field">
           <label>Начало</label>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          <DatePicker value={startDate} onChange={setStartDate} />
         </div>
         <div className="field">
           <label>Окончание</label>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          <DatePicker value={endDate} onChange={setEndDate} align="right" />
         </div>
       </div>
       <div className="field">

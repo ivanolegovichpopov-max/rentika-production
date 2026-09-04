@@ -11,6 +11,7 @@ import { useConfirm } from "../../../components/ConfirmDialog";
 import { useModalDialog } from "../../../lib/useModalDialog";
 import { formatPhoneInput } from "../../../lib/format";
 import { MAX_CLIENT_DOCUMENT_BYTES, isClientFormDirty, type ClientFormState } from "./formHelpers";
+import { DatePicker } from "../../../components/DatePicker";
 
 /** Модалка добавления/изменения клиента. */
 export function ClientFormModal({
@@ -230,7 +231,7 @@ export function ClientFormModal({
                   — используется фильтром "Дни рождения на этой неделе" в
                   таблице клиентов, повод напомнить о себе скидкой. */}
               <label>День рождения (необязательно)</label>
-              <input type="date" value={form.birthday} onChange={(e) => setForm({ ...form, birthday: e.target.value })} />
+              <DatePicker value={form.birthday} onChange={(v) => setForm({ ...form, birthday: v })} />
             </div>
           </div>
           {form.clientType === "company" && (

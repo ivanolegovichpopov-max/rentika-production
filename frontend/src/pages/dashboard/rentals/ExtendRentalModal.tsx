@@ -9,6 +9,7 @@ import type { Client, Rental } from "../../../api/types";
 import { fmtDate, isoAddDays } from "../../../lib/format";
 import { conflictEndFor } from "./helpers";
 import { FormModal } from "./FormModal";
+import { DatePicker } from "../../../components/DatePicker";
 
 /* ---------- Быстрое продление (41-й проход) ---------- */
 /**
@@ -85,7 +86,7 @@ export function ExtendRentalModal({
       </div>
       <div className="field">
         <label>Новая дата окончания</label>
-        <input type="date" value={endDate} min={isoAddDays(rental.end_date, 1)} onChange={(e) => setEndDate(e.target.value)} />
+        <DatePicker value={endDate} min={isoAddDays(rental.end_date, 1)} onChange={setEndDate} />
       </div>
       <div className="field-hint">Состав оборудования и скидка не меняются — только дата.</div>
     </FormModal>

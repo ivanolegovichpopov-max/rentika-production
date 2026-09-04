@@ -15,6 +15,7 @@ import { IconClose } from "../../../lib/icons";
 import { useConfirm } from "../../../components/ConfirmDialog";
 import { useToast } from "../../../components/Toast";
 import { rateLabel, equipmentHasOpenRentals } from "./helpers";
+import { DatePicker } from "../../../components/DatePicker";
 
 /* ============================================================
    Показатели позиции в слайд-панели — эквиваленты демо-функций
@@ -261,7 +262,7 @@ export function EquipmentDetailPanel({
         {item.status === "maintenance" && (
           <div className="field" style={{ marginTop: "10px" }}>
             <label>Ожидаемая дата окончания (необязательно)</label>
-            <input type="date" value={maintUntil} onChange={(e) => void handleMaintUntilChange(e.target.value)} />
+            <DatePicker value={maintUntil} onChange={(v) => void handleMaintUntilChange(v)} />
             <div className="field-hint">
               {item.maintenance_until
                 ? `До ${fmtDate(item.maintenance_until)} позиция недоступна для брони; с ${fmtDate(
