@@ -643,47 +643,14 @@ export function CalendarTab({
             индикатор выделения) жили в одном ряду с общим flexWrap — та же
             "рябая" регрессия, которую на других вкладках чинили ещё в 44-45-м
             проходах (см. комментарии в EquipmentTab.tsx/ClientsTab.tsx/
-            RentalsTab.tsx). Теперь граница между смысловыми группами
-            зафиксирована как строка, а не отдана на волю переноса по ширине:
-            строка 1 — "что показываем" (категория+склад), строка 2 — "когда
-            смотрим" (диапазон+навигация+дата+индикатор выделения). */}
+            RentalsTab.tsx). Порядок строк (55-й проход, ещё одна правка по
+            месту — "не приведена к общему виду") — не "что показываем" перед
+            "когда смотрим", как было сначала, а по роли элемента, как на
+            Клиентах/Арендах: строка 1 — сегментированные/самые часто
+            используемые контролы (там диапазон дат листают постоянно,
+            категорию/склад выставляют раз и надолго), строка 2 — дропдауны
+            точечных фильтров (там же — "Фильтры"/сортировка). */}
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            {/* Категории — выпадающий список вместо плоского ряда кнопок на
-                каждую категорию (53-й проход): ряд кнопок неограниченно рос
-                вширь и переносился на вторую строку при каждой новой
-                категории. Тот же общий одиночный Dropdown, что и везде в
-                приложении (components/Dropdown.tsx — сам построен на классах
-                .cat-filter*, которыми на "Оборудовании" реализован мультивыбор
-                категорий/складов), а не отдельная копия того же idiom. */}
-            <Dropdown
-              value={calCategoryFilter}
-              onChange={setCalCategoryFilter}
-              placeholder="Все категории"
-              options={[
-                { value: "all", label: "Все категории", hint: usableAll.length },
-                ...orderedCategories.map((cat) => ({ value: cat, label: cat, hint: categoryCounts[cat] })),
-              ]}
-            />
-            {/* Фильтр по складу (53-й проход, пункт 3 из "что нужно доработать")
-                — показывается только когда склады вообще заведены, тот же
-                принцип, что и на "Оборудовании". Обёрнут в общий родительский
-                ряд с категорией БЕЗ собственного flexWrap — те же две строки,
-                тот же приём, что и "категория+склад"/"просрочка+фильтры" на
-                других вкладках: переносятся вниз только вдвоём, если вообще
-                переносятся, а не порознь. */}
-            {warehouses.length > 0 && (
-              <Dropdown
-                value={calWarehouseFilter}
-                onChange={setCalWarehouseFilter}
-                placeholder="Все склады"
-                options={[
-                  { value: "all", label: "Все склады", hint: usableAll.length },
-                  ...warehouses.map((w) => ({ value: w, label: w, hint: warehouseCounts[w] })),
-                ]}
-              />
-            )}
-          </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <div className="segmented">
               {CAL_RANGE_OPTIONS.map((opt) => (
@@ -697,10 +664,34 @@ export function CalendarTab({
                 </button>
               ))}
             </div>
+            {/* "Назад"/"Вперёд" сокращены до одних стрелок (55-й проход) —
+                тот же приём, что и icon-only-кнопки в проекте (например,
+                "Рискованные клиенты" на "Арендах" — .btn-icon-only + title/
+                aria-label вместо подписи): смысл кнопки не в тексте, а в
+                стрелке, а после переноса в первую строку тут стало теснее
+                (сегмент диапазона + сегмент навигации + переход на дату +
+                иногда ещё пилюля выделения). Символ стрелки — тот же, что и
+                был, просто без слова рядом; title меняется на "Предыдущий/
+                следующий месяц" в режиме "Календарный месяц", чтобы не
+                путать со сдвигом на день. */}
             <div className="segmented">
-              <button type="button" onClick={navPrev}>{calRange === "month" ? "← Пред. месяц" : "← Назад"}</button>
+              <button
+                type="button"
+                onClick={navPrev}
+                title={calRange === "month" ? "Предыдущий месяц" : "Назад"}
+                aria-label={calRange === "month" ? "Предыдущий месяц" : "Назад"}
+              >
+                ←
+              </button>
               <button type="button" onClick={navToday}>Сегодня</button>
-              <button type="button" onClick={navNext}>{calRange === "month" ? "След. месяц →" : "Вперёд →"}</button>
+              <button
+                type="button"
+                onClick={navNext}
+                title={calRange === "month" ? "Следующий месяц" : "Вперёд"}
+                aria-label={calRange === "month" ? "Следующий месяц" : "Вперёд"}
+              >
+                →
+              </button>
             </div>
             {/* Раньше "Сегодня" стояла и в сегменте навигации, и ещё раз рядом
                 с полем даты (53-й проход, обзор — "раздвоенная кнопка
@@ -739,6 +730,42 @@ export function CalendarTab({
                   <IconClose />
                 </button>
               </span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            {/* Категории — выпадающий список вместо плоского ряда кнопок на
+                каждую категорию (53-й проход): ряд кнопок неограниченно рос
+                вширь и переносился на вторую строку при каждой новой
+                категории. Тот же общий одиночный Dropdown, что и везде в
+                приложении (components/Dropdown.tsx — сам построен на классах
+                .cat-filter*, которыми на "Оборудовании" реализован мультивыбор
+                категорий/складов), а не отдельная копия того же idiom. */}
+            <Dropdown
+              value={calCategoryFilter}
+              onChange={setCalCategoryFilter}
+              placeholder="Все категории"
+              options={[
+                { value: "all", label: "Все категории", hint: usableAll.length },
+                ...orderedCategories.map((cat) => ({ value: cat, label: cat, hint: categoryCounts[cat] })),
+              ]}
+            />
+            {/* Фильтр по складу (53-й проход, пункт 3 из "что нужно доработать")
+                — показывается только когда склады вообще заведены, тот же
+                принцип, что и на "Оборудовании". Обёрнут в общий родительский
+                ряд с категорией БЕЗ собственного flexWrap — те же две строки,
+                тот же приём, что и "категория+склад"/"просрочка+фильтры" на
+                других вкладках: переносятся вниз только вдвоём, если вообще
+                переносятся, а не порознь. */}
+            {warehouses.length > 0 && (
+              <Dropdown
+                value={calWarehouseFilter}
+                onChange={setCalWarehouseFilter}
+                placeholder="Все склады"
+                options={[
+                  { value: "all", label: "Все склады", hint: usableAll.length },
+                  ...warehouses.map((w) => ({ value: w, label: w, hint: warehouseCounts[w] })),
+                ]}
+              />
             )}
           </div>
         </div>
