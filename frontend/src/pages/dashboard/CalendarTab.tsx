@@ -162,12 +162,22 @@ function equipmentDayStatus(e: Equipment, d: string, rentals: Rental[], clients:
  * содержимое ячейки то же title, что показывается во всплывающей подсказке
  * на самой ячейке (equipmentDayStatus().title — "Свободно"/"Забронировано —
  * Имя"/"В аренде — Имя"/"Просрочено — Имя"/"На обслуживании…").
+ *
+ * 63-й проход, обзор вживую — "печать/CSV не видят номер #N": колонка "Код"
+ * раньше отдавала ТОЛЬКО настоящее e.code, хотя в самой сетке на экране для
+ * одинаковых по названию позиций БЕЗ кода уже есть запасной номер #N
+ * (noCodeOrdinals — считается один раз в компоненте, см. его докстринг
+ * выше). Без синхронизации на экране позиции легко различимы, а в
+ * распечатанной таблице/выгруженном CSV — нет (все идут одинаковой
+ * подписью). noCodeOrdinals передаётся сюда готовым, а не пересчитывается
+ * заново — он уже посчитан один раз для того же списка list (это всегда
+ * usable, см. вызовы ниже в MoreActionsMenu).
  */
-function exportCalendarCsv(list: Equipment[], daysList: string[], rentals: Rental[], clients: Client[]) {
+function exportCalendarCsv(list: Equipment[], daysList: string[], rentals: Rental[], clients: Client[], noCodeOrdinals: Map<string, number>) {
   const header = ["Оборудование", "Код", ...daysList.map((d) => fmtDate(d))];
   const rows = list.map((e) => [
     e.name,
-    e.code ?? "",
+    e.code || (noCodeOrdinals.has(e.id) ? "#" + noCodeOrdinals.get(e.id) : ""),
     ...daysList.map((d) => equipmentDayStatus(e, d, rentals, clients).title),
   ]);
   const csv = toCsv(header, rows);
@@ -201,8 +211,13 @@ function exportCalendarCsv(list: Equipment[], daysList: string[], rentals: Renta
  * ориентацией, так печатная модалка сама подсказывает браузеру нужный
  * разворот, а не полагается на то, что сотрудник сам вспомнит переключить
  * ориентацию в диалоге печати.
+ *
+ * 63-й проход — та же синхронизация с noCodeOrdinals, что и в
+ * exportCalendarCsv выше (см. её докстринг): без настоящего кода, но с
+ * запасным #N среди 2+ одноимённых позиций, печатная строка получает тот же
+ * "· #N", что CSV — вместо того чтобы молчать, как раньше.
  */
-function buildCalendarPrintDoc(list: Equipment[], daysList: string[], rentals: Rental[], clients: Client[]): ReactNode {
+function buildCalendarPrintDoc(list: Equipment[], daysList: string[], rentals: Rental[], clients: Client[], noCodeOrdinals: Map<string, number>): ReactNode {
   return (
     <div className="doc-page cal-print-page">
       <h2>Календарь занятости</h2>
@@ -221,7 +236,7 @@ function buildCalendarPrintDoc(list: Equipment[], daysList: string[], rentals: R
         <tbody>
           {list.map((e) => (
             <tr key={e.id}>
-              <td>{e.name}{e.code ? ` · ${e.code}` : ""}</td>
+              <td>{e.name}{e.code ? ` · ${e.code}` : noCodeOrdinals.has(e.id) ? ` · #${noCodeOrdinals.get(e.id)}` : ""}</td>
               {daysList.map((d) => {
                 const title = equipmentDayStatus(e, d, rentals, clients).title;
                 return <td key={d}>{title === "Свободно" ? "" : title}</td>;
@@ -922,13 +937,13 @@ export function CalendarTab({
                 // именно физическая печать") — тот же openDoc/DocModal, что и
                 // у актов/договоров ниже по файлу, просто с содержимым от
                 // buildCalendarPrintDoc вместо buildIssueDoc/buildReturnDoc.
-                onClick: () => openDoc("Календарь занятости", buildCalendarPrintDoc(usable, days, rentals, clients)),
+                onClick: () => openDoc("Календарь занятости", buildCalendarPrintDoc(usable, days, rentals, clients, noCodeOrdinals)),
               },
               {
                 key: "export-csv",
                 label: "Экспорт в CSV",
                 disabled: usable.length === 0,
-                onClick: () => exportCalendarCsv(usable, days, rentals, clients),
+                onClick: () => exportCalendarCsv(usable, days, rentals, clients, noCodeOrdinals),
               },
             ]}
           />
