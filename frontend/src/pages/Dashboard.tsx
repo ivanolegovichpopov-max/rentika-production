@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement, type SVGProps } from "react";
+import { useEffect, useState, type ReactElement, type ReactNode, type SVGProps } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useBusiness } from "../context/BusinessContext";
 import { DataProvider, useData } from "../context/DataContext";
@@ -16,6 +16,7 @@ import { FinanceTab } from "./dashboard/FinanceTab";
 import { EmployeesTab } from "./dashboard/EmployeesTab";
 import { MessagesTab } from "./dashboard/MessagesTab";
 import { AccountSettings } from "./AccountSettings";
+import { TwoFactorSettings } from "./TwoFactorSettings";
 import { rentalDisplayStatus } from "../lib/statusMeta";
 import { initials, money } from "../lib/format";
 import { isUnpaid } from "./dashboard/rentals/helpers";
@@ -68,14 +69,81 @@ export function Dashboard() {
   }
 
   return (
-    <DataProvider businessId={currentBusinessId}>
-      <DashboardShell
-        businessId={currentBusinessId}
-        businesses={businesses}
-        setCurrentBusinessId={setCurrentBusinessId}
-      />
-    </DataProvider>
+    <Require2faGate businessId={currentBusinessId}>
+      <DataProvider businessId={currentBusinessId}>
+        <DashboardShell
+          businessId={currentBusinessId}
+          businesses={businesses}
+          setCurrentBusinessId={setCurrentBusinessId}
+        />
+      </DataProvider>
+    </Require2faGate>
   );
+}
+
+/**
+ * Перехват обязательной 2FA для должности (66-й проход, "Должности и
+ * права") — раньше сотрудник с такой должностью и без включённой у себя
+ * 2FA получал 403 от КАЖДОГО business-scoped запроса дашборда сразу (см.
+ * проверку в app/core/deps.py::get_business_context), но ни один из них
+ * (DataProvider.reload, список сотрудников чуть ниже) не показывал эту
+ * ошибку — DataProvider.reload() не ловит исключения вовсе, так что
+ * человек просто увидел бы пустой дашборд без объяснений. Здесь —
+ * отдельная, лёгкая business-scoped проверка ДО того, как монтируются
+ * DataProvider/DashboardShell: тот же список сотрудников, что и так нужен
+ * DashboardShell (см. useEffect там), но с обработкой именно этого случая.
+ * Совпадение подстроки в тексте ошибки — сознательный, задокументированный
+ * с обеих сторон контракт (см. комментарий в get_business_context), а не
+ * хрупкое совпадение по коду ответа (403 отдают и обычные ACL-отказы).
+ */
+function Require2faGate({ businessId, children }: { businessId: string; children: ReactNode }) {
+  const { user, logout } = useAuth();
+  const [status, setStatus] = useState<"checking" | "ok" | "blocked">("checking");
+
+  function check() {
+    setStatus("checking");
+    api
+      .get(`/businesses/${businessId}/employees`)
+      .then(() => setStatus("ok"))
+      .catch((err) => {
+        const blocked = err instanceof ApiError && err.message.includes("двухфакторная аутентификация");
+        setStatus(blocked ? "blocked" : "ok");
+      });
+  }
+
+  useEffect(() => {
+    check();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessId]);
+
+  if (status === "checking") return <div className="page-loading">Загрузка…</div>;
+
+  if (status === "blocked") {
+    return (
+      <div className="page-loading" style={{ alignItems: "stretch", justifyContent: "flex-start", padding: "40px 16px" }}>
+        <div style={{ maxWidth: "440px", margin: "0 auto", textAlign: "left" }}>
+          <h2>Требуется двухфакторная аутентификация</h2>
+          <p className="muted">
+            Владелец бизнеса включил обязательную двухфакторную аутентификацию для вашей должности. Настройте её
+            ниже, чтобы получить доступ к данным.
+          </p>
+          <TwoFactorSettings />
+          {/* Кнопка появляется только после того, как 2FA реально включена
+              (user.totp_enabled), а не сразу — иначе повторная проверка
+              доступа тут же размонтировала бы TwoFactorSettings вместе с
+              единственным показом backup-кодов, не дав их сохранить. */}
+          <div style={{ marginTop: "16px", display: "flex", gap: "8px" }}>
+            {user?.totp_enabled && (
+              <button className="btn btn-primary" onClick={check}>Продолжить в дашборд</button>
+            )}
+            <button className="btn" onClick={() => void logout()}>Выйти</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
 }
 
 function DashboardShell({

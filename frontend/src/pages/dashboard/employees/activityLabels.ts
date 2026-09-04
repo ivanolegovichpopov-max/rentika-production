@@ -34,10 +34,18 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   "employee:update": "Данные сотрудника изменены",
   "employee:disable": "Сотрудник отключён",
   "employee:reset_password": "Сотруднику сброшен пароль",
+  // activate (66-й проход) — реальный переход invited -> active при первом
+  // входе (см. _activate_invited_employees в app/api/routes/auth.py); import
+  // — итог массового CSV-импорта (см. import_employees в employees.py).
+  "employee:activate": "Сотрудник подтвердил приглашение (первый вход)",
+  "employee:import": "Импортированы сотрудники",
   "position:create": "Должность создана",
   "position:rename": "Должность переименована",
   "position:delete": "Должность удалена",
   "position:update_permissions": "Изменены права должности",
+  // reorder/update_require_2fa — 66-й проход, "Должности и права".
+  "position:reorder": "Изменён порядок должностей",
+  "position:update_require_2fa": "Изменено требование двухфакторной аутентификации для должности",
   "equipment:create": "Оборудование добавлено",
   "equipment:update": "Оборудование изменено",
   "equipment:delete": "Оборудование удалено",
@@ -79,6 +87,24 @@ function statusLabel(value: unknown): string {
   return EMPLOYEE_STATUS_META[value]?.label ?? value;
 }
 
+// Та же карта разделов, что RESOURCES в EmployeesTab.tsx — продублирована
+// здесь маленьким объектом, а не импортирована оттуда, чтобы не заводить
+// циклический импорт (EmployeesTab.tsx сам импортирует этот модуль).
+const RESOURCE_LABELS: Record<string, string> = {
+  equipment: "Оборудование",
+  clients: "Клиенты",
+  rentals: "Аренды",
+  finance: "Финансы",
+  employees: "Сотрудники",
+};
+
+const PERMISSION_LEVEL_LABELS: Record<string, string> = { none: "нет доступа", view: "просмотр", edit: "просмотр и редактирование" };
+
+function levelLabel(value: unknown): string {
+  if (typeof value !== "string") return "—";
+  return PERMISSION_LEVEL_LABELS[value] ?? value;
+}
+
 // "было → стало" из meta (65-й проход) — тот же idiom "<поле>_before"/
 // "<поле>_after", что и editDetails() в RentalHistorySection.tsx, теперь
 // заведён и для action="update" на resource="employee" (см. update_employee
@@ -101,6 +127,27 @@ export function activityDetails(entry: ActivityLogEntry): string[] {
   }
   if (entry.resource === "position" && entry.action === "rename" && "title_before" in meta) {
     lines.push(`название: ${String(meta.title_before)} → ${String(meta.title_after)}`);
+  }
+  // update_permissions (66-й проход) — meta.changes: список только
+  // ИЗМЕНИВШИХСЯ ресурсов с {resource, level_before, level_after} (см.
+  // update_permissions в app/api/routes/positions.py); раньше meta хранила
+  // только полный список permissions ПОСЛЕ изменения, без "было", так что
+  // журнал не мог показать реальную разницу для этого действия.
+  if (entry.resource === "position" && entry.action === "update_permissions" && Array.isArray(meta.changes)) {
+    for (const change of meta.changes as Record<string, unknown>[]) {
+      const resource = typeof change.resource === "string" ? change.resource : "";
+      lines.push(
+        `${RESOURCE_LABELS[resource] ?? resource}: ${levelLabel(change.level_before)} → ${levelLabel(change.level_after)}`
+      );
+    }
+  }
+  if (entry.resource === "position" && entry.action === "update_require_2fa" && "require_2fa_before" in meta) {
+    const before = meta.require_2fa_before ? "включена" : "выключена";
+    const after = meta.require_2fa_after ? "включена" : "выключена";
+    lines.push(`обязательная 2FA: ${before} → ${after}`);
+  }
+  if (entry.resource === "position" && entry.action === "create" && "copied_permissions_from" in meta) {
+    lines.push("права скопированы с другой должности");
   }
   return lines;
 }

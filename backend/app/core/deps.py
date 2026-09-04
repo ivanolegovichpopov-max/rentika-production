@@ -96,6 +96,23 @@ async def get_business_context(
     if employee is None or employee.status != EmployeeStatus.active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Нет доступа к этому бизнесу")
 
+    # Обязательная 2FA по должности (66-й проход) — владелец мог пометить
+    # должность как require_2fa (см. Position.require_2fa); сотрудник на ней
+    # без включённой 2FA не проходит дальше ни на один business-scoped
+    # эндпоинт, каким бы ни было его положение по ACL. Владельца (у него нет
+    # position_id) и платформенного админа (выше, отдельная ветка) это не
+    # касается. Текст сообщения — стабильный маркер: фронт (Dashboard.tsx)
+    # ищет именно эту подстроку, чтобы показать отдельный экран настройки
+    # 2FA вместо обычной ошибки доступа, поэтому формулировку менять с
+    # оглядкой на frontend/src/pages/Dashboard.tsx.
+    if not employee.is_owner and employee.position_id is not None:
+        position = db.get(Position, employee.position_id)
+        if position is not None and position.require_2fa and not user.totp_enabled:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Для вашей должности обязательна двухфакторная аутентификация — включите её в профиле, чтобы продолжить.",
+            )
+
     return BusinessContext(business_id=business_id, user=user, employee=employee, full_access=employee.is_owner)
 
 

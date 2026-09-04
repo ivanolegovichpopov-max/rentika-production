@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -109,6 +109,20 @@ class Position(Base):
         GUID(), ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Ручной порядок карточек для перетаскивания в UI (66-й проход) — тот же
+    # idiom, что EquipmentCategory.position/EquipmentWarehouse.position, но
+    # названо sort_order, а не "position": "position" на этой модели уже
+    # означает саму должность, Position.position читалось бы двусмысленно.
+    # НЕ уникально и НЕ обязательно плотное — см. _apply_position_reorder в
+    # app/api/routes/positions.py.
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Обязательная двухфакторная аутентификация для этой должности (66-й
+    # проход) — сотрудник с такой должностью и без включённой 2FA не получит
+    # доступа ни к одному business-scoped эндпоинту, пока не включит 2FA в
+    # профиле (см. проверку в app/core/deps.py::get_business_context). Не
+    # распространяется на владельца бизнеса (у него нет position_id) и на
+    # платформенного админа.
+    require_2fa: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (UniqueConstraint("business_id", "title", name="uq_position_business_title"),)

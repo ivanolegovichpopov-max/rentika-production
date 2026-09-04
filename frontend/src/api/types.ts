@@ -33,6 +33,16 @@ export interface Position {
   id: string;
   title: string;
   permissions: { resource: ResourceType; level: PermissionLevel }[];
+  // Ручной порядок карточек для перетаскивания в UI (66-й проход) — см.
+  // Position.sort_order на бэке.
+  sort_order: number;
+  // Обязательная 2FA для этой должности (66-й проход) — см.
+  // Position.require_2fa на бэке; сотрудник без включённой у себя 2FA не
+  // пройдёт ни на один business-scoped запрос, пока не должность не снимут
+  // с него или он сам не включит 2FA в профиле.
+  require_2fa: boolean;
+  // Сколько сотрудников сейчас на этой должности (66-й проход).
+  employee_count: number;
 }
 
 export interface Employee {
@@ -81,6 +91,28 @@ export interface EmployeeWorkload {
   rentals_created: number;
   client_notes: number;
   rental_photos: number;
+  // Сравнение с предыдущим периодом такой же длины (66-й проход) — null,
+  // когда сравнение недоступно (период "весь", а не days=N), а не "было 0".
+  rentals_created_prev: number | null;
+  client_notes_prev: number | null;
+  rental_photos_prev: number | null;
+}
+
+// Одна строка отчёта об импорте сотрудников из CSV (66-й проход) — см.
+// EmployeeImportRowResult на бэке.
+export interface EmployeeImportRowResult {
+  row: number;
+  ok: boolean;
+  name: string;
+  error: string | null;
+  employee: Employee | null;
+}
+
+export interface EmployeeImportResult {
+  total: number;
+  created: number;
+  failed: number;
+  results: EmployeeImportRowResult[];
 }
 
 export interface Equipment {

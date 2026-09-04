@@ -29,6 +29,13 @@ class BusinessLogoUpdate(BaseModel):
 
 class PositionCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
+    # Копировать права с уже существующей должности (66-й проход) — вместо
+    # того чтобы новая должность всегда начинала с "чистого листа" (все
+    # права none) и владельцу приходилось вручную выставлять их заново для
+    # похожей роли. Если задано — источник должен принадлежать тому же
+    # бизнесу (см. create_position), иначе 404; если не задано — прежнее
+    # поведение (все права none).
+    copy_permissions_from: uuid.UUID | None = None
 
 
 class PermissionIn(BaseModel):
@@ -40,6 +47,15 @@ class PositionOut(BaseModel):
     id: uuid.UUID
     title: str
     permissions: list[PermissionIn] = []
+    # Ручной порядок карточек (66-й проход) — см. Position.sort_order.
+    sort_order: int = 0
+    # Обязательная 2FA для этой должности (66-й проход) — см. Position.require_2fa.
+    require_2fa: bool = False
+    # Сколько активных/приглашённых/отключённых сотрудников сейчас на этой
+    # должности (66-й проход) — раньше владельцу приходилось открывать
+    # "Команду" и вручную считать по фильтру, чтобы понять, можно ли
+    # безопасно удалить должность или переименовать её без сюрпризов.
+    employee_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -54,6 +70,21 @@ class PositionUpdate(BaseModel):
     существовал на бэке, а PATCH на переименование — нет)."""
 
     title: str = Field(min_length=1, max_length=255)
+
+
+class PositionReorder(BaseModel):
+    """Тело запроса на ручной порядок карточек должностей (66-й проход) —
+    та же механика, что EquipmentReorder (app/schemas/inventory.py):
+    order — ПОЛНЫЙ список id должностей этого бизнеса в желаемом порядке,
+    частичный список отклоняется (см. app/api/routes/positions.py:
+    reorder_positions), чтобы непереданные должности не остались с
+    "дырявым" sort_order."""
+
+    order: list[uuid.UUID] = Field(min_length=1)
+
+
+class PositionRequire2FAUpdate(BaseModel):
+    require_2fa: bool
 
 
 class EmployeeInvite(BaseModel):
@@ -143,13 +174,44 @@ class EmployeeWorkloadOut(BaseModel):
     ClientNote/ClientDocument/RentalPhoto (проставляются при создании этих
     записей уже давно, просто нигде не суммировались). НЕ подменяет журнал
     действий выше — это именно счётчики "сколько сделано", для быстрой
-    сводки по команде на одном экране, без просмотра списка событий."""
+    сводки по команде на одном экране, без просмотра списка событий.
+
+    *_prev (66-й проход) — те же три счётчика за ПРЕДЫДУЩИЙ период такой же
+    длины, сразу перед текущим (например текущие 7 дней и предыдущие 7 дней
+    до них), чтобы показать тренд "стало больше/меньше", а не голое число
+    без контекста. Заполняются только когда клиент запросил days (для "весь
+    период" сравнивать не с чем — сам период не ограничен) — None означает
+    именно "сравнение недоступно", а не "было 0"."""
 
     employee_id: uuid.UUID
     employee_name: str
     rentals_created: int
     client_notes: int
     rental_photos: int
+    rentals_created_prev: int | None = None
+    client_notes_prev: int | None = None
+    rental_photos_prev: int | None = None
+
+
+class EmployeeImportRowResult(BaseModel):
+    """Одна строка отчёта об импорте сотрудников из CSV (66-й проход) — тот
+    же idiom, что EquipmentImportRowResult (app/schemas/inventory.py), но
+    без превью-грида на фронте (см. EmployeeImportModal.tsx) — список
+    приглашённых сотрудников и так виден на вкладке "Команда" сразу после
+    импорта, повторно показывать его в модалке избыточно."""
+
+    row: int
+    ok: bool
+    name: str
+    error: str | None = None
+    employee: EmployeeOut | None = None
+
+
+class EmployeeImportResult(BaseModel):
+    total: int
+    created: int
+    failed: int
+    results: list[EmployeeImportRowResult]
 
 
 class DashboardPrefs(BaseModel):

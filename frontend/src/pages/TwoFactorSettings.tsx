@@ -56,6 +56,31 @@ export function TwoFactorSettings() {
     }
   }
 
+  // backupCodes проверяем ДО user?.totp_enabled (66-й проход, найдено при
+  // проверке экрана обязательной 2FA): confirmSetup() сначала кладёт
+  // backup-коды в локальный стейт, а затем вызывает refreshUser(), который
+  // асинхронно обновляет user.totp_enabled на true. Если проверять
+  // user?.totp_enabled первой веткой, то как только refreshUser()
+  // отрабатывает, компонент навсегда переключается на карточку "2FA уже
+  // включена" и только что показанные одноразовые backup-коды пропадают
+  // с экрана раньше, чем пользователь успевает их сохранить — это
+  // происходило даже в обычном профиле, не только на новом экране
+  // обязательной 2FA. backupCodes сбрасывается только при повторном
+  // отключении/включении 2FA (см. disable()), поэтому эта карточка
+  // корректно остаётся, пока пользователь не уйдёт со страницы.
+  if (backupCodes) {
+    return (
+      <div className="card">
+        <h2>2FA включена — сохраните backup-коды</h2>
+        <p className="muted">
+          Каждый код можно использовать один раз, если телефон с приложением-аутентификатором
+          недоступен. Сохраните их в надёжном месте — повторно они не показываются.
+        </p>
+        <pre className="backup-codes">{backupCodes.join("\n")}</pre>
+      </div>
+    );
+  }
+
   if (user?.totp_enabled) {
     return (
       <div className="card">
@@ -69,19 +94,6 @@ export function TwoFactorSettings() {
           <button type="submit" className="btn btn-danger">Отключить 2FA</button>
         </form>
         {error && <div className="form-error">{error}</div>}
-      </div>
-    );
-  }
-
-  if (backupCodes) {
-    return (
-      <div className="card">
-        <h2>2FA включена — сохраните backup-коды</h2>
-        <p className="muted">
-          Каждый код можно использовать один раз, если телефон с приложением-аутентификатором
-          недоступен. Сохраните их в надёжном месте — повторно они не показываются.
-        </p>
-        <pre className="backup-codes">{backupCodes.join("\n")}</pre>
       </div>
     );
   }

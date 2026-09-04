@@ -29,7 +29,7 @@ from app.core.security import (
 )
 from app.core.totp import consume_backup_code, verify_totp_code
 from app.database import get_db
-from app.models.business import Business, Employee
+from app.models.business import Business, Employee, EmployeeStatus
 from app.models.user import RefreshToken, User
 from app.schemas.auth import (
     ChangePasswordRequest,
@@ -64,6 +64,32 @@ def _set_refresh_cookie(response: Response, raw_refresh_token: str) -> None:
         max_age=settings.refresh_token_ttl_days * 24 * 3600,
         path="/api/auth",
     )
+
+
+def _activate_invited_employees(db: Session, user: User) -> None:
+    """Реальный сценарий invited -> active (66-й проход) — раньше
+    EmployeeStatus.invited существовал только в модели/схемах: invite_employee
+    (app/api/routes/employees.py) всегда сразу ставил status=active, так что
+    invited был мёртвым кодом. Теперь invite_employee сохраняет invited, а
+    первый успешный вход пользователя переводит ВСЕ его invited-членства во
+    active сразу по всем бизнесам, куда его успели пригласить, а не только в
+    том, в который он в итоге зайдёт. Безопасно вызывать именно отсюда (а не
+    из get_business_context) — /auth/login и /auth/login/totp не
+    business-scoped и не проходят через set_tenant_context/RLS, поэтому не
+    нужно заранее знать business_id, чтобы активировать членство."""
+    invited = db.scalars(
+        select(Employee).where(Employee.user_id == user.id, Employee.status == EmployeeStatus.invited)
+    ).all()
+    for employee in invited:
+        employee.status = EmployeeStatus.active
+        log_action(
+            db,
+            business_id=employee.business_id,
+            user_id=user.id,
+            action="activate",
+            resource="employee",
+            resource_id=str(employee.id),
+        )
 
 
 def _issue_tokens(db: Session, user: User, response: Response) -> TokenResponse:
@@ -153,6 +179,7 @@ async def login(request: Request, body: LoginRequest, response: Response, db: Se
         return LoginResponse(requires_totp=True, totp_challenge_token=create_totp_challenge_token(user_id=str(user.id)))
 
     user.last_login_at = utcnow()
+    _activate_invited_employees(db, user)
     db.commit()
 
     tokens = _issue_tokens(db, user, response)
@@ -185,6 +212,7 @@ async def login_totp(request: Request, body: TotpLoginRequest, response: Respons
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Неверный код двухфакторной аутентификации")
 
     user.last_login_at = utcnow()
+    _activate_invited_employees(db, user)
     db.commit()
 
     return _issue_tokens(db, user, response)

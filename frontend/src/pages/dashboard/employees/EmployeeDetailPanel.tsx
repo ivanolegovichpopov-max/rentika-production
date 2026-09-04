@@ -12,9 +12,11 @@ import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import type { ActivityLogEntry, ActivityLogPage, Employee, EmployeeWorkload } from "../../../api/types";
 import { Badge, EMPLOYEE_STATUS_META } from "../../../lib/statusMeta";
-import { initials } from "../../../lib/format";
+import { initials, tenureLabel } from "../../../lib/format";
+import { trendBadge } from "./workloadTrend";
 import { IconClose, IconEdit, IconHistory, IconMail, IconRestore, IconTrendUp } from "../../../lib/icons";
 import { activityDetails, activityLabel } from "./activityLabels";
+import { exportActivityCsv } from "./csv";
 
 const PERIODS: { key: "7" | "30" | "90" | "all"; label: string }[] = [
   { key: "7", label: "7 дней" },
@@ -115,7 +117,9 @@ export function EmployeeDetailPanel({
                 же периметром, что и email, см. EmployeeOut). */}
             {employee.last_login_at ? `Последний вход: ${fmtDateTime(employee.last_login_at)}` : "Ещё ни разу не входил в систему"}
           </div>
-          <div className="muted">В команде с {new Date(employee.created_at).toLocaleDateString("ru-RU")}</div>
+          <div className="muted">
+            В команде с {new Date(employee.created_at).toLocaleDateString("ru-RU")} ({tenureLabel(employee.created_at)})
+          </div>
         </div>
       </div>
 
@@ -126,15 +130,24 @@ export function EmployeeDetailPanel({
           </h4>
           <div style={{ display: "flex", gap: "14px", flexWrap: "wrap" }}>
             <div>
-              <div style={{ fontSize: "18px", fontWeight: 700 }}>{workload.rentals_created}</div>
+              <div style={{ fontSize: "18px", fontWeight: 700 }}>
+                {workload.rentals_created}
+                {trendBadge(workload.rentals_created, workload.rentals_created_prev)}
+              </div>
               <div className="muted" style={{ fontSize: "11.5px" }}>аренд оформлено</div>
             </div>
             <div>
-              <div style={{ fontSize: "18px", fontWeight: 700 }}>{workload.client_notes}</div>
+              <div style={{ fontSize: "18px", fontWeight: 700 }}>
+                {workload.client_notes}
+                {trendBadge(workload.client_notes, workload.client_notes_prev)}
+              </div>
               <div className="muted" style={{ fontSize: "11.5px" }}>заметок клиентам</div>
             </div>
             <div>
-              <div style={{ fontSize: "18px", fontWeight: 700 }}>{workload.rental_photos}</div>
+              <div style={{ fontSize: "18px", fontWeight: 700 }}>
+                {workload.rental_photos}
+                {trendBadge(workload.rental_photos, workload.rental_photos_prev)}
+              </div>
               <div className="muted" style={{ fontSize: "11.5px" }}>фото аренд загружено</div>
             </div>
           </div>
@@ -142,10 +155,24 @@ export function EmployeeDetailPanel({
       )}
 
       <div className="slideover-section">
-        <h4 style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <IconHistory /> Личная активность
-        </h4>
-        <div className="segmented segmented-sm" style={{ marginBottom: "10px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+          <h4 style={{ display: "flex", alignItems: "center", gap: "6px", margin: 0 }}>
+            <IconHistory /> Личная активность
+          </h4>
+          {/* Персональный CSV-экспорт (66-й проход) — полностью на клиенте,
+              тот же idiom, что exportRentalsCsv/exportEquipmentCsv: экспортируется
+              ТЕКУЩИЙ загруженный список (с учётом периода выше), без отдельного
+              backend-эндпоинта. */}
+          {activity && activity.length > 0 && (
+            <button
+              className="btn btn-sm"
+              onClick={() => exportActivityCsv(activity, `Активность ${employee.name}`)}
+            >
+              Экспорт CSV
+            </button>
+          )}
+        </div>
+        <div className="segmented segmented-sm" style={{ margin: "10px 0" }}>
           {PERIODS.map((p) => (
             <button key={p.key} className={period === p.key ? "active" : ""} onClick={() => setPeriod(p.key)}>
               {p.label}

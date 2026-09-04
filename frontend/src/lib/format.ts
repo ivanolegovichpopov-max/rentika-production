@@ -74,6 +74,32 @@ export function fmtDateLong(iso: string): string {
   return parseLocal(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
 }
 
+/** Простое русское склонение числительного (1 / 2-4 / 5+, с исключением
+ * 11-14) — 66-й проход, нужно и для "N месяцев" (EmployeeDetailPanel.tsx),
+ * и для "N сотрудников" (EmployeesTab.tsx, карточки должностей). */
+export function pluralRu(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
+/** "Стаж" сотрудника в месяцах от даты найма (Employee.created_at) до
+ * сегодня (66-й проход, обзор страницы "Сотрудники" — раньше карточка
+ * сотрудника показывала только саму дату найма, "В команде с ...", без
+ * человекочитаемого "сколько это уже"). Меньше месяца — отдельная подпись,
+ * не "0 месяцев". */
+export function tenureLabel(createdAtIso: string): string {
+  const start = new Date(createdAtIso);
+  const now = new Date();
+  let months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
+  if (now.getDate() < start.getDate()) months -= 1;
+  months = Math.max(0, months);
+  if (months === 0) return "меньше месяца";
+  return `${months} ${pluralRu(months, "месяц", "месяца", "месяцев")}`;
+}
+
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";

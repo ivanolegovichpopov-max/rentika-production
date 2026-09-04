@@ -37,8 +37,18 @@ export function BusinessProvider({ children }: { children: ReactNode }) {
       setCurrentBusinessId(null);
       setLoading(false);
     }
+    // Зависимость — user?.id, а не весь объект user (66-й проход, найдено
+    // при проверке экрана обязательной 2FA): refreshUser() в AuthContext
+    // возвращает новый объект User при КАЖДОМ вызове (после /auth/2fa/confirm,
+    // /auth/2fa/disable, смены пароля и т.п.), даже если сам пользователь не
+    // менялся. С зависимостью [user] это приводило к лишней перезагрузке
+    // списка бизнесов (loading=true -> false) на каждое такое событие, а
+    // Dashboard.tsx на время loading=true подменяет всё дерево на "Загрузка…",
+    // размонтируя всё внутри — включая, например, TwoFactorSettings с только
+    // что показанными backup-кодами, которые пользователь ещё не успел
+    // сохранить. user?.id меняется только при реальном логине/логауте.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user?.id]);
 
   return (
     <BusinessContext.Provider value={{ businesses, currentBusinessId, setCurrentBusinessId, loading, reload }}>
