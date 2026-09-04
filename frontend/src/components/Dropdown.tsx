@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { IconChevronDown, IconCheck } from "../lib/icons";
 
 /**
@@ -35,6 +35,14 @@ export interface DropdownOption {
   value: string;
   label: ReactNode;
   hint?: ReactNode;
+  /** Отделить эту опцию от следующей горизонтальной полоской (55-й проход,
+   * обзор по скриншоту — на "Оборудовании" в мультивыборе категорий/складов
+   * "Все категории"/"Все склады" отделены от списка конкретных значений
+   * .cat-filter-sep, а в общем Dropdown такого разделения не было вообще).
+   * Опционально и не влияет на все прочие места, где Dropdown уже
+   * используется (сортировка, выбор клиента и т.п.) — там просто не
+   * задаётся ни у одной опции, так что рендер не меняется. */
+  separatorAfter?: boolean;
 }
 
 export function Dropdown({
@@ -119,19 +127,21 @@ export function Dropdown({
           )}
           {visibleOptions.length === 0 && <div className="empty-note" style={{ padding: "6px 10px" }}>Ничего не найдено</div>}
           {visibleOptions.map((o) => (
-            <button
-              type="button"
-              key={o.value}
-              className={"cat-filter-option" + (o.value === value ? " checked" : "")}
-              onClick={() => {
-                onChange(o.value);
-                setOpen(false);
-              }}
-            >
-              <span className="cat-filter-check">{o.value === value && <IconCheck />}</span>
-              <span className="cat-filter-name">{o.label}</span>
-              {o.hint !== undefined && <span className="cat-filter-count">{o.hint}</span>}
-            </button>
+            <Fragment key={o.value}>
+              <button
+                type="button"
+                className={"cat-filter-option" + (o.value === value ? " checked" : "")}
+                onClick={() => {
+                  onChange(o.value);
+                  setOpen(false);
+                }}
+              >
+                <span className="cat-filter-check">{o.value === value && <IconCheck />}</span>
+                <span className="cat-filter-name">{o.label}</span>
+                {o.hint !== undefined && <span className="cat-filter-count">{o.hint}</span>}
+              </button>
+              {o.separatorAfter && <div className="cat-filter-sep" />}
+            </Fragment>
           ))}
         </div>
       )}

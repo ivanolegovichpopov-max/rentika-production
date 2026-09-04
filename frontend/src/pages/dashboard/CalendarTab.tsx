@@ -745,7 +745,7 @@ export function CalendarTab({
               onChange={setCalCategoryFilter}
               placeholder="Все категории"
               options={[
-                { value: "all", label: "Все категории", hint: usableAll.length },
+                { value: "all", label: "Все категории", hint: usableAll.length, separatorAfter: true },
                 ...orderedCategories.map((cat) => ({ value: cat, label: cat, hint: categoryCounts[cat] })),
               ]}
             />
@@ -762,7 +762,7 @@ export function CalendarTab({
                 onChange={setCalWarehouseFilter}
                 placeholder="Все склады"
                 options={[
-                  { value: "all", label: "Все склады", hint: usableAll.length },
+                  { value: "all", label: "Все склады", hint: usableAll.length, separatorAfter: true },
                   ...warehouses.map((w) => ({ value: w, label: w, hint: warehouseCounts[w] })),
                 ]}
               />
