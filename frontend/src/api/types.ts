@@ -39,10 +39,36 @@ export interface Employee {
   id: string;
   user_id: string;
   name: string;
+  // Email сотрудника (64-й проход) — приходит только владельцу/платформенному
+  // админу (см. EmployeeOut на бэке); для остальных, кто тоже видит список
+  // команды, всегда null.
+  email: string | null;
   position_id: string | null;
   is_owner: boolean;
   status: "invited" | "active" | "disabled";
   created_at: string;
+}
+
+// Одна запись общего журнала действий по бизнесу (64-й проход) — см.
+// ActivityLogEntry на бэке. Только владелец/платформенный админ.
+export interface ActivityLogEntry {
+  id: string;
+  action: string;
+  resource: string;
+  resource_id: string | null;
+  employee_name: string | null;
+  meta: Record<string, unknown> | null;
+  created_at: string;
+}
+
+// Сводка нагрузки сотрудника (64-й проход) — см. EmployeeWorkloadOut на
+// бэке. Только владелец/платформенный админ.
+export interface EmployeeWorkload {
+  employee_id: string;
+  employee_name: string;
+  rentals_created: number;
+  client_notes: number;
+  rental_photos: number;
 }
 
 export interface Equipment {

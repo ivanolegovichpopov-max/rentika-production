@@ -532,7 +532,7 @@ function DashboardShell({
                 />
               )}
               {view === "finance" && <FinanceTab period={financePeriod} setPeriod={setFinancePeriod} />}
-              {view === "employees" && <EmployeesTab businessId={businessId} highlightEmployee={highlightEmployee} />}
+              {view === "employees" && <EmployeesTab businessId={businessId} highlightEmployee={highlightEmployee} isOwner={isOwner} />}
               {view === "messages" && (
                 <MessagesTab
                   businessId={businessId}

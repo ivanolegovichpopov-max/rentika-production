@@ -2,13 +2,14 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import log_action
 from app.core.deps import BusinessContext, get_business_context
 from app.database import get_db
 from app.models.business import Permission, Position, PermissionLevel, ResourceType
-from app.schemas.business import PositionCreate, PositionOut, PositionUpdatePermissions
+from app.schemas.business import PositionCreate, PositionOut, PositionUpdate, PositionUpdatePermissions
 
 router = APIRouter(prefix="/businesses/{business_id}/positions", tags=["positions"])
 
@@ -49,6 +50,44 @@ async def create_position(
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="create", resource="position", resource_id=str(position.id))
     db.commit()
     return PositionOut(id=position.id, title=position.title, permissions=[])
+
+
+@router.patch("/{position_id}", response_model=PositionOut)
+async def rename_position(
+    position_id: uuid.UUID,
+    body: PositionUpdate,
+    ctx: BusinessContext = Depends(get_business_context),
+    db: Session = Depends(get_db),
+):
+    """Переименование должности (64-й проход) — раньше название задавалось
+    только один раз при создании (PositionCreate) и дальше было неизменным
+    ни на бэке, ни на фронте; при этом права (PUT .../permissions) и
+    удаление (DELETE ниже) редактировать уже умели. UniqueConstraint
+    business_id+title — при конфликте отдаём то же читаемое 400, что и на
+    создании должности с уже занятым названием (см. create_position выше,
+    где сама ошибка ловится на уровне БД, а не заранее)."""
+    _require_owner(ctx)
+    position = db.get(Position, position_id)
+    if position is None or position.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Должность не найдена")
+
+    position.title = body.title
+    log_action(
+        db,
+        business_id=ctx.business_id,
+        user_id=ctx.user.id,
+        action="rename",
+        resource="position",
+        resource_id=str(position_id),
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Должность с таким названием уже существует")
+
+    perms = db.scalars(select(Permission).where(Permission.position_id == position_id)).all()
+    return PositionOut(id=position.id, title=position.title, permissions=[{"resource": x.resource, "level": x.level} for x in perms])
 
 
 @router.put("/{position_id}/permissions", response_model=PositionOut)

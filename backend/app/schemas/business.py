@@ -48,6 +48,14 @@ class PositionUpdatePermissions(BaseModel):
     permissions: list[PermissionIn]
 
 
+class PositionUpdate(BaseModel):
+    """Переименование должности (64-й проход — раньше название задавалось
+    только при создании и дальше было неизменным; DELETE на должность уже
+    существовал на бэке, а PATCH на переименование — нет)."""
+
+    title: str = Field(min_length=1, max_length=255)
+
+
 class EmployeeInvite(BaseModel):
     email: EmailStr
     name: str = Field(min_length=1, max_length=255)
@@ -59,6 +67,14 @@ class EmployeeOut(BaseModel):
     id: uuid.UUID
     user_id: uuid.UUID
     name: str
+    # Email сотрудника (64-й проход) — раньше нигде не отдавался клиенту,
+    # хотя и есть на связанном User (Employee.email на самой модели нет,
+    # проставляется вручную в routes/employees.py через join с User).
+    # None для всех, КРОМЕ владельца/платформенного админа (ctx.full_access)
+    # — обычным сотрудникам чужие email из списка команды не показываем,
+    # даже если сам список им виден (см. list_employees — он не требует
+    # full_access, только валидное членство в бизнесе).
+    email: str | None = None
     position_id: uuid.UUID | None
     is_owner: bool
     status: EmployeeStatus
@@ -71,6 +87,49 @@ class EmployeeUpdate(BaseModel):
     name: str | None = None
     position_id: uuid.UUID | None = None
     status: EmployeeStatus | None = None
+    # Сброс временного пароля сотруднику (64-й проход) — раньше сменить
+    # пароль мог только сам сотрудник через профиль после входа; если он
+    # забыл временный пароль ДО первого входа (или потерял доступ), владелец
+    # был бессилен что-либо сделать. Проверяется той же политикой пароля,
+    # что и при приглашении (см. update_employee).
+    new_password: str | None = Field(default=None, min_length=12, max_length=128)
+
+
+class ActivityLogEntry(BaseModel):
+    """Одна запись общего журнала действий по бизнесу (64-й проход) — та же
+    идея, что и RentalHistoryEntry (app/schemas/inventory.py), но не по
+    одной аренде, а по всем ресурсам сразу: читает уже существующий
+    AuditLog, который пишется практически на каждое значимое действие по
+    всему бэкенду (клиенты, оборудование, аренды, сотрудники, должности,
+    сообщения…), но раньше нигде не читался обратно владельцу бизнеса —
+    только вручную через БД при разборе инцидентов. Владелец видит здесь
+    "кто и что делал" по всей команде, не открывая каждую аренду/клиента
+    по отдельности."""
+
+    id: uuid.UUID
+    action: str
+    resource: str
+    resource_id: str | None = None
+    employee_name: str | None = None
+    meta: dict | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class EmployeeWorkloadOut(BaseModel):
+    """Сводка нагрузки сотрудника (64-й проход) — агрегаты по уже
+    существующим полям employee_id/created_by_employee_id на Rental/
+    ClientNote/ClientDocument/RentalPhoto (проставляются при создании этих
+    записей уже давно, просто нигде не суммировались). НЕ подменяет журнал
+    действий выше — это именно счётчики "сколько сделано", для быстрой
+    сводки по команде на одном экране, без просмотра списка событий."""
+
+    employee_id: uuid.UUID
+    employee_name: str
+    rentals_created: int
+    client_notes: int
+    rental_photos: int
 
 
 class DashboardPrefs(BaseModel):
