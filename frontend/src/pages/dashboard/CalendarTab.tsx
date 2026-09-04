@@ -738,7 +738,6 @@ export function CalendarTab({
                         }
                         onClick={() => setCalCategoryFilter(e.category)}
                       >
-                        {e.name}
                         {/* Код единицы (53-й проход, обзор — "несколько единиц с
                             одинаковым названием неотличимы друг от друга в
                             календаре"): тот же приём, что и "№ …" в
@@ -746,8 +745,18 @@ export function CalendarTab({
                             выручает, если в одной категории лежат N одинаковых
                             по названию единиц (см. cat-filter выше). Склад в
                             эту же строку не влезает по ширине столбца — вынесен
-                            в title (см. выше). */}
-                        {e.code && <span className="cal-code">№{e.code}</span>}
+                            в title (см. выше). Название и код обёрнуты одним
+                            flex-row span'ом (а не два отдельных ребёнка column-
+                            flex ячейки) — иначе .cal-name-cell (flex-direction:
+                            column) кладёт каждого прямого потомка на свою
+                            строку, и код уезжал бы на отдельную строку под
+                            названием вместо одной строки с ним. */}
+                        <span style={{ display: "flex", alignItems: "baseline", gap: "6px", minWidth: 0 }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, flex: "1 1 auto" }}>
+                            {e.name}
+                          </span>
+                          {e.code && <span className="cal-code" style={{ flex: "none" }}>№{e.code}</span>}
+                        </span>
                         <span className="cat">
                           {e.period_days && e.period_price
                             ? `${money(e.period_price)}/${e.period_days}дн${
