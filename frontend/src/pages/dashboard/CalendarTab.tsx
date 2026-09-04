@@ -1032,7 +1032,16 @@ export function CalendarTab({
                             строку, и код уезжал бы на отдельную строку под
                             названием вместо одной строки с ним. */}
                         <span style={{ display: "flex", alignItems: "baseline", gap: "6px", minWidth: 0 }}>
-                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, flex: "1 1 auto" }}>
+                          {/* whiteSpace:"nowrap" (63-й проход, обзор — "у длинных
+                              названий строка становится в два раза выше
+                              соседних"): без него textOverflow:"ellipsis" не
+                              срабатывает вообще (multiline-текст просто
+                              переносится), и .cal-row (align-items:stretch)
+                              растягивал ВСЮ строку, включая ячейки дат, под
+                              высоту двухстрочного названия — соседние
+                              однострочные позиции становились ниже, сетка
+                              "прыгала" по высоте от строки к строке. */}
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: "1 1 auto" }}>
                             {e.name}
                           </span>
                           {e.code ? (
