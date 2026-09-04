@@ -57,7 +57,14 @@ export function MultiDropdown({
   }, [open]);
 
   function toggle(v: string) {
-    onChange(values.includes(v) ? values.filter((x) => x !== v) : [...values, v]);
+    const next = values.includes(v) ? values.filter((x) => x !== v) : [...values, v];
+    // Если пользователь вручную отметил буквально все значения по одному —
+    // это то же самое, что вообще не фильтровать ("Все ..."), так что
+    // схлопываем обратно в пустой массив-сентинел, чтобы галочка "Все ..."
+    // сама подсветилась (1:1 с toggleCategoryFilterValue/
+    // toggleWarehouseFilterValue в EquipmentTab.tsx, 55-й проход —
+    // "плюс во вкладке Оборудование ... сделай также").
+    onChange(next.length > 0 && options.length > 0 && next.length === options.length ? [] : next);
   }
 
   const buttonLabel: ReactNode =
