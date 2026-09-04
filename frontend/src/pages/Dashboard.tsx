@@ -7,6 +7,8 @@ import type { Business, Conversation, Employee, MessagingPermission, NotesMode }
 import { DashboardTab } from "./dashboard/DashboardTab";
 import { AdminOverviewTab } from "./dashboard/AdminOverviewTab";
 import { EquipmentTab, EquipmentDetailPanel } from "./dashboard/EquipmentTab";
+import { EquipmentFormModal } from "./dashboard/equipment/EquipmentFormModal";
+import { formFromEquipment, formToPayload } from "./dashboard/equipment/formHelpers";
 import { ClientsTab, ClientDetailPanel } from "./dashboard/ClientsTab";
 import { RentalsTab, CreateRentalModal } from "./dashboard/RentalsTab";
 import { CalendarTab } from "./dashboard/CalendarTab";
@@ -86,7 +88,19 @@ function DashboardShell({
   setCurrentBusinessId: (id: string) => void;
 }) {
   const { user, logout } = useAuth();
-  const { equipment, clients, rentals, loading, reloadClients, reloadRentals, reloadEquipment } = useData();
+  const {
+    equipment,
+    clients,
+    rentals,
+    loading,
+    reloadClients,
+    reloadRentals,
+    reloadEquipment,
+    equipmentCategories,
+    equipmentWarehouses,
+    reloadEquipmentCategories,
+    reloadEquipmentWarehouses,
+  } = useData();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [view, setView] = useState<View>("dashboard");
   const [search, setSearch] = useState("");
@@ -105,6 +119,18 @@ function DashboardShell({
   // требует перехода на другую вкладку, ровно то, о чём просил пользователь.
   const [dashClientId, setDashClientId] = useState<string | null>(null);
   const [dashEquipmentId, setDashEquipmentId] = useState<string | null>(null);
+  // Форма редактирования оборудования, открытая ПРЯМО С ДАШБОРДА (56-й
+  // проход: раньше кнопка "Изменить" в EquipmentDetailPanel, открытой не со
+  // вкладки "Оборудование" — например, с Календаря, — перекидывала на саму
+  // вкладку "Оборудование" вместо того, чтобы открыть форму на месте; тот
+  // комментарий был устаревшим — EquipmentDetailPanel уже существует и
+  // работает с дашборда, значит и её форма редактирования может жить здесь
+  // же, тем же приёмом, что и CreateRentalModal ниже). EquipmentFormModal и
+  // formFromEquipment/formToPayload — те же переиспользуемые компонент и
+  // чистые функции, что и в EquipmentTab.tsx, просто с собственным
+  // независимым состоянием здесь, а не там.
+  const [dashEquipmentEditId, setDashEquipmentEditId] = useState<string | null>(null);
+  const [dashEquipmentFormError, setDashEquipmentFormError] = useState<string | null>(null);
 
   const { confirm, dialog: confirmDialog } = useConfirm();
   const { notify } = useToast();
@@ -552,19 +578,59 @@ function DashboardShell({
           businessId={businessId}
           equipmentId={dashEquipmentId}
           onClose={() => setDashEquipmentId(null)}
-          // Полноценная форма редактирования живёт во вкладке "Оборудование"
-          // (модалка EquipmentFormModal, локальная для EquipmentTab.tsx) — с
-          // дашборда просто переходим туда с этой позицией в поиске, тем же
-          // временным паттерном, что уже применялся для панели "Топ
-          // оборудования по доходу" до этого раунда.
+          // Форма редактирования теперь открывается на месте, без перехода
+          // на вкладку "Оборудование" (56-й проход) — закрываем карточку и
+          // открываем EquipmentFormModal тем же образом, что и в
+          // EquipmentTab.tsx (см. openEditModal там).
           onEdit={(id) => {
             setDashEquipmentId(null);
-            const item = equipment.find((e) => e.id === id);
-            navigate("equipment", { equipmentFilter: "all", search: item?.name ?? "" });
+            setDashEquipmentFormError(null);
+            setDashEquipmentEditId(id);
           }}
           onDeleted={() => setDashEquipmentId(null)}
         />
       )}
+
+      {dashEquipmentEditId && (() => {
+        const editingItem = equipment.find((e) => e.id === dashEquipmentEditId) ?? null;
+        if (!editingItem) return null;
+        const existingCodes = equipment
+          .filter((e) => e.id !== dashEquipmentEditId && e.code)
+          .map((e) => e.code as string);
+        return (
+          <EquipmentFormModal
+            open
+            title="Изменить оборудование"
+            initial={formFromEquipment(editingItem)}
+            error={dashEquipmentFormError}
+            isOwner={isOwner}
+            categories={equipmentCategories}
+            warehouses={equipmentWarehouses}
+            existingCodes={existingCodes}
+            // "Сохранить и добавить ещё" здесь не нужна — это редактирование
+            // одной конкретной позиции, а не добавление новых (1:1 со смыслом
+            // allowAddAnother={modalMode === "add"} в EquipmentTab.tsx).
+            allowAddAnother={false}
+            resetSignal={0}
+            onClose={() => setDashEquipmentEditId(null)}
+            // Управление справочниками категорий/складов (onManageCategories/
+            // onManageWarehouses) намеренно не передаём — это необязательные
+            // props, и с дашборда достаточно сокращённого набора действий,
+            // тот же принцип, что и у onCopy в EquipmentDetailPanel/onEdit в
+            // ClientDetailPanel.
+            onSubmit={async (form) => {
+              setDashEquipmentFormError(null);
+              try {
+                await api.patch(`/businesses/${businessId}/equipment/${dashEquipmentEditId}`, formToPayload(form));
+                await Promise.all([reloadEquipment(), reloadEquipmentCategories(), reloadEquipmentWarehouses()]);
+                setDashEquipmentEditId(null);
+              } catch (err) {
+                setDashEquipmentFormError(err instanceof ApiError ? err.message : "Не удалось сохранить оборудование");
+              }
+            }}
+          />
+        );
+      })()}
 
       {/* "Новая аренда" из шапки — тот же приём: рендерится здесь, поверх
           оболочки, доступна с любой вкладки, где видна кнопка (дашборд и
