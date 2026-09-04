@@ -1330,7 +1330,19 @@ tbody tr[data-clickable="true"]:hover .row-actions { background: var(--surface-2
 .more-menu-btn:hover { background: var(--surface-2); color: var(--ink); }
 .more-menu-btn svg { flex: none; opacity: 0.6; }
 .cat-filter-panel {
-  position: absolute; top: calc(100% + 4px); left: 0; z-index: 5; min-width: 220px; max-height: 280px;
+  /* right: 0 (60-й проход, "выпадающее меню выбора клиента опять
+     растянулось") — без него ширина панели считалась только по СВОЕМУ
+     контенту (список опций/поле поиска), никак не привязанной к ширине
+     самого триггера. Пока .cat-filter — обычный узкий inline-block (все
+     фильтры на Оборудовании/Клиентах и т.п.), разница была незаметна —
+     ширины обычно совпадали случайно. Но как только триггер растягивают
+     через style-проп (flex:1/width:100% — как у поля "Клиент" в форме
+     "Новая аренда"), панель оставалась узкой прежней ширины и вылезала
+     поверх соседних полей формы. left:0 + right:0 привязывают ширину
+     панели к фактической ширине .cat-filter (position: relative) в обоих
+     случаях; min-width:220px по-прежнему подстраховывает узкие фильтры
+     с короткими подписями — see test scenario ниже. */
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 5; min-width: 220px; max-height: 280px;
   overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: var(--shadow-lg); padding: 6px;
 }
