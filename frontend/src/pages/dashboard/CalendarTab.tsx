@@ -50,6 +50,7 @@ import { IconChevronDown, IconGrip, IconClose, IconAlert } from "../../lib/icons
 import { useToast } from "../../components/Toast";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { Dropdown } from "../../components/Dropdown";
+import { MultiDropdown } from "../../components/MultiDropdown";
 import { MoreActionsMenu } from "../../components/MoreActionsMenu";
 import { usePersistedState } from "../../lib/persist";
 import { isUnpaid } from "./rentals/helpers";
@@ -230,7 +231,13 @@ export function CalendarTab({
   const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [calOffset, setCalOffset] = useState(0);
-  const [calCategoryFilter, setCalCategoryFilter] = useState("all");
+  // Мультивыбор (55-й проход, обзор по скриншоту — "нет множественного
+  // выбора, сделай как на Оборудовании"): пустой массив = "все категории",
+  // тот же смысл, что и у categoryFilter/warehouseFilter в EquipmentTab.tsx
+  // — раньше здесь был одиночный Dropdown со значением "all" | конкретная
+  // категория, теперь MultiDropdown (components/MultiDropdown.tsx) с тем же
+  // .cat-filter*-idiom, но чекбоксами.
+  const [calCategoryFilter, setCalCategoryFilter] = useState<string[]>([]);
   const [calRange, setCalRange] = useState<number | "month">(14);
   const [calColStart, setCalColStart] = useState<string | null>(null);
   const [calColEnd, setCalColEnd] = useState<string | null>(null);
@@ -311,7 +318,8 @@ export function CalendarTab({
   // Число позиций на категорию (53-й проход, обзор — "на 'Оборудовании'
   // рядом с категорией в фильтре видно число позиций, здесь — нет") — тот же
   // счётчик, что и .cat-filter-count на "Оборудовании", передаётся сюда
-  // через hint у Dropdown (components/Dropdown.tsx уже поддерживает его).
+  // через hint у MultiDropdown (components/MultiDropdown.tsx поддерживает
+  // его так же, как одиночный Dropdown.tsx).
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     usableAll.forEach((e) => { counts[e.category] = (counts[e.category] ?? 0) + 1; });
@@ -320,12 +328,10 @@ export function CalendarTab({
 
   // Фильтр по складу (53-й проход, обзор — "на 'Оборудовании' есть и
   // категория, и склад, здесь — только категория") — тот же принцип, что и
-  // calCategoryFilter выше: одиночный выбор через общий Dropdown, а не
-  // мультивыбор чекбоксами (в отличие от "Оборудования", где оба фильтра
-  // можно комбинировать в любом сочетании сразу нескольких значений — для
-  // Календаря, где и так уже есть категория, второй независимый мультивыбор
-  // усложнил бы тулбар больше, чем оправдано).
-  const [calWarehouseFilter, setCalWarehouseFilter] = useState("all");
+  // calCategoryFilter выше: мультивыбор через MultiDropdown, независимый от
+  // категории и комбинируемый с ней (55-й проход — "сделай как на
+  // Оборудовании", где оба фильтра именно так и работают).
+  const [calWarehouseFilter, setCalWarehouseFilter] = useState<string[]>([]);
   const warehouses = useMemo(() => {
     const seen = new Set<string>();
     const list: string[] = [];
@@ -386,7 +392,12 @@ export function CalendarTab({
     return arr;
   }, [start, DAYS]);
 
-  const grouping = calCategoryFilter === "all";
+  // Группировка по категориям остаётся включённой, пока на экране видно
+  // больше одной категории — при "все" (пусто) или при 2+ выбранных
+  // категориях сразу группы всё ещё нужны, чтобы их различать; при ровно
+  // одной выбранной категории группа не нужна (всё и так одной категории) —
+  // тот же эффект, что был у одиночного фильтра до 55-го прохода.
+  const grouping = calCategoryFilter.length !== 1;
   const catRank = useMemo(() => {
     const rank: Record<string, number> = {};
     orderedCategories.forEach((c, i) => { rank[c] = i; });
@@ -397,8 +408,8 @@ export function CalendarTab({
   const usable = useMemo(() => {
     return usableAll
       .filter((e) => {
-        if (calCategoryFilter !== "all" && e.category !== calCategoryFilter) return false;
-        if (calWarehouseFilter !== "all" && e.warehouse !== calWarehouseFilter) return false;
+        if (calCategoryFilter.length > 0 && !calCategoryFilter.includes(e.category)) return false;
+        if (calWarehouseFilter.length > 0 && !(e.warehouse != null && calWarehouseFilter.includes(e.warehouse))) return false;
         if (q && !(e.name + " " + e.category + " " + (e.code ?? "")).toLowerCase().includes(q)) return false;
         return true;
       })
@@ -733,38 +744,39 @@ export function CalendarTab({
             )}
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            {/* Категории — выпадающий список вместо плоского ряда кнопок на
-                каждую категорию (53-й проход): ряд кнопок неограниченно рос
-                вширь и переносился на вторую строку при каждой новой
-                категории. Тот же общий одиночный Dropdown, что и везде в
-                приложении (components/Dropdown.tsx — сам построен на классах
-                .cat-filter*, которыми на "Оборудовании" реализован мультивыбор
-                категорий/складов), а не отдельная копия того же idiom. */}
-            <Dropdown
-              value={calCategoryFilter}
+            {/* Категории — мультивыбор (55-й проход, обзор по скриншоту —
+                "нет множественного выбора, сделай как на Оборудовании").
+                MultiDropdown (components/MultiDropdown.tsx) — тот же общий
+                .cat-filter*-idiom, что и одиночный Dropdown.tsx, но с
+                накоплением нескольких значений сразу, как в ручном
+                мультивыборе на EquipmentTab.tsx. Раньше здесь стоял
+                одиночный Dropdown (53-й проход) — заменён по прямой просьбе
+                привести поведение в соответствие с "Оборудованием". */}
+            <MultiDropdown
+              values={calCategoryFilter}
               onChange={setCalCategoryFilter}
-              placeholder="Все категории"
-              options={[
-                { value: "all", label: "Все категории", hint: usableAll.length, separatorAfter: true },
-                ...orderedCategories.map((cat) => ({ value: cat, label: cat, hint: categoryCounts[cat] })),
-              ]}
+              allLabel="Все категории"
+              allHint={usableAll.length}
+              countNoun="Категорий"
+              options={orderedCategories.map((cat) => ({ value: cat, label: cat, hint: categoryCounts[cat] }))}
             />
-            {/* Фильтр по складу (53-й проход, пункт 3 из "что нужно доработать")
-                — показывается только когда склады вообще заведены, тот же
-                принцип, что и на "Оборудовании". Обёрнут в общий родительский
-                ряд с категорией БЕЗ собственного flexWrap — те же две строки,
-                тот же приём, что и "категория+склад"/"просрочка+фильтры" на
-                других вкладках: переносятся вниз только вдвоём, если вообще
+            {/* Фильтр по складу (53-й проход, пункт 3 из "что нужно доработать",
+                мультивыбор — 55-й проход) — показывается только когда склады
+                вообще заведены, тот же принцип, что и на "Оборудовании".
+                Независим от категории и комбинируется с ней, как на
+                "Оборудовании". Обёрнут в общий родительский ряд с категорией
+                БЕЗ собственного flexWrap — те же две строки, тот же приём,
+                что и "категория+склад"/"просрочка+фильтры" на других
+                вкладках: переносятся вниз только вдвоём, если вообще
                 переносятся, а не порознь. */}
             {warehouses.length > 0 && (
-              <Dropdown
-                value={calWarehouseFilter}
+              <MultiDropdown
+                values={calWarehouseFilter}
                 onChange={setCalWarehouseFilter}
-                placeholder="Все склады"
-                options={[
-                  { value: "all", label: "Все склады", hint: usableAll.length, separatorAfter: true },
-                  ...warehouses.map((w) => ({ value: w, label: w, hint: warehouseCounts[w] })),
-                ]}
+                allLabel="Все склады"
+                allHint={usableAll.length}
+                countNoun="Складов"
+                options={warehouses.map((w) => ({ value: w, label: w, hint: warehouseCounts[w] }))}
               />
             )}
           </div>
@@ -908,7 +920,7 @@ export function CalendarTab({
                           `Показать только категорию «${e.category}»` +
                           (e.warehouse ? `, склад: ${e.warehouse}` : "")
                         }
-                        onClick={() => setCalCategoryFilter(e.category)}
+                        onClick={() => setCalCategoryFilter([e.category])}
                       >
                         {/* Код единицы (53-й проход, обзор — "несколько единиц с
                             одинаковым названием неотличимы друг от друга в
