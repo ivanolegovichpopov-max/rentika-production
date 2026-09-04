@@ -650,9 +650,15 @@ tr.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background
 .cal-row.head .cal-cell.col-selected { background: var(--col-select-soft); }
 .cal-row.head .cal-cell[data-action="cal-col-select"] { cursor: pointer; }
 .cal-row.head .cal-cell[data-action="cal-col-select"]:hover { background: var(--surface-3); }
-/* Обводка "сегодня" — псевдоэлемент рисуется поверх .cal-fill и поверх подсветки выбора (z-index:2), поэтому не прячется под ними. */
+/* Обводка "сегодня" — псевдоэлемент рисуется поверх .cal-fill и поверх подсветки выбора (z-index:2), поэтому не прячется под ними.
+   63-й проход, обзор — "выглядит грязно, как стопка отдельных коробок, а не один столбец": раньше рамка была
+   со всех четырёх сторон (inset 0 0 0 2px) — у каждой ячейки строки рисовались собственные верх/низ, и на границе
+   между соседними строками получался видимый шов. Убраны верх/низ, остались только левая и правая стороны — у
+   соседних по вертикали ячеек одной колонки они складываются в две сплошные линии от шапки до последней строки,
+   без швов между строками, независимо от количества категорий/групп (эффект общий на всю таблицу, не только
+   в рамках одной категории — что при проверке смотрится даже логичнее, чем прерывающаяся по группам линия). */
 .cal-cell.today::after {
-  content: ""; position: absolute; inset: 0; z-index: 2; box-shadow: inset 0 0 0 2px var(--today); pointer-events: none;
+  content: ""; position: absolute; inset: 0; z-index: 2; box-shadow: inset 2px 0 0 0 var(--today), inset -2px 0 0 0 var(--today); pointer-events: none;
 }
 .cal-row.head .cal-cell.today { background: var(--today-soft); color: var(--today); }
 .cal-cell.clickable { cursor: pointer; }
