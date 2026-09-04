@@ -496,7 +496,15 @@ function DashboardShell({
                   onOpenCalendar={(date) => navigate("calendar", { calendarFocusDate: date })}
                 />
               )}
-              {view === "calendar" && <CalendarTab businessId={businessId} search={search} focus={calendarFocus} />}
+              {view === "calendar" && (
+                <CalendarTab
+                  businessId={businessId}
+                  search={search}
+                  focus={calendarFocus}
+                  onOpenClient={setDashClientId}
+                  onOpenEquipment={setDashEquipmentId}
+                />
+              )}
               {view === "finance" && <FinanceTab period={financePeriod} setPeriod={setFinancePeriod} />}
               {view === "employees" && <EmployeesTab businessId={businessId} highlightEmployee={highlightEmployee} />}
               {view === "messages" && (

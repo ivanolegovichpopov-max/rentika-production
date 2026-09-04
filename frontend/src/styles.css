@@ -550,6 +550,10 @@ tbody tr[data-clickable="true"]:hover { background: var(--surface-2); }
   display: flex; flex-direction: column; justify-content: center; position: sticky; left: 0; background: var(--surface); z-index: 1;
 }
 .cal-name-cell .cat { font-size: 11px; font-weight: 500; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* Код единицы оборудования рядом с названием (53-й проход) — отличает друг от
+   друга несколько единиц с одинаковым названием в одной категории, тот же
+   приглушённый тон, что и .cat, но inline и моноширинным начертанием цифр. */
+.cal-name-cell .cal-code { font-family: "Roboto Mono", monospace; font-size: 10.5px; font-weight: 500; color: var(--muted); margin-left: 6px; white-space: nowrap; }
 .cal-name-cell.clickable { cursor: pointer; }
 .cal-name-cell.clickable:hover { color: var(--accent); }
 .cal-row.head .cal-name-cell { background: var(--surface-2); z-index: 2; }
@@ -644,8 +648,13 @@ tr.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background
 .cal-fill.st-active { background: var(--accent); }
 .cal-fill.st-overdue { background: var(--critical); }
 .cal-fill.st-maintenance { background: repeating-linear-gradient(45deg, var(--warning-soft), var(--warning-soft) 4px, var(--surface-3) 4px, var(--surface-3) 8px); }
-.cal-fill-label { font-size: 9px; font-weight: 700; color: #fff; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; padding: 0 2px; }
+.cal-fill-label { display: inline-flex; align-items: center; gap: 2px; font-size: 9px; font-weight: 700; color: #fff; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; padding: 0 2px; }
 .cal-fill-label.dark { color: var(--info); }
+/* Значок просрочки внутри плашки (53-й проход) — просрочка отличалась от
+   "В аренде" только оттенком заливки; иконка добавляет небо-цветовой сигнал
+   самому критичному для бизнеса статусу, тем же принципом, что штриховка у
+   "Обслуживания" и пунктир у "Забронировано". */
+.cal-fill-label svg { flex: none; width: 9px; height: 9px; }
 .cal-jump { display: flex; align-items: center; gap: 6px; }
 .cal-jump input[type="date"] { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; color: var(--ink); }
 .cal-legend { display: flex; gap: 16px; margin-top: 10px; padding: 10px 16px; flex-wrap: wrap; font-size: 12px; color: var(--ink-secondary); }

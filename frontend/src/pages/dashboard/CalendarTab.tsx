@@ -10,27 +10,56 @@
  * время движения мыши — так подсветка диапазона не требует ре-рендера
  * компонента на каждый mouseover, как и в оригинале.
  *
- * ДВЕ ОСОЗНАННЫЕ УПРОЩЕНИЯ ОТНОСИТЕЛЬНО ДЕМО (см. также комментарии ниже
- * по месту):
- *  1. Порядок категорий (drag-and-drop) и свёрнутые категории в демо
- *     персистентны per-viewer через localStorage (oborotcrm_cal_category_
- *     order_v1 / oborotcrm_cal_collapsed_categories_v1). Здесь это обычное
- *     состояние компонента — сбрасывается при уходе с вкладки/перезагрузке
- *     страницы. Сознательное упрощение: сам факт наличия календаря в проде
- *     важнее персистентности мелких предпочтений одного пользователя.
- *  2. Всплывающее уведомление "диапазон занят" раньше шло через browser
- *     alert() (соответствовало остальному приложению — см. 16-й проход,
- *     обзор по скриншотам). Теперь — через общий useToast() (Toast.tsx),
- *     системную замену alert() на всё приложение.
+ * ОСОЗНАННОЕ УПРОЩЕНИЕ ОТНОСИТЕЛЬНО ДЕМО (см. также комментарии ниже по
+ * месту): всплывающее уведомление "диапазон занят" раньше шло через browser
+ * alert() (соответствовало остальному приложению — см. 16-й проход, обзор
+ * по скриншотам). Теперь — через общий useToast() (Toast.tsx), системную
+ * замену alert() на всё приложение.
+ *
+ * 53-й проход, по итогам всестороннего обзора вкладки (дизайн/удобство/
+ * функционал) — четыре правки, приводящие календарь к тем же паттернам,
+ * что уже есть на "Оборудовании"/"Клиентах"/"Арендах":
+ *  1. Порядок категорий (drag-and-drop) и свёрнутые категории теперь
+ *     персистентны через usePersistedState (тот же общий хук, что и
+ *     сортировка на других вкладках) — раньше сбрасывались при уходе со
+ *     вкладки/перезагрузке страницы (было осознанным упрощением, но
+ *     оказалось неудобным при реальном использовании).
+ *  2. Занятая ячейка теперь кликабельна и открывает RentalDetailPanel той
+ *     же аренды — раньше клик работал только по свободным ячейкам
+ *     (бронирование), а по занятым не делал ничего, хотя курсор-указатель
+ *     намекал на кликабельность. Полный набор действий (выдать/принять
+ *     возврат/изменить/продлить/отменить/повторить) подключён так же, как
+ *     на вкладке "Аренды" — RentalsTab.tsx.
+ *  3. Категории теперь выбираются через общий Dropdown (components/
+ *     Dropdown.tsx), а не плоским рядом кнопок на каждую категорию сразу —
+ *     тот ряд неограниченно рос вширь при добавлении категорий.
+ *  4. Тулбар переведён на общий .tab-toolbar-grid (фильтры слева, кнопки
+ *     действий прибиты к правому верхнему углу — как везде); добавлена
+ *     кнопка "+ Новая аренда" на привычном месте (переиспользует
+ *     CreateRentalModal), а "Свернуть/развернуть все" и раздвоенная кнопка
+ *     "Сегодня" убраны под общий "Ещё" — тот же принцип разгрузки шапки,
+ *     что и на "Оборудовании"/"Клиентах".
  */
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useData } from "../../context/DataContext";
 import { api, ApiError } from "../../api/client";
 import type { Client, Equipment, Rental } from "../../api/types";
 import { todayISO, isoAddDays, dayDiff, ymd, fmtDate, money, spanDays } from "../../lib/format";
-import { IconChevronDown, IconGrip, IconClose } from "../../lib/icons";
+import { IconChevronDown, IconGrip, IconClose, IconAlert } from "../../lib/icons";
 import { useToast } from "../../components/Toast";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { Dropdown } from "../../components/Dropdown";
+import { MoreActionsMenu } from "../../components/MoreActionsMenu";
+import { usePersistedState } from "../../lib/persist";
+import { isUnpaid } from "./rentals/helpers";
+import { DocModal, buildIssueDoc, buildReturnDoc } from "./documents";
+import { RentalDetailPanel, PaymentModal } from "./rentals/RentalDetailPanel";
+import { CreateRentalModal } from "./rentals/CreateRentalModal";
+import { EditRentalModal } from "./rentals/EditRentalModal";
+import { ExtendRentalModal } from "./rentals/ExtendRentalModal";
+import { CancelRentalModal } from "./rentals/CancelRentalModal";
+import { IssueRentalModal } from "./rentals/IssueRentalModal";
+import { ReturnRentalModal } from "./rentals/ReturnRentalModal";
 
 const CAL_RANGE_OPTIONS: (number | "month")[] = [7, 14, 30, "month"];
 
@@ -146,6 +175,8 @@ export function CalendarTab({
   businessId,
   search,
   focus,
+  onOpenClient,
+  onOpenEquipment,
 }: {
   businessId: string;
   search: string;
@@ -156,9 +187,15 @@ export function CalendarTab({
   // на ТУ ЖЕ дату (например, вторая аренда в том же диапазоне) снова
   // срабатывает, а не игнорируется как "date не изменился".
   focus?: { date: string; signal: number } | null;
+  // Карточка клиента/оборудования из RentalDetailPanel, открытой поверх
+  // занятой ячейки (53-й проход) — тот же проп, что и у RentalsTab.tsx,
+  // рендерится Dashboard.tsx отдельным слайдовером поверх текущей вкладки.
+  onOpenClient: (clientId: string) => void;
+  onOpenEquipment: (equipmentId: string) => void;
 }) {
   const { equipment, clients, rentals, reloadRentals, reloadEquipment } = useData();
   const { notify } = useToast();
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [calOffset, setCalOffset] = useState(0);
   const [calCategoryFilter, setCalCategoryFilter] = useState("all");
@@ -166,12 +203,38 @@ export function CalendarTab({
   const [calColStart, setCalColStart] = useState<string | null>(null);
   const [calColEnd, setCalColEnd] = useState<string | null>(null);
 
-  // Порядок категорий (drag-and-drop) и свёрнутые категории — см. заметку об
-  // упрощении в шапке файла: живёт только в памяти этого компонента.
-  const [categoryOrder, setCategoryOrder] = useState<string[] | null>(null);
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  // Порядок категорий (drag-and-drop) и свёрнутые категории (53-й проход —
+  // раньше жили только в памяти компонента и сбрасывались при уходе со
+  // вкладки; см. докстринг файла выше) — тот же usePersistedState, что и
+  // сортировка/фильтры на других вкладках. Ключ включает businessId, чтобы
+  // не "утекать" между разными бизнесами одного аккаунта.
+  const [categoryOrder, setCategoryOrder] = usePersistedState<string[] | null>(`cal-cat-order:${businessId}`, null);
+  const [collapsedCategories, setCollapsedCategories] = usePersistedState<string[]>(`cal-collapsed:${businessId}`, []);
 
   const [quickBook, setQuickBook] = useState<QuickBookTarget | null>(null);
+
+  // Действия по аренде из RentalDetailPanel, открытой по клику на занятую
+  // ячейку (53-й проход) — тот же набор состояний и та же схема, что и в
+  // RentalsTab.tsx (renderCard → RentalDetailPanel → соответствующая
+  // модалка), только источник открытия другой (ячейка календаря, а не
+  // карточка в списке).
+  const [openRentalId, setOpenRentalId] = useState<string | null>(null);
+  const [editRental, setEditRental] = useState<Rental | null>(null);
+  const [issueRental, setIssueRental] = useState<Rental | null>(null);
+  const [returnRental, setReturnRental] = useState<Rental | null>(null);
+  const [extendRental, setExtendRental] = useState<Rental | null>(null);
+  const [cancelRental, setCancelRental] = useState<Rental | null>(null);
+  const [paymentRental, setPaymentRental] = useState<Rental | null>(null);
+  const [docModal, setDocModal] = useState<{ title: string; node: ReactNode } | null>(null);
+  // "Повторить аренду" (onRepeat из RentalDetailPanel) и "+ Новая аренда" в
+  // тулбаре — одна и та же форма создания, repeatDraft заполняет её клиентом
+  // и позициями текущей аренды при повторе, при обычном "+" остаётся null.
+  const [showCreate, setShowCreate] = useState(false);
+  const [repeatDraft, setRepeatDraft] = useState<{ clientId: string; equipmentIds: string[] } | null>(null);
+
+  function openDoc(title: string, node: ReactNode) {
+    setDocModal({ title, node });
+  }
 
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -226,12 +289,7 @@ export function CalendarTab({
   }
 
   function toggleCollapsed(cat: string) {
-    setCollapsedCategories((prev) => {
-      const next = new Set(prev);
-      if (next.has(cat)) next.delete(cat);
-      else next.add(cat);
-      return next;
-    });
+    setCollapsedCategories((prev) => (prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]));
   }
 
   const anchor = isoAddDays(todayISO(), calOffset);
@@ -489,7 +547,7 @@ export function CalendarTab({
   }
 
   const collapseAllAvailable = grouping && orderedCategories.length > 1;
-  const allCollapsed = collapseAllAvailable && orderedCategories.every((c) => collapsedCategories.has(c));
+  const allCollapsed = collapseAllAvailable && orderedCategories.every((c) => collapsedCategories.includes(c));
 
   async function afterBooked() {
     setQuickBook(null);
@@ -498,34 +556,25 @@ export function CalendarTab({
 
   return (
     <div>
-      <div className="tab-toolbar">
-        <div className="segmented">
-          <button type="button" className={calCategoryFilter === "all" ? "active" : ""} onClick={() => setCalCategoryFilter("all")}>
-            Все категории
-          </button>
-          {orderedCategories.map((cat) => (
-            <button
-              key={cat}
-              type="button"
-              className={calCategoryFilter === cat ? "active" : ""}
-              onClick={() => setCalCategoryFilter(cat)}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
+      {/* .tab-toolbar-grid (53-й проход) — тот же общий тулбар-каркас, что и
+          на "Оборудовании"/"Клиентах"/"Арендах": фильтры слева, кнопки
+          действий прибиты к правому верхнему углу независимо от того, во
+          сколько строк перенеслись фильтры (см. styles.css). */}
+      <div className="tab-toolbar-grid">
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          {collapseAllAvailable && (
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={() =>
-                setCollapsedCategories(allCollapsed ? new Set() : new Set(orderedCategories))
-              }
-            >
-              {allCollapsed ? "Развернуть все" : "Свернуть все"}
-            </button>
-          )}
+          {/* Категории — выпадающий список вместо плоского ряда кнопок на
+              каждую категорию (53-й проход): ряд кнопок неограниченно рос
+              вширь и переносился на вторую строку при каждой новой
+              категории. Тот же общий одиночный Dropdown, что и везде в
+              приложении (components/Dropdown.tsx — сам построен на классах
+              .cat-filter*, которыми на "Оборудовании" реализован мультивыбор
+              категорий/складов), а не отдельная копия того же idiom. */}
+          <Dropdown
+            value={calCategoryFilter}
+            onChange={setCalCategoryFilter}
+            placeholder="Все категории"
+            options={[{ value: "all", label: "Все категории" }, ...orderedCategories.map((cat) => ({ value: cat, label: cat }))]}
+          />
           <div className="segmented">
             {CAL_RANGE_OPTIONS.map((opt) => (
               <button
@@ -543,10 +592,11 @@ export function CalendarTab({
             <button type="button" onClick={navToday}>Сегодня</button>
             <button type="button" onClick={navNext}>{calRange === "month" ? "След. месяц →" : "Вперёд →"}</button>
           </div>
+          {/* Раньше "Сегодня" стояла и в сегменте навигации, и ещё раз рядом
+              с полем даты (53-й проход, обзор — "раздвоенная кнопка
+              'Сегодня'") — вторая убрана, остался только сам переход к
+              произвольной дате. */}
           <div className="cal-jump">
-            <button type="button" className="btn btn-sm btn-ghost" title="Перейти к сегодняшнему дню" onClick={navToday}>
-              Сегодня
-            </button>
             <input
               type="date"
               value={start}
@@ -565,6 +615,31 @@ export function CalendarTab({
               </button>
             </span>
           )}
+        </div>
+        {/* Колонка кнопок в .tab-toolbar-grid (53-й проход) — тот же приём,
+            что и на остальных вкладках: редкое действие ("Свернуть/развернуть
+            все") спрятано за "Ещё", а на виду — только основной CTA. Раньше
+            у "Календаря" не было своей кнопки создания вообще (бронь — только
+            кликом/протяжкой по ячейке, неочевидно при первом знакомстве) —
+            теперь есть "+ Новая аренда" на привычном для остальных вкладок
+            месте, открывает ту же форму (CreateRentalModal), что и на
+            "Арендах"; клик/протяжка по ячейке остаётся быстрым способом для
+            тех, кто уже о нём знает — оба пути не исключают друг друга. */}
+        <div style={{ display: "flex", gap: "8px" }}>
+          {collapseAllAvailable && (
+            <MoreActionsMenu
+              actions={[
+                {
+                  key: "collapse-all",
+                  label: allCollapsed ? "Развернуть все" : "Свернуть все",
+                  onClick: () => setCollapsedCategories(allCollapsed ? [] : orderedCategories),
+                },
+              ]}
+            />
+          )}
+          <button type="button" className="btn btn-primary" onClick={() => setShowCreate(true)}>
+            + Новая аренда
+          </button>
         </div>
       </div>
 
@@ -608,7 +683,7 @@ export function CalendarTab({
                     lastCategory = e.category;
                     const cat = lastCategory;
                     const count = usable.filter((x) => x.category === cat).length;
-                    const collapsed = collapsedCategories.has(cat);
+                    const collapsed = collapsedCategories.includes(cat);
                     rows.push(
                       <div
                         key={"group-" + cat}
@@ -644,7 +719,7 @@ export function CalendarTab({
                       </div>
                     );
                   }
-                  if (grouping && collapsedCategories.has(e.category)) return;
+                  if (grouping && collapsedCategories.includes(e.category)) return;
 
                   rows.push(
                     <div className="cal-row" key={e.id} style={{ ["--days" as string]: DAYS }}>
@@ -657,10 +732,22 @@ export function CalendarTab({
                         // здесь — функциональный аналог: клик фильтрует
                         // календарь по категории этой позиции (сопоставимо с
                         // filter-by-category в демо).
-                        title={`Показать только категорию «${e.category}»`}
+                        title={
+                          `Показать только категорию «${e.category}»` +
+                          (e.warehouse ? `, склад: ${e.warehouse}` : "")
+                        }
                         onClick={() => setCalCategoryFilter(e.category)}
                       >
                         {e.name}
+                        {/* Код единицы (53-й проход, обзор — "несколько единиц с
+                            одинаковым названием неотличимы друг от друга в
+                            календаре"): тот же приём, что и "№ …" в
+                            EquipmentPicklist.tsx — единственная деталь, которая
+                            выручает, если в одной категории лежат N одинаковых
+                            по названию единиц (см. cat-filter выше). Склад в
+                            эту же строку не влезает по ширине столбца — вынесен
+                            в title (см. выше). */}
+                        {e.code && <span className="cal-code">№{e.code}</span>}
                         <span className="cat">
                           {e.period_days && e.period_price
                             ? `${money(e.period_price)}/${e.period_days}дн${
@@ -694,7 +781,20 @@ export function CalendarTab({
                         const dt = new Date(d + "T00:00:00");
                         const weekend = dt.getDay() === 0 || dt.getDay() === 6;
                         const hitClient = hit ? clients.find((c) => c.id === hit.client_id) : null;
-                        const titleFull = title + (!hit && !isUnderMaintenanceOn(e, d) ? " — нажмите или протяните мышью, чтобы забронировать" : "") + ", " + fmtDate(d);
+                        // Занятая ячейка теперь тоже кликабельна (53-й проход,
+                        // обзор — "по занятой ячейке ничего не сделать, только
+                        // тултип"): открывает RentalDetailPanel той же аренды,
+                        // тем же принципом, что и клик по карточке в списке
+                        // "Аренды" (RentalsTab.tsx → renderCard). Раньше только
+                        // свободные ячейки были кликабельны (бронирование) —
+                        // курсор-указатель стоял у ВСЕХ ячеек не глядя на это
+                        // (см. .cal-cell.clickable ниже), так что открытие по
+                        // клику на занятой не меняет ожидание, а исправляет его.
+                        const titleFull =
+                          title +
+                          (!hit && !isUnderMaintenanceOn(e, d) ? " — нажмите или протяните мышью, чтобы забронировать" : "") +
+                          (hit ? " — нажмите, чтобы открыть карточку аренды" : "") +
+                          ", " + fmtDate(d);
                         const bookable = !hit && !isUnderMaintenanceOn(e, d);
                         return (
                           <div
@@ -709,11 +809,19 @@ export function CalendarTab({
                             data-eqid={e.id}
                             data-date={d}
                             data-bookable={bookable ? "1" : undefined}
-                            onClick={bookable ? () => handleCellClick(e.id, d) : undefined}
+                            onClick={bookable ? () => handleCellClick(e.id, d) : hit ? () => setOpenRentalId(hit.id) : undefined}
                           >
                             <div className={"cal-fill " + cls + (leftContinues ? " cont-left" : "") + (rightContinues ? " cont-right" : "")}>
+                              {/* Просрочка отличается от "В аренде" не только цветом
+                                  (53-й проход, обзор — оба статуса были различимы
+                                  ТОЛЬКО оттенком) — значок восклицания перед
+                                  инициалами добавляет некоторый небо-цветовой
+                                  сигнал самому важному для бизнеса статусу, тем
+                                  же принципом, что "Обслуживание" уже отличается
+                                  штриховкой, а "Забронировано" — пунктиром. */}
                               {hitClient && (
                                 <span className={"cal-fill-label" + (cls === "st-booked" ? " dark" : "")}>
+                                  {cls === "st-overdue" && <IconAlert />}
                                   {clientInitials(hitClient.name)}
                                 </span>
                               )}
@@ -751,6 +859,173 @@ export function CalendarTab({
           onBooked={afterBooked}
         />
       )}
+
+      {/* Полноценная форма "Новая аренда" (53-й проход) — кнопка "+ Новая
+          аренда" в тулбаре и "Повторить аренду" из RentalDetailPanel ниже
+          используют одну и ту же форму, тем же принципом, что и в
+          RentalsTab.tsx: repeatDraft заполняет её клиентом/позициями при
+          повторе, при обычном "+" остаётся null. QuickBookModal (клик/
+          протяжка по ячейке) — сознательно отдельная облегчённая форма, см.
+          её докстринг ниже, а не замена этой. */}
+      {showCreate && (
+        <CreateRentalModal
+          businessId={businessId}
+          clients={clients}
+          equipment={equipment}
+          rentals={rentals}
+          initialClientId={repeatDraft?.clientId}
+          initialEquipmentIds={repeatDraft?.equipmentIds}
+          onClose={() => {
+            setShowCreate(false);
+            setRepeatDraft(null);
+          }}
+          onCreated={async () => {
+            await Promise.all([reloadRentals(), reloadEquipment()]);
+          }}
+        />
+      )}
+
+      {editRental && (
+        <EditRentalModal
+          businessId={businessId}
+          rental={editRental}
+          client={clients.find((c) => c.id === editRental.client_id)}
+          equipment={equipment}
+          rentals={rentals}
+          onClose={() => setEditRental(null)}
+          onSaved={async () => {
+            await Promise.all([reloadRentals(), reloadEquipment()]);
+          }}
+        />
+      )}
+
+      {issueRental && (
+        <IssueRentalModal
+          businessId={businessId}
+          rental={issueRental}
+          client={clients.find((c) => c.id === issueRental.client_id)}
+          equipment={equipment}
+          onClose={() => setIssueRental(null)}
+          onIssued={async (updated) => {
+            await Promise.all([reloadRentals(), reloadEquipment()]);
+            const c = clients.find((cl) => cl.id === updated.client_id);
+            openDoc("Акт приёма-передачи", buildIssueDoc(updated, c, equipment));
+          }}
+        />
+      )}
+
+      {returnRental && (
+        <ReturnRentalModal
+          businessId={businessId}
+          rental={returnRental}
+          client={clients.find((c) => c.id === returnRental.client_id)}
+          onClose={() => setReturnRental(null)}
+          onReturned={async (updated) => {
+            await Promise.all([reloadRentals(), reloadEquipment()]);
+            const c = clients.find((cl) => cl.id === updated.client_id);
+            openDoc("Акт возврата", buildReturnDoc(updated, c, equipment));
+            // Предложить записать оплату остатка — тот же принцип, что и в
+            // RentalsTab.tsx (49-й проход).
+            if (isUnpaid(updated)) {
+              const remaining = updated.total - updated.paid_amount;
+              if (
+                await confirm(`Остался долг ${money(remaining)} — записать оплату?`, {
+                  confirmLabel: "Записать оплату",
+                })
+              ) {
+                setPaymentRental(updated);
+              }
+            }
+          }}
+        />
+      )}
+
+      {paymentRental && (
+        <PaymentModal
+          businessId={businessId}
+          rental={paymentRental}
+          onClose={() => setPaymentRental(null)}
+          onPaid={async () => {
+            await reloadRentals();
+          }}
+        />
+      )}
+
+      {extendRental && (
+        <ExtendRentalModal
+          businessId={businessId}
+          rental={extendRental}
+          client={clients.find((c) => c.id === extendRental.client_id)}
+          rentals={rentals}
+          onClose={() => setExtendRental(null)}
+          onSaved={async () => {
+            await reloadRentals();
+          }}
+        />
+      )}
+
+      {cancelRental && (
+        <CancelRentalModal
+          businessId={businessId}
+          rental={cancelRental}
+          client={clients.find((c) => c.id === cancelRental.client_id)}
+          onClose={() => setCancelRental(null)}
+          onCancelled={async () => {
+            await Promise.all([reloadRentals(), reloadEquipment()]);
+          }}
+        />
+      )}
+
+      <DocModal title={docModal?.title ?? ""} open={!!docModal} onClose={() => setDocModal(null)}>
+        {docModal?.node}
+      </DocModal>
+
+      {/* Слайдовер деталей аренды по клику на занятую ячейку (53-й проход) —
+          тот же приём, что и в RentalsTab.tsx: затемнённый фон + панель
+          поверх текущей вкладки, закрывается кликом по фону или крестиком. */}
+      {openRentalId && <div className="slideover-backdrop" onClick={() => setOpenRentalId(null)} />}
+      {openRentalId && (
+        <RentalDetailPanel
+          businessId={businessId}
+          rentalId={openRentalId}
+          onClose={() => setOpenRentalId(null)}
+          onOpenClient={(clientId) => onOpenClient(clientId)}
+          onOpenEquipment={(equipmentId) => onOpenEquipment(equipmentId)}
+          onExtend={(rentalId) => {
+            const r = rentals.find((x) => x.id === rentalId);
+            if (r) setExtendRental(r);
+          }}
+          onIssue={(rentalId) => {
+            const r = rentals.find((x) => x.id === rentalId);
+            if (r) setIssueRental(r);
+          }}
+          onReturn={(rentalId) => {
+            const r = rentals.find((x) => x.id === rentalId);
+            if (r) setReturnRental(r);
+          }}
+          onEdit={(rentalId) => {
+            const r = rentals.find((x) => x.id === rentalId);
+            if (r) setEditRental(r);
+          }}
+          onCancel={(rentalId) => {
+            const r = rentals.find((x) => x.id === rentalId);
+            if (r) setCancelRental(r);
+          }}
+          onRepeat={(clientId, equipmentIds) => {
+            setRepeatDraft({ clientId, equipmentIds });
+            setShowCreate(true);
+          }}
+          // Переход "в календарь" здесь не уводит с вкладки (мы уже на ней) —
+          // просто переставляет видимый диапазон на дату аренды и закрывает
+          // панель, тем же принципом, что и focus-проп компонента выше.
+          onOpenCalendar={(date) => {
+            setOpenRentalId(null);
+            setCalOffset(dayDiff(date));
+          }}
+        />
+      )}
+
+      {confirmDialog}
     </div>
   );
 }
@@ -759,15 +1034,16 @@ export function CalendarTab({
  * Форма быстрой брони по клику/протяжке ячейки календаря.
  *
  * Демо в этом месте открывает общую модалку "Новая аренда" (addRentalForm)
- * с чекбокс-списком ВСЕГО оборудования и выбором клиента. В проде нет
- * готового переиспользуемого компонента этой формы (аналог в RentalsTab.tsx
- * встроен прямо в вкладку и не экспортируется), а дублировать её целиком
- * ради календаря избыточно — оборудование здесь и так уже выбрано кликом по
- * ячейке. Поэтому здесь — облегчённая версия: только выбор клиента и дат
- * (предзаполненных из клика/протяжки), одно оборудование. Это сознательный
- * компромисс по UX (а не навигация на вкладку "Аренды" с предзаполнением,
- * которая потребовала бы прокидывать состояние формы между вкладками через
- * Dashboard.tsx, которым мы не владеем за пределами точечной правки).
+ * с чекбокс-списком ВСЕГО оборудования и выбором клиента. С 52-го прохода
+ * (разноска RentalsTab.tsx по модулям) полноценная форма создания аренды —
+ * уже отдельный переиспользуемый компонент (CreateRentalModal, используется
+ * здесь же кнопкой "+ Новая аренда" и "Повторить аренду" — см. ниже по
+ * файлу), но для клика/протяжки по конкретной ячейке она остаётся избыточной
+ * — оборудование здесь и так уже выбрано кликом, открывать полный чекбокс-
+ * список всего каталога поверх уже сделанного выбора не нужно. Поэтому для
+ * этого конкретного сценария — облегчённая версия: только выбор клиента и
+ * дат (предзаполненных из клика/протяжки), одно оборудование. Сознательный
+ * компромисс по UX, не техническое ограничение.
  */
 function QuickBookModal({
   businessId,
