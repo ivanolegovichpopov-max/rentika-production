@@ -53,6 +53,7 @@ import { DatePicker } from "../../components/DatePicker";
 import { MoreActionsMenu } from "../../components/MoreActionsMenu";
 import { usePersistedState } from "../../lib/persist";
 import { isUnpaid } from "./rentals/helpers";
+import { clientDisplayRating } from "./clients/helpers";
 import { DocModal, buildIssueDoc, buildReturnDoc, buildContractDoc } from "./documents";
 import { RentalDetailPanel, PaymentModal } from "./rentals/RentalDetailPanel";
 import { CreateRentalModal } from "./rentals/CreateRentalModal";
@@ -465,6 +466,34 @@ export function CalendarTab({
         return a.name.localeCompare(b.name, "ru");
       });
   }, [usableAll, calCategoryFilter, calWarehouseFilter, q, grouping, catRank]);
+
+  // Порядковый номер для единиц БЕЗ заполненного кода (63-й проход, обзор —
+  // "несколько одинаковых по названию единиц неотличимы, если код не
+  // заведён"): "№…" из e.code (см. .cal-name-cell ниже, тот же приём, что и
+  // в EquipmentPicklist.tsx) закрывает это только когда код заполнен на
+  // карточке оборудования — для остальных N штук с одинаковым названием и
+  // пустым кодом ничего не показывалось вообще. Тут — тот же визуальный
+  // формат (#N вместо №код), но не подменяет собой код: назначается только
+  // среди единиц БЕЗ кода с одинаковым названием, по их порядку в уже
+  // отсортированном usable, и только когда таких дублей 2+ (одиночную
+  // единицу нумеровать незачем). Это подсказка "какая именно из
+  // одинаковых", а не замена настоящего кода — если он важен для реальной
+  // идентификации на складе, его всё равно стоит завести на карточке
+  // оборудования.
+  const noCodeOrdinals = useMemo(() => {
+    const counts = new Map<string, number>();
+    usable.forEach((e) => { if (!e.code) counts.set(e.name, (counts.get(e.name) ?? 0) + 1); });
+    const next = new Map<string, number>();
+    const result = new Map<string, number>();
+    usable.forEach((e) => {
+      if (e.code) return;
+      if ((counts.get(e.name) ?? 0) < 2) return;
+      const n = (next.get(e.name) ?? 0) + 1;
+      next.set(e.name, n);
+      result.set(e.id, n);
+    });
+    return result;
+  }, [usable]);
 
   function colSel(d: string): boolean {
     if (!calColStart || !calColEnd) return false;
@@ -1006,7 +1035,15 @@ export function CalendarTab({
                           <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, flex: "1 1 auto" }}>
                             {e.name}
                           </span>
-                          {e.code && <span className="cal-code" style={{ flex: "none" }}>№{e.code}</span>}
+                          {e.code ? (
+                            <span className="cal-code" style={{ flex: "none" }}>№{e.code}</span>
+                          ) : (
+                            noCodeOrdinals.has(e.id) && (
+                              <span className="cal-code" style={{ flex: "none" }} title="Код не заведён — порядковый номер среди одинаковых единиц">
+                                #{noCodeOrdinals.get(e.id)}
+                              </span>
+                            )
+                          )}
                         </span>
                         <span className="cat">
                           {e.period_days && e.period_price
@@ -1041,6 +1078,23 @@ export function CalendarTab({
                         const dt = new Date(d + "T00:00:00");
                         const weekend = dt.getDay() === 0 || dt.getDay() === 6;
                         const hitClient = hit ? clients.find((c) => c.id === hit.client_id) : null;
+                        // Клиент в чёрном списке (63-й проход, обзор — "цвет
+                        // ячейки не отражает рейтинг клиента"): цвет самой
+                        // плашки остаётся статусом аренды (booked/active/
+                        // overdue/maintenance — это то, что важнее для
+                        // сканирования занятости), а рейтинг клиента —
+                        // отдельный маленький флажок поверх неё, а не замена
+                        // цвета, иначе "просрочено у надёжного клиента" и
+                        // "вовремя у клиента из ЧС" стали бы неотличимы друг
+                        // от друга. "На контроле" (watch) сюда сознательно не
+                        // добавлен: он вычисляется как "есть просрочка прямо
+                        // сейчас" (clientDisplayRating в clients/helpers.tsx)
+                        // и почти всегда уже совпадает с cls==="st-overdue" —
+                        // отдельный флажок только дублировал бы уже красную
+                        // плашку. Чёрный список — ручное решение команды,
+                        // независимое от статуса конкретной брони, поэтому
+                        // несёт новую информацию в любом статусе.
+                        const hitBlacklisted = !!hitClient && clientDisplayRating(hitClient, rentals) === "blacklist";
                         // Занятая ячейка теперь тоже кликабельна (53-й проход,
                         // обзор — "по занятой ячейке ничего не сделать, только
                         // тултип"): открывает RentalDetailPanel той же аренды,
@@ -1052,6 +1106,7 @@ export function CalendarTab({
                         // клику на занятой не меняет ожидание, а исправляет его.
                         const titleFull =
                           title +
+                          (hitBlacklisted ? " (чёрный список)" : "") +
                           (!hit && !isUnderMaintenanceOn(e, d) ? " — нажмите или протяните мышью, чтобы забронировать" : "") +
                           (hit ? " — нажмите, чтобы открыть карточку аренды" : "") +
                           ", " + fmtDate(d);
@@ -1085,6 +1140,7 @@ export function CalendarTab({
                                   {clientInitials(hitClient.name)}
                                 </span>
                               )}
+                              {hitBlacklisted && <span className="cal-fill-flag" />}
                             </div>
                           </div>
                         );
@@ -1101,8 +1157,17 @@ export function CalendarTab({
             <span className="item"><span className="sw" style={{ background: "var(--info-soft)", border: "1px dashed var(--info)" }} />Забронировано</span>
             <span className="item"><span className="sw" style={{ background: "var(--accent)" }} />В аренде</span>
             <span className="item"><span className="sw" style={{ background: "var(--critical)" }} />Просрочено</span>
-            <span className="item"><span className="sw" style={{ background: "repeating-linear-gradient(45deg,var(--warning-soft),var(--warning-soft) 3px,var(--surface-3) 3px,var(--surface-3) 6px)" }} />Обслуживание</span>
+            <span className="item"><span className="sw" style={{ background: "repeating-linear-gradient(45deg,var(--warning-soft),var(--warning-soft) 3px,var(--warning) 3px,var(--warning) 6px)" }} />Обслуживание</span>
             <span className="item"><span className="sw" style={{ background: "transparent", border: "2px solid var(--today)" }} />Сегодня</span>
+            {/* 63-й проход — тот же флажок, что и в самих ячейках (cal-fill-flag),
+                на нейтральной подложке .sw, чтобы объяснить точку саму по себе,
+                а не подразумевать конкретный цвет плашки под ней. */}
+            <span className="item">
+              <span className="sw" style={{ background: "var(--surface-3)", position: "relative" }}>
+                <span className="cal-fill-flag" style={{ top: 2, right: 2 }} />
+              </span>
+              Клиент в чёрном списке
+            </span>
           </div>
         </>
       )}

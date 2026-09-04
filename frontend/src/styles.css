@@ -686,9 +686,32 @@ tr.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background
 .cal-fill.st-booked.cont-right { border-right: none; }
 .cal-fill.st-active { background: var(--accent); }
 .cal-fill.st-overdue { background: var(--critical); }
-.cal-fill.st-maintenance { background: repeating-linear-gradient(45deg, var(--warning-soft), var(--warning-soft) 4px, var(--surface-3) 4px, var(--surface-3) 8px); }
+/* 63-й проход, обзор — "штриховка обслуживания слишком бледная, легко
+   принять за пустую ячейку": раньше вторая полоса была var(--surface-3)
+   (нейтральный серый, тот же, что и зебра выходных, — на глаз паттерн
+   читался скорее как "серое", а не "жёлтое"); теперь обе полосы жёлтые —
+   var(--warning-soft) чередуется с самим var(--warning) вместо нейтрального
+   серого, тот же по смыслу приём, что и у самой плашки "Просрочено" (сплошной
+   насыщенный тон), только полосами, а не заливкой целиком — полосы можно
+   различить издалека, не путая с занятой/свободной ячейкой. Swatch в легенде
+   (CalendarTab.tsx) дублирует тот же градиент инлайн-стилем — поправлен туда
+   же, чтобы не разойтись с самими ячейками. */
+.cal-fill.st-maintenance { background: repeating-linear-gradient(45deg, var(--warning-soft), var(--warning-soft) 4px, var(--warning) 4px, var(--warning) 8px); }
 .cal-fill-label { display: inline-flex; align-items: center; gap: 2px; font-size: 9px; font-weight: 700; color: #fff; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; padding: 0 2px; }
 .cal-fill-label.dark { color: var(--info); }
+/* Флажок "клиент в чёрном списке" (63-й проход, обзор — "цвет ячейки не
+   отражает рейтинг клиента"): не меняет заливку плашки (она осталась
+   статусом аренды — booked/active/overdue/maintenance, это то, что важнее
+   при сканировании занятости), а лежит отдельной меткой поверх неё, чтобы
+   "просрочено у надёжного клиента" и "вовремя у клиента из ЧС" остались
+   различимы. var(--ink)/var(--surface) вместо good/warning/critical —
+   нейтральная пара "текст/фон карточки", которая не конфликтует ни с одним
+   из уже занятых смысловых цветов статуса (синий/красный/жёлтая штриховка/
+   пунктир) и одинаково видна на любом из них. */
+.cal-fill-flag {
+  position: absolute; top: 2px; right: 2px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--ink); box-shadow: 0 0 0 1.5px var(--surface);
+}
 /* Значок просрочки внутри плашки (53-й проход) — просрочка отличалась от
    "В аренде" только оттенком заливки; иконка добавляет небо-цветовой сигнал
    самому критичному для бизнеса статусу, тем же принципом, что штриховка у
