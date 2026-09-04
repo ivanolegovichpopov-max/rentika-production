@@ -36,6 +36,14 @@ class User(Base):
     failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Момент последнего успешного входа (65-й проход) — проставляется в
+    # /auth/login при успешной проверке пароля (см. app/api/routes/auth.py).
+    # NULL, пока пользователь ни разу не входил (например, только что
+    # приглашённый сотрудник, ещё не открывавший приложение под своим
+    # логином) — раньше на странице «Сотрудники» не было способа понять,
+    # входил ли вообще человек в систему и когда в последний раз.
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

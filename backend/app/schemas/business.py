@@ -75,6 +75,14 @@ class EmployeeOut(BaseModel):
     # даже если сам список им виден (см. list_employees — он не требует
     # full_access, только валидное членство в бизнесе).
     email: str | None = None
+    # Момент последнего успешного входа (65-й проход) — та же видимость, что
+    # и у email выше: None для всех, КРОМЕ владельца/платформенного админа.
+    # Дополнительно (в отличие от email) в принципе может быть None и для
+    # владельца — это означает не "скрыто", а "сотрудник ни разу не входил"
+    # (см. app/models/user.py::User.last_login_at), различать эти два случая
+    # должен фронтенд по флагу видимости email/last_login_at в ответе, а не
+    # по самому значению.
+    last_login_at: datetime | None = None
     position_id: uuid.UUID | None
     is_owner: bool
     status: EmployeeStatus
@@ -115,6 +123,18 @@ class ActivityLogEntry(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ActivityLogPage(BaseModel):
+    """Страница журнала действий (65-й проход) — раньше /activity отдавал
+    голый список максимум на limit=500 записей без какого-либо признака,
+    есть ли более старые события за пределами этой страницы; при активной
+    команде реальная история быстро упирается в этот потолок и хвост
+    молча обрезался. has_more — есть ли ещё более старые записи ДО
+    последней из items (запрашиваются следующим вызовом через offset)."""
+
+    items: list[ActivityLogEntry]
+    has_more: bool
 
 
 class EmployeeWorkloadOut(BaseModel):

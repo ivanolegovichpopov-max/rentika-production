@@ -1,7 +1,24 @@
+/**
+ * Вкладка «Сотрудники» (64-й/65-й проходы, по итогам двух раундов
+ * консультативного обзора страницы — "что должна содержать", "чего не
+ * хватает"). С 65-го прохода разбита на три под-вкладки (тот же idiom
+ * .segmented, что и период в FinanceTab.tsx / вкладки в
+ * clients/ClientDetailPanel.tsx):
+ *   - «Команда» — список сотрудников, приглашение, редактирование;
+ *   - «Должности и права» — справочник должностей и ACL-матрица;
+ *   - «Активность» — сводка нагрузки + общий журнал действий, оба с
+ *     фильтром по периоду (тот же PRESETS-idiom, что и в FinanceTab.tsx).
+ * Клик по строке сотрудника (только для владельца — то же самое множество,
+ * что уже могло видеть email/журнал/нагрузку до этого прохода) открывает
+ * EmployeeDetailPanel — комбинированную карточку профиль+личная
+ * активность+личная нагрузка, тем же слайдовер-паттерном, что и у клиента
+ * (см. clients/ClientDetailPanel.tsx, открывается через data-clickable).
+ */
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../api/client";
 import type {
   ActivityLogEntry,
+  ActivityLogPage,
   Employee,
   EmployeeWorkload,
   Position,
@@ -10,7 +27,12 @@ import type {
 } from "../../api/types";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { Dropdown } from "../../components/Dropdown";
-import { IconClose, IconEdit, IconHistory, IconRestore, IconTrash, IconTrendUp } from "../../lib/icons";
+import { IconEdit, IconHistory, IconRestore, IconTrash, IconTrendUp } from "../../lib/icons";
+import { initials } from "../../lib/format";
+import { Badge, EMPLOYEE_STATUS_META } from "../../lib/statusMeta";
+import { activityDetails, activityLabel } from "./employees/activityLabels";
+import { EditEmployeeModal } from "./employees/EditEmployeeModal";
+import { EmployeeDetailPanel } from "./employees/EmployeeDetailPanel";
 
 const RESOURCES: { key: ResourceType; label: string }[] = [
   { key: "equipment", label: "Оборудование" },
@@ -22,188 +44,20 @@ const RESOURCES: { key: ResourceType; label: string }[] = [
 
 const LEVEL_LABEL: Record<PermissionLevel, string> = { none: "Нет доступа", view: "Просмотр", edit: "Просмотр и редактирование" };
 
-// Человекочитаемые подписи "ресурс:действие" для общего журнала действий
-// (64-й проход) — набор совпадает 1:1 со всеми log_action(...) вызовами по
-// бэкенду (AuditLog пишется на каждое значимое действие уже давно, просто
-// раньше нигде не читался обратно владельцу бизнеса за пределами одной
-// конкретной аренды, см. RentalHistorySection.tsx). Формулировки, как и
-// там, пассивные/безличные ("Аренда создана") — не нужно выбирать род
-// глагола под сотрудника, автор указывается отдельной строкой ниже.
-const ACTIVITY_LABELS: Record<string, string> = {
-  "business:register": "Бизнес зарегистрирован",
-  "user:change_password": "Пароль аккаунта изменён",
-  "user:2fa_enabled": "Включена двухфакторная аутентификация",
-  "user:2fa_disabled": "Отключена двухфакторная аутентификация",
-  "client:create": "Клиент создан",
-  "client:update": "Клиент изменён",
-  "client:delete": "Клиент удалён",
-  "client:restore": "Клиент восстановлен",
-  "client:merge": "Клиенты объединены",
-  "client:import": "Импортированы клиенты",
-  "client_note:create": "Добавлена заметка о клиенте",
-  "client_note:update": "Заметка о клиенте изменена",
-  "client_note:delete": "Заметка о клиенте удалена",
-  "client_document:create": "Загружен документ клиента",
-  "client_document:delete": "Документ клиента удалён",
-  "employee:invite": "Сотрудник приглашён",
-  "employee:update": "Данные сотрудника изменены",
-  "employee:disable": "Сотрудник отключён",
-  "employee:reset_password": "Сотруднику сброшен пароль",
-  "position:create": "Должность создана",
-  "position:rename": "Должность переименована",
-  "position:delete": "Должность удалена",
-  "position:update_permissions": "Изменены права должности",
-  "equipment:create": "Оборудование добавлено",
-  "equipment:update": "Оборудование изменено",
-  "equipment:delete": "Оборудование удалено",
-  "equipment:restore": "Оборудование восстановлено",
-  "equipment:import": "Импортировано оборудование",
-  "equipment_category:create": "Категория оборудования создана",
-  "equipment_category:rename": "Категория оборудования переименована",
-  "equipment_category:delete": "Категория оборудования удалена",
-  "equipment_category:reorder": "Изменён порядок категорий оборудования",
-  "equipment_warehouse:create": "Склад создан",
-  "equipment_warehouse:rename": "Склад переименован",
-  "equipment_warehouse:delete": "Склад удалён",
-  "equipment_warehouse:reorder": "Изменён порядок складов",
-  "rental:create": "Аренда создана",
-  "rental:issue": "Оборудование выдано",
-  "rental:edit": "Аренда изменена",
-  "rental:return": "Аренда закрыта (возврат)",
-  "rental:return_items": "Частичный возврат позиций",
-  "rental:cancel": "Аренда отменена",
-  "rental:deposit_return": "Депозит отмечен возвращённым",
-  "rental:deposit_return_undo": "Отметка о возврате депозита снята",
-  "rental:payment": "Записан платёж",
-  "rental:payment_correction": "Платёж исправлен",
-  "rental_photo:create": "Загружено фото аренды",
-  "rental_photo:delete": "Фото аренды удалено",
-  "conversation:create": "Создана беседа",
-  "message:create": "Отправлено сообщение",
-  "dashboard_note:create": "Добавлена заметка на дашборд",
-  "dashboard_note:update": "Заметка на дашборде изменена",
-  "dashboard_note:delete": "Заметка на дашборде удалена",
-};
+const PAGE_TABS: { key: "team" | "positions" | "activity"; label: string }[] = [
+  { key: "team", label: "Команда" },
+  { key: "positions", label: "Должности и права" },
+  { key: "activity", label: "Активность" },
+];
 
-function activityLabel(entry: ActivityLogEntry): string {
-  return ACTIVITY_LABELS[`${entry.resource}:${entry.action}`] ?? `${entry.resource} · ${entry.action}`;
-}
+const PERIODS: { key: "7" | "30" | "90" | "all"; label: string }[] = [
+  { key: "7", label: "7 дней" },
+  { key: "30", label: "30 дней" },
+  { key: "90", label: "90 дней" },
+  { key: "all", label: "Весь период" },
+];
 
-/* ---------- Редактирование сотрудника (64-й проход) ----------
-   Раньше единственным способом изменить уже нанятого сотрудника было
-   отключить его и пригласить заново — имя/должность после приглашения
-   были неизменны из интерфейса, хотя PATCH на бэке это всегда умел.
-   Здесь же — сброс временного пароля (новая возможность и на бэке тоже,
-   см. EmployeeUpdate.new_password): раньше, если сотрудник не смог войти
-   с временным паролем (забыл/потерял до первого входа), владелец был
-   бессилен что-либо сделать. */
-function EditEmployeeModal({
-  businessId,
-  employee,
-  positions,
-  onClose,
-  onSaved,
-}: {
-  businessId: string;
-  employee: Employee;
-  positions: Position[];
-  onClose: () => void;
-  onSaved: () => Promise<void>;
-}) {
-  const [name, setName] = useState(employee.name);
-  const [positionId, setPositionId] = useState(employee.position_id ?? "");
-  const [newPassword, setNewPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const dialogRef = useRef<HTMLDialogElement>(null);
-
-  useEffect(() => {
-    dialogRef.current?.showModal();
-  }, []);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    if (!name.trim()) {
-      setError("Введите имя");
-      return;
-    }
-    if (newPassword && newPassword.length < 12) {
-      setError("Новый пароль должен быть не короче 12 символов");
-      return;
-    }
-    setSaving(true);
-    try {
-      await api.patch(`/businesses/${businessId}/employees/${employee.id}`, {
-        name: name.trim(),
-        position_id: positionId || null,
-        ...(newPassword ? { new_password: newPassword } : {}),
-      });
-      onClose();
-      await onSaved();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Не удалось сохранить изменения");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <dialog
-      ref={dialogRef}
-      onClose={onClose}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <form onSubmit={handleSubmit}>
-        <div className="modal-head">
-          <h3>Редактировать сотрудника</h3>
-          <button className="icon-btn" onClick={onClose} type="button">
-            <IconClose />
-          </button>
-        </div>
-        <div className="modal-body">
-          <div className="field">
-            <label>Имя</label>
-            <input required value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-          </div>
-          <div className="field">
-            <label>Должность</label>
-            <Dropdown
-              value={positionId}
-              onChange={setPositionId}
-              placeholder="Без должности (нет доступа к данным)"
-              options={[
-                { value: "", label: "Без должности (нет доступа к данным)" },
-                ...positions.map((p) => ({ value: p.id, label: p.title })),
-              ]}
-            />
-          </div>
-          <div className="field">
-            <label>Новый временный пароль</label>
-            <input
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Оставьте пустым, чтобы не менять"
-              minLength={12}
-            />
-            <div className="field-hint">Заполните, только если сотрудник потерял доступ к своему паролю — передайте новый лично.</div>
-          </div>
-          {error && <div className="form-error">{error}</div>}
-        </div>
-        <div className="modal-foot">
-          <button className="btn" onClick={onClose} type="button">
-            Отмена
-          </button>
-          <button className="btn btn-primary" type="submit">
-            {saving ? "Сохранение…" : "Сохранить"}
-          </button>
-        </div>
-      </form>
-    </dialog>
-  );
-}
+const ACTIVITY_PAGE_SIZE = 50;
 
 export function EmployeesTab({
   businessId,
@@ -234,6 +88,8 @@ export function EmployeesTab({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [pageTab, setPageTab] = useState<"team" | "positions" | "activity">("team");
+
   const [showInvite, setShowInvite] = useState(false);
   const [inviteForm, setInviteForm] = useState({ email: "", name: "", position_id: "", temporary_password: "" });
 
@@ -244,15 +100,24 @@ export function EmployeesTab({
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
 
-  // Журнал действий и сводка нагрузки (64-й проход) — только для владельца,
-  // оба эндпоинта на бэке отвечают 403 кому-либо ещё, поэтому и не
-  // запрашиваем их зря для остальных.
-  const [activity, setActivity] = useState<ActivityLogEntry[] | null>(null);
+  // Карточка сотрудника (65-й проход) — открывается кликом по строке в
+  // таблице «Команда», только для владельца (см. data-clickable ниже).
+  const [openEmployeeId, setOpenEmployeeId] = useState<string | null>(null);
+
+  // Журнал действий и сводка нагрузки (64-й проход, доработано 65-м —
+  // период и пагинация) — только для владельца, оба эндпоинта на бэке
+  // отвечают 403 кому-либо ещё, поэтому и не запрашиваем их зря для
+  // остальных.
+  const [period, setPeriod] = useState<"7" | "30" | "90" | "all">("30");
+  const [activityItems, setActivityItems] = useState<ActivityLogEntry[] | null>(null);
+  const [activityHasMore, setActivityHasMore] = useState(false);
+  const [activityLoadingMore, setActivityLoadingMore] = useState(false);
   const [activityFilter, setActivityFilter] = useState("");
   const [workload, setWorkload] = useState<EmployeeWorkload[] | null>(null);
 
   useEffect(() => {
     if (!highlightEmployee || loading) return;
+    setPageTab("team");
     const row = rowRefs.current[highlightEmployee.id];
     if (!row) return;
     row.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -271,26 +136,59 @@ export function EmployeesTab({
       ]);
       setEmployees(e);
       setPositions(p);
-      if (isOwner) {
-        api.get<EmployeeWorkload[]>(`/businesses/${businessId}/employees/workload`).then(setWorkload).catch(() => setWorkload([]));
-      }
     } finally {
       setLoading(false);
     }
   }
 
-  function loadActivity(employeeId: string) {
+  function loadWorkload(p: "7" | "30" | "90" | "all") {
     if (!isOwner) return;
-    const qs = employeeId ? `?employee_id=${employeeId}` : "";
+    const qs = p === "all" ? "" : `?days=${p}`;
     api
-      .get<ActivityLogEntry[]>(`/businesses/${businessId}/employees/activity${qs}`)
-      .then(setActivity)
-      .catch(() => setActivity([]));
+      .get<EmployeeWorkload[]>(`/businesses/${businessId}/employees/workload${qs}`)
+      .then(setWorkload)
+      .catch(() => setWorkload([]));
+  }
+
+  function loadActivity(employeeId: string, p: "7" | "30" | "90" | "all") {
+    if (!isOwner) return;
+    setActivityItems(null);
+    const qs = new URLSearchParams({ limit: String(ACTIVITY_PAGE_SIZE) });
+    if (employeeId) qs.set("employee_id", employeeId);
+    if (p !== "all") qs.set("days", p);
+    api
+      .get<ActivityLogPage>(`/businesses/${businessId}/employees/activity?${qs.toString()}`)
+      .then((page) => {
+        setActivityItems(page.items);
+        setActivityHasMore(page.has_more);
+      })
+      .catch(() => {
+        setActivityItems([]);
+        setActivityHasMore(false);
+      });
+  }
+
+  async function loadMoreActivity() {
+    if (!isOwner || !activityItems) return;
+    setActivityLoadingMore(true);
+    try {
+      const qs = new URLSearchParams({ limit: String(ACTIVITY_PAGE_SIZE), offset: String(activityItems.length) });
+      if (activityFilter) qs.set("employee_id", activityFilter);
+      if (period !== "all") qs.set("days", period);
+      const page = await api.get<ActivityLogPage>(`/businesses/${businessId}/employees/activity?${qs.toString()}`);
+      setActivityItems([...activityItems, ...page.items]);
+      setActivityHasMore(page.has_more);
+    } finally {
+      setActivityLoadingMore(false);
+    }
   }
 
   useEffect(() => {
     void load();
-    if (isOwner) loadActivity("");
+    if (isOwner) {
+      loadActivity("", period);
+      loadWorkload(period);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [businessId]);
 
@@ -312,6 +210,11 @@ export function EmployeesTab({
       setInviteForm({ email: "", name: "", position_id: "", temporary_password: "" });
       setShowInvite(false);
       await load();
+      // Сводка нагрузки (65-й проход) — свежеприглашённого сотрудника в ней
+      // ещё нет (загружена ДО его появления), без обновления его карточка
+      // (EmployeeDetailPanel) молча теряла бы блок «Нагрузка» целиком, пока
+      // владелец не сменит период вручную.
+      loadWorkload(period);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Не удалось добавить сотрудника");
     }
@@ -323,6 +226,7 @@ export function EmployeesTab({
     await api.post(`/businesses/${businessId}/positions`, { title: newPositionTitle });
     setNewPositionTitle("");
     await load();
+    loadActivity(activityFilter, period);
   }
 
   async function handleRenamePosition(id: string, title: string) {
@@ -331,6 +235,7 @@ export function EmployeesTab({
       await api.patch(`/businesses/${businessId}/positions/${id}`, { title: title.trim() });
       setRenamingPosition(null);
       await load();
+      loadActivity(activityFilter, period);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Не удалось переименовать должность");
     }
@@ -346,6 +251,7 @@ export function EmployeesTab({
       return;
     await api.delete(`/businesses/${businessId}/positions/${id}`);
     await load();
+    loadActivity(activityFilter, period);
   }
 
   async function handlePermissionChange(positionId: string, resource: ResourceType, level: PermissionLevel) {
@@ -357,173 +263,147 @@ export function EmployeesTab({
     });
     await api.put(`/businesses/${businessId}/positions/${positionId}/permissions`, { permissions: updated });
     await load();
+    loadActivity(activityFilter, period);
   }
 
   async function handleDisableEmployee(id: string) {
     if (!(await confirm("Отключить доступ этого сотрудника?", { danger: true, confirmLabel: "Отключить" }))) return;
     await api.delete(`/businesses/${businessId}/employees/${id}`);
+    if (openEmployeeId === id) setOpenEmployeeId(null);
     await load();
+    // /workload на бэке сам исключает disabled-сотрудников (см.
+    // employee_workload в employees.py) — без перезагрузки отключённый
+    // только что сотрудник продолжал бы висеть строкой в таблице нагрузки
+    // до следующей смены периода.
+    loadWorkload(period);
+    loadActivity(activityFilter, period);
   }
 
   async function handleReactivateEmployee(id: string) {
     await api.patch(`/businesses/${businessId}/employees/${id}`, { status: "active" });
     await load();
+    loadWorkload(period);
+    loadActivity(activityFilter, period);
+  }
+
+  async function saveEmployeeEdit() {
+    await load();
+    loadActivity(activityFilter, period);
+    // Имя/должность могли измениться — обе колонки видны в таблице нагрузки
+    // (employee_name) и в персональной сводке EmployeeDetailPanel.
+    loadWorkload(period);
+  }
+
+  function changePeriod(p: "7" | "30" | "90" | "all") {
+    setPeriod(p);
+    loadActivity(activityFilter, p);
+    loadWorkload(p);
+  }
+
+  function changeActivityFilter(employeeId: string) {
+    setActivityFilter(employeeId);
+    loadActivity(employeeId, period);
   }
 
   if (loading) return <div className="muted">Загрузка…</div>;
 
+  const openEmployee = openEmployeeId ? employees.find((e) => e.id === openEmployeeId) ?? null : null;
+
   return (
     <div>
       <div className="tab-toolbar">
-        <h2>Сотрудники</h2>
-        {isOwner && (
+        <div className="segmented">
+          {PAGE_TABS.map((t) => (
+            <button key={t.key} className={pageTab === t.key ? "active" : ""} onClick={() => setPageTab(t.key)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {pageTab === "team" && isOwner && (
           <button className="btn btn-primary" onClick={() => setShowInvite((v) => !v)}>{showInvite ? "Отмена" : "+ Добавить сотрудника"}</button>
         )}
       </div>
 
-      {showInvite && isOwner && (
-        <form className="card form-grid" onSubmit={handleInvite}>
-          <label>
-            Имя
-            <input required value={inviteForm.name} onChange={(e) => setInviteForm({ ...inviteForm, name: e.target.value })} />
-          </label>
-          <label>
-            Email
-            <input required type="email" value={inviteForm.email} onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })} />
-          </label>
-          <label>
-            Должность
-            <Dropdown
-              value={inviteForm.position_id}
-              onChange={(v) => setInviteForm({ ...inviteForm, position_id: v })}
-              placeholder="Без должности (нет доступа к данным)"
-              options={[
-                { value: "", label: "Без должности (нет доступа к данным)" },
-                ...positions.map((p) => ({ value: p.id, label: p.title })),
-              ]}
-            />
-          </label>
-          <label>
-            Временный пароль
-            <input required minLength={12} value={inviteForm.temporary_password} onChange={(e) => setInviteForm({ ...inviteForm, temporary_password: e.target.value })} />
-          </label>
-          <p className="muted small">Передайте сотруднику лично — рассылка по почте пока не реализована.</p>
-          {error && <div className="form-error">{error}</div>}
-          <button type="submit" className="btn btn-primary">Добавить</button>
-        </form>
-      )}
-
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>Имя</th>
-            {isOwner && <th>Email</th>}
-            <th>Должность</th>
-            <th>Статус</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {employees.map((emp) => (
-            <tr
-              key={emp.id}
-              ref={(el) => { rowRefs.current[emp.id] = el; }}
-              className={flashId === emp.id ? "row-flash" : undefined}
-            >
-              <td>{emp.name}{emp.is_owner && <span className="badge badge-owner">владелец</span>}</td>
-              {isOwner && <td className="muted">{emp.email ?? "—"}</td>}
-              <td>{emp.is_owner ? "—" : positionTitle(emp.position_id)}</td>
-              <td>{emp.status === "active" ? "Активен" : emp.status === "disabled" ? "Отключён" : "Приглашён"}</td>
-              <td style={{ display: "flex", gap: "6px", justifyContent: "flex-end" }}>
-                {isOwner && !emp.is_owner && (
-                  <button className="btn btn-sm" onClick={() => setEditingEmployee(emp)} title="Редактировать">
-                    <IconEdit />
-                  </button>
-                )}
-                {isOwner && !emp.is_owner && emp.status !== "disabled" && (
-                  <button className="btn btn-sm btn-danger-ghost" onClick={() => handleDisableEmployee(emp.id)}>Отключить</button>
-                )}
-                {isOwner && !emp.is_owner && emp.status === "disabled" && (
-                  <button className="btn btn-sm" onClick={() => handleReactivateEmployee(emp.id)} title="Включить обратно">
-                    <IconRestore /> Включить
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <h2 style={{ marginTop: "2rem" }}>Должности и права доступа</h2>
-      {isOwner && (
-        <form className="inline-form" onSubmit={handleCreatePosition}>
-          <input placeholder="Название новой должности" value={newPositionTitle} onChange={(e) => setNewPositionTitle(e.target.value)} />
-          <button type="submit" className="btn btn-primary">+ Добавить должность</button>
-        </form>
-      )}
-
-      {positions.map((p) => (
-        <div className="card" key={p.id} style={{ marginTop: "1rem" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
-            {renamingPosition?.id === p.id ? (
-              <form
-                className="inline-form"
-                style={{ flex: 1 }}
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleRenamePosition(p.id, renamingPosition.value);
-                }}
-              >
-                <input
-                  autoFocus
-                  value={renamingPosition.value}
-                  onChange={(e) => setRenamingPosition({ id: p.id, value: e.target.value })}
+      {pageTab === "team" && (
+        <>
+          {showInvite && isOwner && (
+            <form className="card form-grid" onSubmit={handleInvite}>
+              <label>
+                Имя
+                <input required value={inviteForm.name} onChange={(e) => setInviteForm({ ...inviteForm, name: e.target.value })} />
+              </label>
+              <label>
+                Email
+                <input required type="email" value={inviteForm.email} onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })} />
+              </label>
+              <label>
+                Должность
+                <Dropdown
+                  value={inviteForm.position_id}
+                  onChange={(v) => setInviteForm({ ...inviteForm, position_id: v })}
+                  placeholder="Без должности (нет доступа к данным)"
+                  options={[
+                    { value: "", label: "Без должности (нет доступа к данным)" },
+                    ...positions.map((p) => ({ value: p.id, label: p.title })),
+                  ]}
                 />
-                <button type="submit" className="btn btn-sm btn-primary">Сохранить</button>
-                <button type="button" className="btn btn-sm" onClick={() => setRenamingPosition(null)}>Отмена</button>
-              </form>
-            ) : (
-              <>
-                <h3 style={{ margin: 0 }}>{p.title}</h3>
-                {isOwner && (
-                  <div style={{ display: "flex", gap: "6px" }}>
-                    <button className="btn btn-sm" onClick={() => setRenamingPosition({ id: p.id, value: p.title })} title="Переименовать">
-                      <IconEdit />
-                    </button>
-                    <button className="btn btn-sm btn-danger-ghost" onClick={() => handleDeletePosition(p.id, p.title)} title="Удалить должность">
-                      <IconTrash />
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-          <table className="data-table compact" style={{ marginTop: "10px" }}>
+              </label>
+              <label>
+                Временный пароль
+                <input required minLength={12} value={inviteForm.temporary_password} onChange={(e) => setInviteForm({ ...inviteForm, temporary_password: e.target.value })} />
+              </label>
+              <p className="muted small">Передайте сотруднику лично — рассылка по почте пока не реализована.</p>
+              {error && <div className="form-error">{error}</div>}
+              <button type="submit" className="btn btn-primary">Добавить</button>
+            </form>
+          )}
+
+          <table className="data-table">
             <thead>
               <tr>
-                <th>Раздел</th>
-                <th>Доступ</th>
+                <th>Сотрудник</th>
+                {isOwner && <th>Email</th>}
+                <th>Должность</th>
+                <th>Статус</th>
+                <th />
               </tr>
             </thead>
             <tbody>
-              {RESOURCES.map(({ key, label }) => {
-                const current = p.permissions.find((perm) => perm.resource === key)?.level ?? "none";
+              {employees.map((emp) => {
+                const clickable = isOwner && !emp.is_owner;
                 return (
-                  <tr key={key}>
-                    <td>{label}</td>
+                  <tr
+                    key={emp.id}
+                    ref={(el) => { rowRefs.current[emp.id] = el; }}
+                    className={flashId === emp.id ? "row-flash" : undefined}
+                    data-clickable={clickable ? "true" : undefined}
+                    onClick={clickable ? () => setOpenEmployeeId(emp.id) : undefined}
+                  >
                     <td>
-                      {isOwner ? (
-                        <Dropdown
-                          value={current}
-                          onChange={(v) => handlePermissionChange(p.id, key, v as PermissionLevel)}
-                          placeholder={LEVEL_LABEL[current]}
-                          options={(Object.keys(LEVEL_LABEL) as PermissionLevel[]).map((lvl) => ({
-                            value: lvl,
-                            label: LEVEL_LABEL[lvl],
-                          }))}
-                        />
-                      ) : (
-                        <span className="muted">{LEVEL_LABEL[current]}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span className={"avatar avatar-emp-" + emp.status} style={{ width: 26, height: 26, fontSize: "10.5px" }}>
+                          {initials(emp.name)}
+                        </span>
+                        {emp.name}
+                        {emp.is_owner && <span className="badge badge-owner">владелец</span>}
+                      </div>
+                    </td>
+                    {isOwner && <td className="muted">{emp.email ?? "—"}</td>}
+                    <td>{emp.is_owner ? "—" : positionTitle(emp.position_id)}</td>
+                    <td><Badge meta={EMPLOYEE_STATUS_META[emp.status]} /></td>
+                    <td style={{ display: "flex", gap: "6px", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+                      {isOwner && !emp.is_owner && (
+                        <button className="btn btn-sm" onClick={() => setEditingEmployee(emp)} title="Редактировать">
+                          <IconEdit />
+                        </button>
+                      )}
+                      {isOwner && !emp.is_owner && emp.status !== "disabled" && (
+                        <button className="btn btn-sm btn-danger-ghost" onClick={() => handleDisableEmployee(emp.id)}>Отключить</button>
+                      )}
+                      {isOwner && !emp.is_owner && emp.status === "disabled" && (
+                        <button className="btn btn-sm" onClick={() => handleReactivateEmployee(emp.id)} title="Включить обратно">
+                          <IconRestore /> Включить
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -531,12 +411,103 @@ export function EmployeesTab({
               })}
             </tbody>
           </table>
-        </div>
-      ))}
+        </>
+      )}
 
-      {isOwner && (
+      {pageTab === "positions" && (
         <>
-          <h2 style={{ marginTop: "2rem", display: "flex", alignItems: "center", gap: "6px" }}>
+          {isOwner && (
+            <form className="inline-form" onSubmit={handleCreatePosition}>
+              <input placeholder="Название новой должности" value={newPositionTitle} onChange={(e) => setNewPositionTitle(e.target.value)} />
+              <button type="submit" className="btn btn-primary">+ Добавить должность</button>
+            </form>
+          )}
+
+          {positions.map((p) => (
+            <div className="card" key={p.id} style={{ marginTop: "1rem" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                {renamingPosition?.id === p.id ? (
+                  <form
+                    className="inline-form"
+                    style={{ flex: 1 }}
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleRenamePosition(p.id, renamingPosition.value);
+                    }}
+                  >
+                    <input
+                      autoFocus
+                      value={renamingPosition.value}
+                      onChange={(e) => setRenamingPosition({ id: p.id, value: e.target.value })}
+                    />
+                    <button type="submit" className="btn btn-sm btn-primary">Сохранить</button>
+                    <button type="button" className="btn btn-sm" onClick={() => setRenamingPosition(null)}>Отмена</button>
+                  </form>
+                ) : (
+                  <>
+                    <h3 style={{ margin: 0 }}>{p.title}</h3>
+                    {isOwner && (
+                      <div style={{ display: "flex", gap: "6px" }}>
+                        <button className="btn btn-sm" onClick={() => setRenamingPosition({ id: p.id, value: p.title })} title="Переименовать">
+                          <IconEdit />
+                        </button>
+                        <button className="btn btn-sm btn-danger-ghost" onClick={() => handleDeletePosition(p.id, p.title)} title="Удалить должность">
+                          <IconTrash />
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              <table className="data-table compact" style={{ marginTop: "10px" }}>
+                <thead>
+                  <tr>
+                    <th>Раздел</th>
+                    <th>Доступ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {RESOURCES.map(({ key, label }) => {
+                    const current = p.permissions.find((perm) => perm.resource === key)?.level ?? "none";
+                    return (
+                      <tr key={key}>
+                        <td>{label}</td>
+                        <td>
+                          {isOwner ? (
+                            <Dropdown
+                              value={current}
+                              onChange={(v) => handlePermissionChange(p.id, key, v as PermissionLevel)}
+                              placeholder={LEVEL_LABEL[current]}
+                              options={(Object.keys(LEVEL_LABEL) as PermissionLevel[]).map((lvl) => ({
+                                value: lvl,
+                                label: LEVEL_LABEL[lvl],
+                              }))}
+                            />
+                          ) : (
+                            <span className="muted">{LEVEL_LABEL[current]}</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </>
+      )}
+
+      {pageTab === "activity" && isOwner && (
+        <>
+          <div className="segmented" style={{ marginBottom: "14px" }}>
+            {PERIODS.map((p) => (
+              <button key={p.key} className={period === p.key ? "active" : ""} onClick={() => changePeriod(p.key)}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          <h2 style={{ display: "flex", alignItems: "center", gap: "6px" }}>
             <IconTrendUp /> Нагрузка команды
           </h2>
           {workload === null ? (
@@ -554,14 +525,27 @@ export function EmployeesTab({
                 </tr>
               </thead>
               <tbody>
-                {workload.map((w) => (
-                  <tr key={w.employee_id}>
-                    <td>{w.employee_name}</td>
-                    <td>{w.rentals_created}</td>
-                    <td>{w.client_notes}</td>
-                    <td>{w.rental_photos}</td>
-                  </tr>
-                ))}
+                {workload.map((w) => {
+                  // Владелец тоже попадает в сводку нагрузки (бэк не
+                  // исключает его из /workload, только disabled-сотрудников),
+                  // но у его записи Employee нет ни редактирования, ни
+                  // отключения (см. is_owner-гейты в таблице «Команда»
+                  // выше) — карточку для него не открываем по той же причине.
+                  const emp = employees.find((e) => e.id === w.employee_id);
+                  const clickable = emp && !emp.is_owner;
+                  return (
+                    <tr
+                      key={w.employee_id}
+                      data-clickable={clickable ? "true" : undefined}
+                      onClick={clickable ? () => setOpenEmployeeId(w.employee_id) : undefined}
+                    >
+                      <td>{w.employee_name}</td>
+                      <td>{w.rentals_created}</td>
+                      <td>{w.client_notes}</td>
+                      <td>{w.rental_photos}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -572,10 +556,7 @@ export function EmployeesTab({
           <div style={{ maxWidth: "320px", marginBottom: "10px" }}>
             <Dropdown
               value={activityFilter}
-              onChange={(v) => {
-                setActivityFilter(v);
-                loadActivity(v);
-              }}
+              onChange={changeActivityFilter}
               placeholder="Все сотрудники"
               options={[
                 { value: "", label: "Все сотрудники" },
@@ -583,25 +564,40 @@ export function EmployeesTab({
               ]}
             />
           </div>
-          {activity === null ? (
+          {activityItems === null ? (
             <div className="muted">Загрузка…</div>
-          ) : activity.length === 0 ? (
-            <div className="empty-note">Записей пока нет</div>
+          ) : activityItems.length === 0 ? (
+            <div className="empty-note">Записей за этот период не найдено</div>
           ) : (
-            <div className="card" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-              {activity.map((entry) => (
-                <div key={entry.id} style={{ fontSize: "12.5px", paddingLeft: "10px", borderLeft: "2px solid var(--border)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
-                    <span style={{ fontWeight: 600 }}>{activityLabel(entry)}</span>
-                    <span style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
-                      {new Date(entry.created_at).toLocaleDateString("ru-RU")} ·{" "}
-                      {new Date(entry.created_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
-                    </span>
-                  </div>
-                  <div style={{ color: "var(--muted)", marginTop: "1px" }}>{entry.employee_name ?? "Сотрудник не определён"}</div>
+            <>
+              <div className="card" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                {activityItems.map((entry) => {
+                  const details = activityDetails(entry);
+                  return (
+                    <div key={entry.id} style={{ fontSize: "12.5px", paddingLeft: "10px", borderLeft: "2px solid var(--border)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
+                        <span style={{ fontWeight: 600 }}>{activityLabel(entry)}</span>
+                        <span style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
+                          {new Date(entry.created_at).toLocaleDateString("ru-RU")} ·{" "}
+                          {new Date(entry.created_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </div>
+                      <div style={{ color: "var(--muted)", marginTop: "1px" }}>{entry.employee_name ?? "Сотрудник не определён"}</div>
+                      {details.map((line, i) => (
+                        <div key={i} style={{ color: "var(--muted)", marginTop: "1px" }}>{line}</div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+              {activityHasMore && (
+                <div style={{ marginTop: "10px", textAlign: "center" }}>
+                  <button className="btn btn-sm" onClick={loadMoreActivity} disabled={activityLoadingMore}>
+                    {activityLoadingMore ? "Загрузка…" : "Показать ещё"}
+                  </button>
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </>
       )}
@@ -612,7 +608,23 @@ export function EmployeesTab({
           employee={editingEmployee}
           positions={positions}
           onClose={() => setEditingEmployee(null)}
-          onSaved={load}
+          onSaved={saveEmployeeEdit}
+        />
+      )}
+
+      {openEmployee && <div className="slideover-backdrop" onClick={() => setOpenEmployeeId(null)} />}
+      {openEmployee && (
+        <EmployeeDetailPanel
+          businessId={businessId}
+          employee={openEmployee}
+          positionTitle={positionTitle(openEmployee.position_id)}
+          workload={workload?.find((w) => w.employee_id === openEmployee.id)}
+          onClose={() => setOpenEmployeeId(null)}
+          onOpenEdit={() => {
+            setEditingEmployee(openEmployee);
+          }}
+          onDisable={() => handleDisableEmployee(openEmployee.id)}
+          onReactivate={() => handleReactivateEmployee(openEmployee.id)}
         />
       )}
 

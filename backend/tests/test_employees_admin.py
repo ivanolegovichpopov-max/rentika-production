@@ -297,7 +297,9 @@ def test_activity_log_records_employee_actions_and_workload_counts_them(client):
 
     # Журнал действий — видны и создание клиента, и создание аренды, с
     # привязкой к сотруднику, который их совершил.
-    activity = client.get(f"/api/businesses/{business_id}/employees/activity", headers=headers).json()
+    activity_page = client.get(f"/api/businesses/{business_id}/employees/activity", headers=headers).json()
+    activity = activity_page["items"]
+    assert activity_page["has_more"] is False
     actions = {(entry["resource"], entry["action"]) for entry in activity}
     assert ("client", "create") in actions
     assert ("rental", "create") in actions
@@ -308,9 +310,46 @@ def test_activity_log_records_employee_actions_and_workload_counts_them(client):
         f"/api/businesses/{business_id}/employees/activity",
         params={"employee_id": emp["id"]},
         headers=headers,
-    ).json()
+    ).json()["items"]
     assert len(filtered) > 0
     assert all(entry["employee_name"] == "Менеджер Иванов" for entry in filtered)
+
+    # Пагинация: limit=1 должен вернуть только самую свежую запись и
+    # выставить has_more=True, пока есть более старые.
+    first_page = client.get(
+        f"/api/businesses/{business_id}/employees/activity",
+        params={"limit": 1},
+        headers=headers,
+    ).json()
+    assert len(first_page["items"]) == 1
+    assert first_page["has_more"] is True
+    second_page = client.get(
+        f"/api/businesses/{business_id}/employees/activity",
+        params={"limit": 1, "offset": 1},
+        headers=headers,
+    ).json()
+    assert second_page["items"][0]["id"] != first_page["items"][0]["id"]
+
+    # Фильтр по периоду (days) — за последний "0 дней назад" (то есть от
+    # начала сегодняшних суток) события, только что созданные в этом же
+    # тесте, всё ещё должны попадать в выборку.
+    recent = client.get(
+        f"/api/businesses/{business_id}/employees/activity",
+        params={"days": 1},
+        headers=headers,
+    ).json()["items"]
+    assert len(recent) > 0
+
+    # days=0 на бэке не должен трактоваться как "без фильтра" (тот же
+    # класс ошибки, что и path/query "0 похож на False" в других местах
+    # проекта) — здесь просто проверяем, что параметр вообще принимается
+    # и не роняет запрос.
+    ancient = client.get(
+        f"/api/businesses/{business_id}/employees/activity",
+        params={"days": 3650},
+        headers=headers,
+    ).json()["items"]
+    assert len(ancient) >= len(recent)
 
     # Сводка нагрузки — 1 аренда и 1 заметка на этого сотрудника.
     workload = client.get(f"/api/businesses/{business_id}/employees/workload", headers=headers).json()
@@ -318,3 +357,92 @@ def test_activity_log_records_employee_actions_and_workload_counts_them(client):
     assert manager_row["rentals_created"] == 1
     assert manager_row["client_notes"] == 1
     assert manager_row["rental_photos"] == 0
+
+    # Тот же period-фильтр (days), что и в /activity — события только что
+    # созданы, поэтому за последние сутки они всё ещё должны учитываться.
+    workload_recent = client.get(
+        f"/api/businesses/{business_id}/employees/workload", params={"days": 1}, headers=headers
+    ).json()
+    manager_row_recent = next(w for w in workload_recent if w["employee_id"] == emp["id"])
+    assert manager_row_recent["rentals_created"] == 1
+
+
+def test_employee_last_login_at_visible_only_to_owner(client):
+    owner = register_business(client, email="lastlogin-owner@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    pos = client.post(f"/api/businesses/{business_id}/positions", json={"title": "Наблюдатель"}, headers=headers).json()
+    client.put(
+        f"/api/businesses/{business_id}/positions/{pos['id']}/permissions",
+        json={"permissions": [{"resource": "employees", "level": "view"}]},
+        headers=headers,
+    )
+    client.post(
+        f"/api/businesses/{business_id}/employees",
+        json={
+            "email": "neverlogged@example.com",
+            "name": "Ещё не заходил",
+            "position_id": pos["id"],
+            "temporary_password": "another long enough password",
+        },
+        headers=headers,
+    )
+
+    # Ни разу не входил (приглашённый только что) — last_login_at должен
+    # быть None, а не отсутствовать вовсе или выглядеть как "давным-давно".
+    owner_view = client.get(f"/api/businesses/{business_id}/employees", headers=headers).json()
+    newcomer = next(e for e in owner_view if e["email"] == "neverlogged@example.com")
+    assert newcomer["last_login_at"] is None
+
+    watcher_token = _login(client, "neverlogged@example.com", "another long enough password")
+
+    # Теперь этот сотрудник входил — у владельца должно появиться время
+    # входа; у самого себя (не-владельца, только view на employees) оно
+    # по-прежнему скрыто, как и email (тот же периметр видимости, 65-й проход).
+    owner_view_after = client.get(f"/api/businesses/{business_id}/employees", headers=headers).json()
+    newcomer_after = next(e for e in owner_view_after if e["email"] == "neverlogged@example.com")
+    assert newcomer_after["last_login_at"] is not None
+
+    watcher_view = client.get(
+        f"/api/businesses/{business_id}/employees", headers=auth_headers(watcher_token)
+    ).json()
+    assert all(e["last_login_at"] is None for e in watcher_view)
+
+
+def test_employee_update_and_position_rename_log_before_after_meta(client):
+    owner = register_business(client, email="meta-owner@example.com", password="correct horse battery staple")
+    headers = auth_headers(owner["access_token"])
+    business_id = _get_business_id(client, owner["access_token"])
+
+    pos_a = client.post(f"/api/businesses/{business_id}/positions", json={"title": "Стажёр"}, headers=headers).json()
+    pos_b = client.post(f"/api/businesses/{business_id}/positions", json={"title": "Специалист"}, headers=headers).json()
+    emp = client.post(
+        f"/api/businesses/{business_id}/employees",
+        json={
+            "email": "growing@example.com",
+            "name": "Растущий Сотрудник",
+            "position_id": pos_a["id"],
+            "temporary_password": "another long enough password",
+        },
+        headers=headers,
+    ).json()
+
+    client.patch(
+        f"/api/businesses/{business_id}/employees/{emp['id']}",
+        json={"name": "Выросший Сотрудник", "position_id": pos_b["id"]},
+        headers=headers,
+    )
+    client.patch(f"/api/businesses/{business_id}/positions/{pos_a['id']}", json={"title": "Младший специалист"}, headers=headers)
+
+    activity = client.get(f"/api/businesses/{business_id}/employees/activity", headers=headers).json()["items"]
+
+    update_entry = next(e for e in activity if e["resource"] == "employee" and e["action"] == "update")
+    assert update_entry["meta"]["name_before"] == "Растущий Сотрудник"
+    assert update_entry["meta"]["name_after"] == "Выросший Сотрудник"
+    assert update_entry["meta"]["position_before"] == "Стажёр"
+    assert update_entry["meta"]["position_after"] == "Специалист"
+
+    rename_entry = next(e for e in activity if e["resource"] == "position" and e["action"] == "rename")
+    assert rename_entry["meta"]["title_before"] == "Стажёр"
+    assert rename_entry["meta"]["title_after"] == "Младший специалист"

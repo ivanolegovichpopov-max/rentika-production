@@ -47,6 +47,16 @@ export const RATING_META: Record<string, StatusMeta> = {
   blacklist: { label: "Чёрный список", tone: "critical" },
 };
 
+// Статус сотрудника (65-й проход, страница «Сотрудники») — та же схема
+// "тон + подпись", что и у остальных META-словарей выше, вместо голого
+// текста "Активен"/"Отключён"/"Приглашён", который был раньше в
+// EmployeesTab.tsx без цветовой кодировки.
+export const EMPLOYEE_STATUS_META: Record<string, StatusMeta> = {
+  active: { label: "Активен", tone: "good" },
+  invited: { label: "Приглашён", tone: "warning" },
+  disabled: { label: "Отключён", tone: "muted" },
+};
+
 export function Badge({ meta }: { meta: StatusMeta }) {
   return (
     <span className={`badge tone-${meta.tone}`} title={meta.title}>

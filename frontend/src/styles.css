@@ -321,6 +321,16 @@ nav.nav { display: flex; flex-direction: column; gap: 2px; }
 .avatar-rating-normal { background: var(--good-soft); color: var(--good-ink); }
 .avatar-rating-watch { background: var(--warning-soft); color: var(--warning-ink); }
 .avatar-rating-blacklist { background: var(--critical-soft); color: var(--critical-ink); }
+/* Аватар сотрудника по статусу (65-й проход, страница «Сотрудники») — тот
+   же idiom, что и avatar-rating-* выше, только по EMPLOYEE_STATUS_META
+   (EmployeesTab.tsx) вместо RATING_META: invited/active — та же смысловая
+   пара тонов, что у бейджей ("warning"/"good"); disabled — своей пары
+   soft/ink токенов в проекте нет (--surface-3/--ink-secondary — та же
+   пара, что у .badge.tone-muted), это единственный неакцентный случай
+   среди всех *-avatar-* классов проекта. */
+.avatar-emp-active { background: var(--good-soft); color: var(--good-ink); }
+.avatar-emp-invited { background: var(--warning-soft); color: var(--warning-ink); }
+.avatar-emp-disabled { background: var(--surface-3); color: var(--ink-secondary); }
 .team-name { font-size: 12.5px; color: var(--ink-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reset-link { font-size: 11.5px; color: var(--muted); background: none; border: none; cursor: pointer; padding: 6px; text-align: left; }
 .reset-link:hover { color: var(--critical); }

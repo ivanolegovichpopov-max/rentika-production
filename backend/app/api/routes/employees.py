@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import log_action
 from app.core.deps import BusinessContext, get_business_context
 from app.core.security import PasswordPolicyError, hash_password, validate_password_policy
+from app.core.clock import utcnow
 from app.database import get_db
 from app.models.audit import AuditLog
 from app.models.business import Employee, EmployeeStatus, Position
@@ -14,6 +16,7 @@ from app.models.inventory import ClientNote, Rental, RentalPhoto
 from app.models.user import User
 from app.schemas.business import (
     ActivityLogEntry,
+    ActivityLogPage,
     EmployeeInvite,
     EmployeeOut,
     EmployeeUpdate,
@@ -28,12 +31,13 @@ def _require_owner(ctx: BusinessContext) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Управление сотрудниками доступно только владельцу бизнеса")
 
 
-def _employee_out(employee: Employee, email: str | None) -> EmployeeOut:
+def _employee_out(employee: Employee, email: str | None, last_login_at=None) -> EmployeeOut:
     return EmployeeOut(
         id=employee.id,
         user_id=employee.user_id,
         name=employee.name,
         email=email,
+        last_login_at=last_login_at,
         position_id=employee.position_id,
         is_owner=employee.is_owner,
         status=employee.status,
@@ -46,14 +50,20 @@ async def list_employees(ctx: BusinessContext = Depends(get_business_context), d
     # Список сотрудников виден всей команде (см. блок "Команда" в сайдбаре
     # дашборда) без отдельного ACL-права — просто по факту членства в
     # бизнесе, управление (invite/update/disable) отдельно защищено
-    # _require_owner на мутирующих эндпоинтах ниже. Email — исключение
-    # (64-й проход): чужие адреса почты обычным сотрудникам не показываем,
-    # только владельцу/платформенному админу (ctx.full_access), поэтому
-    # join с User делаем всегда (дёшево), а email кладём в ответ условно.
+    # _require_owner на мутирующих эндпоинтах ниже. Email и last_login_at —
+    # исключение (64-й/65-й проходы): чужие адреса почты и время последнего
+    # входа обычным сотрудникам не показываем, только владельцу/платформенному
+    # админу (ctx.full_access), поэтому join с User делаем всегда (дёшево), а
+    # оба поля кладём в ответ условно.
     rows = db.execute(
-        select(Employee, User.email).join(User, User.id == Employee.user_id).where(Employee.business_id == ctx.business_id)
+        select(Employee, User.email, User.last_login_at)
+        .join(User, User.id == Employee.user_id)
+        .where(Employee.business_id == ctx.business_id)
     ).all()
-    return [_employee_out(employee, email if ctx.full_access else None) for employee, email in rows]
+    return [
+        _employee_out(employee, email if ctx.full_access else None, last_login_at if ctx.full_access else None)
+        for employee, email, last_login_at in rows
+    ]
 
 
 @router.post("", response_model=EmployeeOut, status_code=status.HTTP_201_CREATED)
@@ -142,18 +152,47 @@ async def update_employee(
     if employee.is_owner:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Нельзя изменить запись владельца бизнеса")
 
+    # before/after для журнала действий (65-й проход) — тот же idiom
+    # "<поле>_before"/"<поле>_after", что и editDetails() в
+    # RentalHistorySection.tsx на фронте (см. app/api/routes/rentals.py
+    # ::edit_rental). Должность фиксируем по НАЗВАНИЮ, а не по id — id ничего
+    # не скажет читающему журнал без ещё одного похода в справочник
+    # должностей, а сама должность к моменту чтения журнала могла быть уже
+    # переименована или удалена (title на момент правки — как раз то, что
+    # тогда реально видел сотрудник).
+    name_before = employee.name
+    status_before = employee.status
+    position_before_title = None
+    if employee.position_id is not None:
+        prev_position = db.get(Position, employee.position_id)
+        position_before_title = prev_position.title if prev_position else None
+
     if body.name is not None:
         employee.name = body.name
+    position_after_title = position_before_title
     if "position_id" in body.model_fields_set:
         if body.position_id is not None:
             position = db.get(Position, body.position_id)
             if position is None or position.business_id != ctx.business_id:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Указанная должность не найдена в этом бизнесе")
             employee.position_id = body.position_id
+            position_after_title = position.title
         else:
             employee.position_id = None
+            position_after_title = None
     if body.status is not None:
         employee.status = body.status
+
+    change_meta: dict = {}
+    if body.name is not None and body.name != name_before:
+        change_meta["name_before"] = name_before
+        change_meta["name_after"] = body.name
+    if "position_id" in body.model_fields_set and position_after_title != position_before_title:
+        change_meta["position_before"] = position_before_title
+        change_meta["position_after"] = position_after_title
+    if body.status is not None and body.status != status_before:
+        change_meta["status_before"] = status_before.value
+        change_meta["status_after"] = body.status.value
 
     user = db.get(User, employee.user_id)
     if body.new_password is not None:
@@ -165,10 +204,19 @@ async def update_employee(
             user.password_hash = hash_password(body.new_password)
         log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="reset_password", resource="employee", resource_id=str(employee_id))
 
-    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="update", resource="employee", resource_id=str(employee_id))
+    if change_meta:
+        log_action(
+            db,
+            business_id=ctx.business_id,
+            user_id=ctx.user.id,
+            action="update",
+            resource="employee",
+            resource_id=str(employee_id),
+            meta=change_meta,
+        )
     db.commit()
     db.refresh(employee)
-    return _employee_out(employee, user.email if user else None)
+    return _employee_out(employee, user.email if user else None, user.last_login_at if user else None)
 
 
 @router.delete("/{employee_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -199,12 +247,16 @@ async def remove_employee(
 # ============================================================
 
 
-@router.get("/activity", response_model=list[ActivityLogEntry])
+@router.get("/activity", response_model=ActivityLogPage)
 async def employee_activity(
     ctx: BusinessContext = Depends(get_business_context),
     db: Session = Depends(get_db),
     employee_id: uuid.UUID | None = Query(default=None, description="Фильтр по одному сотруднику"),
+    days: int | None = Query(
+        default=None, ge=1, le=3650, description="Только события не старше N дней (как пресеты FinanceTab)"
+    ),
     limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0, description="Пагинация (65-й проход) — сколько самых свежих записей пропустить"),
 ):
     _require_owner(ctx)
     filters = [AuditLog.business_id == ctx.business_id]
@@ -213,6 +265,8 @@ async def employee_activity(
         if target is None or target.business_id != ctx.business_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Сотрудник не найден")
         filters.append(AuditLog.user_id == target.user_id)
+    if days is not None:
+        filters.append(AuditLog.created_at >= utcnow() - timedelta(days=days))
     rows = db.execute(
         select(AuditLog, Employee.name)
         # Условие на business_id прямо в ON, не в WHERE — по той же причине,
@@ -222,24 +276,39 @@ async def employee_activity(
         .join(Employee, (Employee.user_id == AuditLog.user_id) & (Employee.business_id == ctx.business_id), isouter=True)
         .where(*filters)
         .order_by(AuditLog.created_at.desc())
-        .limit(limit)
+        # Пагинация (65-й проход): запрашиваем на одну запись больше limit,
+        # чтобы узнать has_more, не делая отдельный COUNT(*) запрос — та же
+        # идея, что и "fetch limit+1" в других постраничных списках проекта.
+        .offset(offset)
+        .limit(limit + 1)
     ).all()
-    return [
-        ActivityLogEntry(
-            id=log.id,
-            action=log.action,
-            resource=log.resource,
-            resource_id=log.resource_id,
-            employee_name=employee_name,
-            meta=log.meta,
-            created_at=log.created_at,
-        )
-        for log, employee_name in rows
-    ]
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    return ActivityLogPage(
+        items=[
+            ActivityLogEntry(
+                id=log.id,
+                action=log.action,
+                resource=log.resource,
+                resource_id=log.resource_id,
+                employee_name=employee_name,
+                meta=log.meta,
+                created_at=log.created_at,
+            )
+            for log, employee_name in rows
+        ],
+        has_more=has_more,
+    )
 
 
 @router.get("/workload", response_model=list[EmployeeWorkloadOut])
-async def employee_workload(ctx: BusinessContext = Depends(get_business_context), db: Session = Depends(get_db)):
+async def employee_workload(
+    ctx: BusinessContext = Depends(get_business_context),
+    db: Session = Depends(get_db),
+    days: int | None = Query(
+        default=None, ge=1, le=3650, description="Только события не старше N дней (как пресеты FinanceTab)"
+    ),
+):
     _require_owner(ctx)
     employees = db.scalars(
         select(Employee).where(Employee.business_id == ctx.business_id, Employee.status != EmployeeStatus.disabled)
@@ -247,24 +316,38 @@ async def employee_workload(ctx: BusinessContext = Depends(get_business_context)
     if not employees:
         return []
 
+    cutoff = utcnow() - timedelta(days=days) if days is not None else None
+
     rentals_by_employee = dict(
         db.execute(
             select(Rental.created_by_employee_id, func.count())
-            .where(Rental.business_id == ctx.business_id, Rental.created_by_employee_id.is_not(None))
+            .where(
+                Rental.business_id == ctx.business_id,
+                Rental.created_by_employee_id.is_not(None),
+                *([Rental.created_at >= cutoff] if cutoff is not None else []),
+            )
             .group_by(Rental.created_by_employee_id)
         ).all()
     )
     notes_by_employee = dict(
         db.execute(
             select(ClientNote.employee_id, func.count())
-            .where(ClientNote.business_id == ctx.business_id, ClientNote.employee_id.is_not(None))
+            .where(
+                ClientNote.business_id == ctx.business_id,
+                ClientNote.employee_id.is_not(None),
+                *([ClientNote.created_at >= cutoff] if cutoff is not None else []),
+            )
             .group_by(ClientNote.employee_id)
         ).all()
     )
     photos_by_employee = dict(
         db.execute(
             select(RentalPhoto.employee_id, func.count())
-            .where(RentalPhoto.business_id == ctx.business_id, RentalPhoto.employee_id.is_not(None))
+            .where(
+                RentalPhoto.business_id == ctx.business_id,
+                RentalPhoto.employee_id.is_not(None),
+                *([RentalPhoto.created_at >= cutoff] if cutoff is not None else []),
+            )
             .group_by(RentalPhoto.employee_id)
         ).all()
     )

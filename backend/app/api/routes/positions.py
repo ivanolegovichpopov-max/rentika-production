@@ -71,6 +71,7 @@ async def rename_position(
     if position is None or position.business_id != ctx.business_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Должность не найдена")
 
+    title_before = position.title
     position.title = body.title
     log_action(
         db,
@@ -79,6 +80,11 @@ async def rename_position(
         action="rename",
         resource="position",
         resource_id=str(position_id),
+        # title_before/title_after — тот же idiom "<поле>_before"/"<поле>_after",
+        # что и editDetails() в RentalHistorySection.tsx на фронте, чтобы
+        # журнал действий сотрудников мог показать "было → стало", а не
+        # только факт переименования без деталей.
+        meta={"title_before": title_before, "title_after": body.title} if title_before != body.title else None,
     )
     try:
         db.commit()

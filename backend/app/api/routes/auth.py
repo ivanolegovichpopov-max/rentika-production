@@ -143,10 +143,17 @@ async def login(request: Request, body: LoginRequest, response: Response, db: Se
         raise generic_error
 
     user.failed_login_attempts = 0
-    db.commit()
 
     if user.totp_enabled:
+        # Это ещё не завершённый вход — только пароль подтверждён, TOTP-код
+        # проверяется вторым шагом в /login/totp. last_login_at проставляем
+        # только там, иначе "последний вход" будет врать при неудачном вводе
+        # кода (или его отсутствии вовсе).
+        db.commit()
         return LoginResponse(requires_totp=True, totp_challenge_token=create_totp_challenge_token(user_id=str(user.id)))
+
+    user.last_login_at = utcnow()
+    db.commit()
 
     tokens = _issue_tokens(db, user, response)
     return LoginResponse(requires_totp=False, access_token=tokens.access_token, expires_in=tokens.expires_in)
@@ -176,6 +183,9 @@ async def login_totp(request: Request, body: TotpLoginRequest, response: Respons
 
     if not code_ok:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Неверный код двухфакторной аутентификации")
+
+    user.last_login_at = utcnow()
+    db.commit()
 
     return _issue_tokens(db, user, response)
 

@@ -43,6 +43,12 @@ export interface Employee {
   // админу (см. EmployeeOut на бэке); для остальных, кто тоже видит список
   // команды, всегда null.
   email: string | null;
+  // Момент последнего успешного входа (65-й проход) — та же видимость, что
+  // и email: null для всех, КРОМЕ владельца/платформенного админа. У самого
+  // владельца null означает не "скрыто", а "сотрудник ни разу не входил" —
+  // различать эти два случая (скрыто/не заходил) фронту приходится по тому,
+  // видит ли он вообще email в том же ответе (см. EmployeesTab.tsx).
+  last_login_at: string | null;
   position_id: string | null;
   is_owner: boolean;
   status: "invited" | "active" | "disabled";
@@ -59,6 +65,12 @@ export interface ActivityLogEntry {
   employee_name: string | null;
   meta: Record<string, unknown> | null;
   created_at: string;
+}
+
+// Страница журнала действий (65-й проход) — см. ActivityLogPage на бэке.
+export interface ActivityLogPage {
+  items: ActivityLogEntry[];
+  has_more: boolean;
 }
 
 // Сводка нагрузки сотрудника (64-й проход) — см. EmployeeWorkloadOut на
