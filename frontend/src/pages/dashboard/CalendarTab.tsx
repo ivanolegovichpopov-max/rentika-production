@@ -636,92 +636,111 @@ export function CalendarTab({
           действий прибиты к правому верхнему углу независимо от того, во
           сколько строк перенеслись фильтры (см. styles.css). */}
       <div className="tab-toolbar-grid">
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          {/* Категории — выпадающий список вместо плоского ряда кнопок на
-              каждую категорию (53-й проход): ряд кнопок неограниченно рос
-              вширь и переносился на вторую строку при каждой новой
-              категории. Тот же общий одиночный Dropdown, что и везде в
-              приложении (components/Dropdown.tsx — сам построен на классах
-              .cat-filter*, которыми на "Оборудовании" реализован мультивыбор
-              категорий/складов), а не отдельная копия того же idiom. */}
-          <Dropdown
-            value={calCategoryFilter}
-            onChange={setCalCategoryFilter}
-            placeholder="Все категории"
-            options={[
-              { value: "all", label: "Все категории", hint: usableAll.length },
-              ...orderedCategories.map((cat) => ({ value: cat, label: cat, hint: categoryCounts[cat] })),
-            ]}
-          />
-          {/* Фильтр по складу (53-й проход, пункт 3 из "что нужно доработать")
-              — показывается только когда склады вообще заведены, тот же
-              принцип, что и на "Оборудовании". */}
-          {warehouses.length > 0 && (
+        {/* Левый кластер: две строки (54-й проход, по итогам обзора верхней
+            части — "не приведена к общему виду по образцу Аренды/Клиенты/
+            Оборудование"). Раньше все шесть разнородных элементов (категория,
+            склад, диапазон дней, навигация по датам, переход на дату,
+            индикатор выделения) жили в одном ряду с общим flexWrap — та же
+            "рябая" регрессия, которую на других вкладках чинили ещё в 44-45-м
+            проходах (см. комментарии в EquipmentTab.tsx/ClientsTab.tsx/
+            RentalsTab.tsx). Теперь граница между смысловыми группами
+            зафиксирована как строка, а не отдана на волю переноса по ширине:
+            строка 1 — "что показываем" (категория+склад), строка 2 — "когда
+            смотрим" (диапазон+навигация+дата+индикатор выделения). */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            {/* Категории — выпадающий список вместо плоского ряда кнопок на
+                каждую категорию (53-й проход): ряд кнопок неограниченно рос
+                вширь и переносился на вторую строку при каждой новой
+                категории. Тот же общий одиночный Dropdown, что и везде в
+                приложении (components/Dropdown.tsx — сам построен на классах
+                .cat-filter*, которыми на "Оборудовании" реализован мультивыбор
+                категорий/складов), а не отдельная копия того же idiom. */}
             <Dropdown
-              value={calWarehouseFilter}
-              onChange={setCalWarehouseFilter}
-              placeholder="Все склады"
+              value={calCategoryFilter}
+              onChange={setCalCategoryFilter}
+              placeholder="Все категории"
               options={[
-                { value: "all", label: "Все склады", hint: usableAll.length },
-                ...warehouses.map((w) => ({ value: w, label: w, hint: warehouseCounts[w] })),
+                { value: "all", label: "Все категории", hint: usableAll.length },
+                ...orderedCategories.map((cat) => ({ value: cat, label: cat, hint: categoryCounts[cat] })),
               ]}
             />
-          )}
-          <div className="segmented">
-            {CAL_RANGE_OPTIONS.map((opt) => (
-              <button
-                key={String(opt)}
-                type="button"
-                className={calRange === opt ? "active" : ""}
-                onClick={() => setCalRange(opt)}
-              >
-                {opt === "month" ? "Календарный месяц" : `${opt} дн.`}
-              </button>
-            ))}
+            {/* Фильтр по складу (53-й проход, пункт 3 из "что нужно доработать")
+                — показывается только когда склады вообще заведены, тот же
+                принцип, что и на "Оборудовании". Обёрнут в общий родительский
+                ряд с категорией БЕЗ собственного flexWrap — те же две строки,
+                тот же приём, что и "категория+склад"/"просрочка+фильтры" на
+                других вкладках: переносятся вниз только вдвоём, если вообще
+                переносятся, а не порознь. */}
+            {warehouses.length > 0 && (
+              <Dropdown
+                value={calWarehouseFilter}
+                onChange={setCalWarehouseFilter}
+                placeholder="Все склады"
+                options={[
+                  { value: "all", label: "Все склады", hint: usableAll.length },
+                  ...warehouses.map((w) => ({ value: w, label: w, hint: warehouseCounts[w] })),
+                ]}
+              />
+            )}
           </div>
-          <div className="segmented">
-            <button type="button" onClick={navPrev}>{calRange === "month" ? "← Пред. месяц" : "← Назад"}</button>
-            <button type="button" onClick={navToday}>Сегодня</button>
-            <button type="button" onClick={navNext}>{calRange === "month" ? "След. месяц →" : "Вперёд →"}</button>
-          </div>
-          {/* Раньше "Сегодня" стояла и в сегменте навигации, и ещё раз рядом
-              с полем даты (53-й проход, обзор — "раздвоенная кнопка
-              'Сегодня'") — вторая убрана, остался только сам переход к
-              произвольной дате. */}
-          <div className="cal-jump">
-            <input
-              type="date"
-              value={start}
-              title="Перейти к дате"
-              onChange={(e) => {
-                if (!e.target.value) return;
-                setCalOffset(dayDiff(e.target.value));
-              }}
-            />
-          </div>
-          {colIndicator && (
-            <span className="cal-col-indicator">
-              {colIndicator.selLabel} · {colIndicator.selDays} {pluralRu(colIndicator.selDays, "день", "дня", "дней")} · {colIndicator.summary}
-              {/* "Забронировать" по выделенному диапазону (53-й проход,
-                  пункт 2 из "что нужно доработать" — "выделение диапазона
-                  ничего не даёт, кроме сводки") — открывает ту же форму
-                  создания аренды, с предзаполненными датами диапазона;
-                  список оборудования пользователь выбирает уже в форме. */}
-              <button
-                type="button"
-                className="cal-col-book"
-                onClick={() => {
-                  setCreateDraft({ startDate: colIndicator.selLo, endDate: colIndicator.selHi });
-                  setShowCreate(true);
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div className="segmented">
+              {CAL_RANGE_OPTIONS.map((opt) => (
+                <button
+                  key={String(opt)}
+                  type="button"
+                  className={calRange === opt ? "active" : ""}
+                  onClick={() => setCalRange(opt)}
+                >
+                  {opt === "month" ? "Календарный месяц" : `${opt} дн.`}
+                </button>
+              ))}
+            </div>
+            <div className="segmented">
+              <button type="button" onClick={navPrev}>{calRange === "month" ? "← Пред. месяц" : "← Назад"}</button>
+              <button type="button" onClick={navToday}>Сегодня</button>
+              <button type="button" onClick={navNext}>{calRange === "month" ? "След. месяц →" : "Вперёд →"}</button>
+            </div>
+            {/* Раньше "Сегодня" стояла и в сегменте навигации, и ещё раз рядом
+                с полем даты (53-й проход, обзор — "раздвоенная кнопка
+                'Сегодня'") — вторая убрана, остался только сам переход к
+                произвольной дате. */}
+            <div className="cal-jump">
+              <input
+                type="date"
+                value={start}
+                title="Перейти к дате"
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  setCalOffset(dayDiff(e.target.value));
                 }}
-              >
-                Забронировать
-              </button>
-              <button className="cal-col-close" type="button" title="Снять выделение" onClick={() => { setCalColStart(null); setCalColEnd(null); }}>
-                <IconClose />
-              </button>
-            </span>
-          )}
+              />
+            </div>
+            {colIndicator && (
+              <span className="cal-col-indicator">
+                {colIndicator.selLabel} · {colIndicator.selDays} {pluralRu(colIndicator.selDays, "день", "дня", "дней")} · {colIndicator.summary}
+                {/* "Забронировать" по выделенному диапазону (53-й проход,
+                    пункт 2 из "что нужно доработать" — "выделение диапазона
+                    ничего не даёт, кроме сводки") — открывает ту же форму
+                    создания аренды, с предзаполненными датами диапазона;
+                    список оборудования пользователь выбирает уже в форме. */}
+                <button
+                  type="button"
+                  className="cal-col-book"
+                  onClick={() => {
+                    setCreateDraft({ startDate: colIndicator.selLo, endDate: colIndicator.selHi });
+                    setShowCreate(true);
+                  }}
+                >
+                  Забронировать
+                </button>
+                <button className="cal-col-close" type="button" title="Снять выделение" onClick={() => { setCalColStart(null); setCalColEnd(null); }}>
+                  <IconClose />
+                </button>
+              </span>
+            )}
+          </div>
         </div>
         {/* Колонка кнопок в .tab-toolbar-grid (53-й проход) — тот же приём,
             что и на остальных вкладках: редкое действие ("Свернуть/развернуть
