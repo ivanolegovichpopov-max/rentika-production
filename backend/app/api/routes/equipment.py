@@ -576,11 +576,17 @@ async def update_equipment(
     if "warehouse" in changes:
         changes["warehouse"] = _ensure_warehouse(db, ctx, changes["warehouse"])
 
-    if changes.get("status") == EquipmentStatus.retired:
-        # Тот же принцип, что и при удалении: нельзя списать позицию, по
-        # которой есть аренда в работе или бронь (см. demo's
-        # equipmentHasOpenRentals) — иначе статус "Списано" маскирует
-        # фактическое "В аренде".
+    if changes.get("status") in (EquipmentStatus.retired, EquipmentStatus.maintenance):
+        # Тот же принцип, что и при удалении: нельзя списать позицию или
+        # перевести её на обслуживание, если по ней есть аренда в работе или
+        # бронь (см. demo's equipmentHasOpenRentals) — иначе статус
+        # "Списано"/"На обслуживании" маскирует фактическое "В аренде".
+        # Раньше эта проверка была только у "Списано" — асимметрия, а не
+        # осознанное решение (55-й проход, обзор: "перевести в аренде
+        # оборудование на обслуживание в один клик — небезопасно"): у
+        # календаря (equipmentDayStatus() в CalendarTab.tsx) проверка "на
+        # обслуживании" идёт РАНЬШЕ проверки активной аренды, так что такая
+        # позиция перестала бы показывать реальную бронь на календаре вообще.
         open_rental = db.scalar(
             select(RentalItem)
             .join(Rental, Rental.id == RentalItem.rental_id)
@@ -590,10 +596,12 @@ async def update_equipment(
             )
         )
         if open_rental is not None:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "Нельзя списать: по этой позиции есть аренда в работе или бронь. Сначала завершите её.",
+            message = (
+                "Нельзя списать: по этой позиции есть аренда в работе или бронь. Сначала завершите её."
+                if changes["status"] == EquipmentStatus.retired
+                else "Нельзя перевести на обслуживание: по этой позиции есть аренда в работе или бронь. Сначала завершите её."
             )
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, message)
 
     for field, value in changes.items():
         setattr(item, field, value)
