@@ -23,6 +23,8 @@ export function CreateRentalModal({
   rentals,
   initialClientId,
   initialEquipmentIds,
+  initialStartDate,
+  initialEndDate,
   onClose,
   onCreated,
 }: {
@@ -39,18 +41,27 @@ export function CreateRentalModal({
   // Предзаполненные позиции оборудования (41-й проход — "Повторить аренду"
   // из RentalDetailPanel: та же техника, что клиент брал в прошлый раз).
   // Отмечаются галочкой только те, что реально свободны на дефолтный
-  // диапазон дат (todayISO()..+2, см. ниже) — а не все переданные вслепую:
-  // иначе чекбокс был бы виден отмеченным, но disabled (занято), что и
-  // выглядит как баг, и не даёт пользователю понять, что вообще произошло.
+  // диапазон дат (initialStartDate/initialEndDate, если заданы, иначе
+  // todayISO()..+2 — см. ниже), а не все переданные вслепую: иначе чекбокс
+  // был бы виден отмеченным, но disabled (занято), что и выглядит как баг,
+  // и не даёт пользователю понять, что вообще произошло.
   initialEquipmentIds?: string[];
+  // Предзаполненный диапазон дат (53-й проход — действие "Забронировать" по
+  // выделенному в Календаре диапазону столбцов, CalendarTab.tsx): при
+  // обычном открытии не заданы, поведение как раньше (todayISO()..+2).
+  // Поля дат остаются редактируемыми — предзаполнение не блокирует их.
+  initialStartDate?: string;
+  initialEndDate?: string;
   onClose: () => void;
   onCreated: () => Promise<void>;
 }) {
   const [clientId, setClientId] = useState(initialClientId ?? "");
-  const [startDate, setStartDate] = useState(todayISO());
-  const [endDate, setEndDate] = useState(isoAddDays(todayISO(), 2));
+  const [startDate, setStartDate] = useState(initialStartDate ?? todayISO());
+  const [endDate, setEndDate] = useState(initialEndDate ?? isoAddDays(todayISO(), 2));
   const [checkedIds, setCheckedIds] = useState<string[]>(() =>
-    (initialEquipmentIds ?? []).filter((id) => isEquipmentFreeForRange(id, todayISO(), isoAddDays(todayISO(), 2), rentals))
+    (initialEquipmentIds ?? []).filter((id) =>
+      isEquipmentFreeForRange(id, initialStartDate ?? todayISO(), initialEndDate ?? isoAddDays(todayISO(), 2), rentals)
+    )
   );
   const [discount, setDiscount] = useState("");
   // Доп. услуги (46-й проход) — по образцу discount выше: одно поле суммы +

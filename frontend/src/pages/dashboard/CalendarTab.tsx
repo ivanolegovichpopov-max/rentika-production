@@ -45,6 +45,7 @@ import { useData } from "../../context/DataContext";
 import { api, ApiError } from "../../api/client";
 import type { Client, Equipment, Rental } from "../../api/types";
 import { todayISO, isoAddDays, dayDiff, ymd, fmtDate, money, spanDays } from "../../lib/format";
+import { toCsv } from "../../lib/csv";
 import { IconChevronDown, IconGrip, IconClose, IconAlert } from "../../lib/icons";
 import { useToast } from "../../components/Toast";
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -149,6 +150,37 @@ function equipmentDayStatus(e: Equipment, d: string, rentals: Rental[], clients:
   return { cls: "st-booked", title: "Забронировано — " + (cl?.name ?? ""), hit };
 }
 
+/**
+ * Экспорт видимого диапазона календаря в CSV (53-й проход, пункт 4 из
+ * "что нужно доработать" — "распечатать/выгрузить видимый диапазон") — по
+ * тому же образцу, что и exportRentalsCsv (rentals/csv.ts): toCsv() + BOM +
+ * Blob + временная ссылка на скачивание. В отличие от Аренд, здесь нет
+ * отдельного submodule-каталога csv.ts — вкладка Календаря не разнесена по
+ * файлам, как Оборудование/Клиенты/Аренды, так что функция объявлена прямо
+ * здесь. Строка на единицу оборудования, столбец на каждый видимый день —
+ * содержимое ячейки то же title, что показывается во всплывающей подсказке
+ * на самой ячейке (equipmentDayStatus().title — "Свободно"/"Забронировано —
+ * Имя"/"В аренде — Имя"/"Просрочено — Имя"/"На обслуживании…").
+ */
+function exportCalendarCsv(list: Equipment[], daysList: string[], rentals: Rental[], clients: Client[]) {
+  const header = ["Оборудование", "Код", ...daysList.map((d) => fmtDate(d))];
+  const rows = list.map((e) => [
+    e.name,
+    e.code ?? "",
+    ...daysList.map((d) => equipmentDayStatus(e, d, rentals, clients).title),
+  ]);
+  const csv = toCsv(header, rows);
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `Календарь ${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function isEquipmentFree(equipmentId: string, start: string, end: string, rentals: Rental[]): boolean {
   return !rentals.some((r) => {
     if (r.status !== "booked" && r.status !== "active") return false;
@@ -226,11 +258,18 @@ export function CalendarTab({
   const [cancelRental, setCancelRental] = useState<Rental | null>(null);
   const [paymentRental, setPaymentRental] = useState<Rental | null>(null);
   const [docModal, setDocModal] = useState<{ title: string; node: ReactNode } | null>(null);
-  // "Повторить аренду" (onRepeat из RentalDetailPanel) и "+ Новая аренда" в
-  // тулбаре — одна и та же форма создания, repeatDraft заполняет её клиентом
-  // и позициями текущей аренды при повторе, при обычном "+" остаётся null.
+  // "Повторить аренду" (onRepeat из RentalDetailPanel), "+ Новая аренда" в
+  // тулбаре и "Забронировать" из сводки по выделенному диапазону столбцов —
+  // одна и та же форма создания (CreateRentalModal), createDraft заполняет
+  // её клиентом/позициями при повторе или датами при бронировании по
+  // диапазону; при обычном "+" остаётся null (значения по умолчанию формы).
   const [showCreate, setShowCreate] = useState(false);
-  const [repeatDraft, setRepeatDraft] = useState<{ clientId: string; equipmentIds: string[] } | null>(null);
+  const [createDraft, setCreateDraft] = useState<{
+    clientId?: string;
+    equipmentIds?: string[];
+    startDate?: string;
+    endDate?: string;
+  } | null>(null);
 
   function openDoc(title: string, node: ReactNode) {
     setDocModal({ title, node });
@@ -267,6 +306,41 @@ export function CalendarTab({
       }
     });
     return list.sort((a, b) => a.localeCompare(b, "ru"));
+  }, [usableAll]);
+
+  // Число позиций на категорию (53-й проход, обзор — "на 'Оборудовании'
+  // рядом с категорией в фильтре видно число позиций, здесь — нет") — тот же
+  // счётчик, что и .cat-filter-count на "Оборудовании", передаётся сюда
+  // через hint у Dropdown (components/Dropdown.tsx уже поддерживает его).
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    usableAll.forEach((e) => { counts[e.category] = (counts[e.category] ?? 0) + 1; });
+    return counts;
+  }, [usableAll]);
+
+  // Фильтр по складу (53-й проход, обзор — "на 'Оборудовании' есть и
+  // категория, и склад, здесь — только категория") — тот же принцип, что и
+  // calCategoryFilter выше: одиночный выбор через общий Dropdown, а не
+  // мультивыбор чекбоксами (в отличие от "Оборудования", где оба фильтра
+  // можно комбинировать в любом сочетании сразу нескольких значений — для
+  // Календаря, где и так уже есть категория, второй независимый мультивыбор
+  // усложнил бы тулбар больше, чем оправдано).
+  const [calWarehouseFilter, setCalWarehouseFilter] = useState("all");
+  const warehouses = useMemo(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    usableAll.forEach((e) => {
+      if (e.warehouse && !seen.has(e.warehouse)) {
+        seen.add(e.warehouse);
+        list.push(e.warehouse);
+      }
+    });
+    return list.sort((a, b) => a.localeCompare(b, "ru"));
+  }, [usableAll]);
+  const warehouseCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    usableAll.forEach((e) => { if (e.warehouse) counts[e.warehouse] = (counts[e.warehouse] ?? 0) + 1; });
+    return counts;
   }, [usableAll]);
 
   const orderedCategories = useMemo(() => {
@@ -324,6 +398,7 @@ export function CalendarTab({
     return usableAll
       .filter((e) => {
         if (calCategoryFilter !== "all" && e.category !== calCategoryFilter) return false;
+        if (calWarehouseFilter !== "all" && e.warehouse !== calWarehouseFilter) return false;
         if (q && !(e.name + " " + e.category + " " + (e.code ?? "")).toLowerCase().includes(q)) return false;
         return true;
       })
@@ -335,7 +410,7 @@ export function CalendarTab({
         }
         return a.name.localeCompare(b.name, "ru");
       });
-  }, [usableAll, calCategoryFilter, q, grouping, catRank]);
+  }, [usableAll, calCategoryFilter, calWarehouseFilter, q, grouping, catRank]);
 
   function colSel(d: string): boolean {
     if (!calColStart || !calColEnd) return false;
@@ -377,7 +452,7 @@ export function CalendarTab({
     const bits = [`занято ${busyCount}/${busyCount + freeCount}`];
     if (maintCount) bits.push(`обсл. ${maintCount}`);
     if (revenue > 0) bits.push(`≈ ${money(revenue)}`);
-    return { selDays, selLabel, summary: bits.join(" · ") };
+    return { selLo, selHi, selDays, selLabel, summary: bits.join(" · ") };
   }, [calColStart, calColEnd, usable, rentals, clients, equipment]);
 
   function calHighlightRange(eqId: string, fromDate: string, toDate: string) {
@@ -573,8 +648,25 @@ export function CalendarTab({
             value={calCategoryFilter}
             onChange={setCalCategoryFilter}
             placeholder="Все категории"
-            options={[{ value: "all", label: "Все категории" }, ...orderedCategories.map((cat) => ({ value: cat, label: cat }))]}
+            options={[
+              { value: "all", label: "Все категории", hint: usableAll.length },
+              ...orderedCategories.map((cat) => ({ value: cat, label: cat, hint: categoryCounts[cat] })),
+            ]}
           />
+          {/* Фильтр по складу (53-й проход, пункт 3 из "что нужно доработать")
+              — показывается только когда склады вообще заведены, тот же
+              принцип, что и на "Оборудовании". */}
+          {warehouses.length > 0 && (
+            <Dropdown
+              value={calWarehouseFilter}
+              onChange={setCalWarehouseFilter}
+              placeholder="Все склады"
+              options={[
+                { value: "all", label: "Все склады", hint: usableAll.length },
+                ...warehouses.map((w) => ({ value: w, label: w, hint: warehouseCounts[w] })),
+              ]}
+            />
+          )}
           <div className="segmented">
             {CAL_RANGE_OPTIONS.map((opt) => (
               <button
@@ -610,7 +702,22 @@ export function CalendarTab({
           {colIndicator && (
             <span className="cal-col-indicator">
               {colIndicator.selLabel} · {colIndicator.selDays} {pluralRu(colIndicator.selDays, "день", "дня", "дней")} · {colIndicator.summary}
-              <button type="button" title="Снять выделение" onClick={() => { setCalColStart(null); setCalColEnd(null); }}>
+              {/* "Забронировать" по выделенному диапазону (53-й проход,
+                  пункт 2 из "что нужно доработать" — "выделение диапазона
+                  ничего не даёт, кроме сводки") — открывает ту же форму
+                  создания аренды, с предзаполненными датами диапазона;
+                  список оборудования пользователь выбирает уже в форме. */}
+              <button
+                type="button"
+                className="cal-col-book"
+                onClick={() => {
+                  setCreateDraft({ startDate: colIndicator.selLo, endDate: colIndicator.selHi });
+                  setShowCreate(true);
+                }}
+              >
+                Забронировать
+              </button>
+              <button className="cal-col-close" type="button" title="Снять выделение" onClick={() => { setCalColStart(null); setCalColEnd(null); }}>
                 <IconClose />
               </button>
             </span>
@@ -626,17 +733,31 @@ export function CalendarTab({
             "Арендах"; клик/протяжка по ячейке остаётся быстрым способом для
             тех, кто уже о нём знает — оба пути не исключают друг друга. */}
         <div style={{ display: "flex", gap: "8px" }}>
-          {collapseAllAvailable && (
-            <MoreActionsMenu
-              actions={[
-                {
-                  key: "collapse-all",
-                  label: allCollapsed ? "Развернуть все" : "Свернуть все",
-                  onClick: () => setCollapsedCategories(allCollapsed ? [] : orderedCategories),
-                },
-              ]}
-            />
-          )}
+          {/* 53-й проход, пункт 4 из "что нужно доработать" — экспорт
+              видимого диапазона в CSV (на "Оборудовании"/"Клиентах"/"Арендах"
+              такой экспорт уже есть, у Календаря не было вообще). Раньше меню
+              "Ещё" показывалось только когда есть что сворачивать/
+              разворачивать (>1 категории) — теперь показывается всегда, т.к.
+              экспорт полезен независимо от группировки по категориям. */}
+          <MoreActionsMenu
+            actions={[
+              ...(collapseAllAvailable
+                ? [
+                    {
+                      key: "collapse-all",
+                      label: allCollapsed ? "Развернуть все" : "Свернуть все",
+                      onClick: () => setCollapsedCategories(allCollapsed ? [] : orderedCategories),
+                    },
+                  ]
+                : []),
+              {
+                key: "export-csv",
+                label: "Экспорт в CSV",
+                disabled: usable.length === 0,
+                onClick: () => exportCalendarCsv(usable, days, rentals, clients),
+              },
+            ]}
+          />
           <button type="button" className="btn btn-primary" onClick={() => setShowCreate(true)}>
             + Новая аренда
           </button>
@@ -870,23 +991,27 @@ export function CalendarTab({
       )}
 
       {/* Полноценная форма "Новая аренда" (53-й проход) — кнопка "+ Новая
-          аренда" в тулбаре и "Повторить аренду" из RentalDetailPanel ниже
-          используют одну и ту же форму, тем же принципом, что и в
-          RentalsTab.tsx: repeatDraft заполняет её клиентом/позициями при
-          повторе, при обычном "+" остаётся null. QuickBookModal (клик/
-          протяжка по ячейке) — сознательно отдельная облегчённая форма, см.
-          её докстринг ниже, а не замена этой. */}
+          аренда" в тулбаре, "Повторить аренду" из RentalDetailPanel и
+          "Забронировать" из сводки по выделенному диапазону столбцов (все
+          три — ниже по файлу) используют одну и ту же форму, тем же
+          принципом, что и в RentalsTab.tsx: createDraft заполняет её
+          клиентом/позициями/датами, при обычном "+" остаётся null.
+          QuickBookModal (клик/протяжка по одной ячейке) — сознательно
+          отдельная облегчённая форма, см. её докстринг ниже, а не замена
+          этой. */}
       {showCreate && (
         <CreateRentalModal
           businessId={businessId}
           clients={clients}
           equipment={equipment}
           rentals={rentals}
-          initialClientId={repeatDraft?.clientId}
-          initialEquipmentIds={repeatDraft?.equipmentIds}
+          initialClientId={createDraft?.clientId}
+          initialEquipmentIds={createDraft?.equipmentIds}
+          initialStartDate={createDraft?.startDate}
+          initialEndDate={createDraft?.endDate}
           onClose={() => {
             setShowCreate(false);
-            setRepeatDraft(null);
+            setCreateDraft(null);
           }}
           onCreated={async () => {
             await Promise.all([reloadRentals(), reloadEquipment()]);
@@ -1021,7 +1146,7 @@ export function CalendarTab({
             if (r) setCancelRental(r);
           }}
           onRepeat={(clientId, equipmentIds) => {
-            setRepeatDraft({ clientId, equipmentIds });
+            setCreateDraft({ clientId, equipmentIds });
             setShowCreate(true);
           }}
           // Переход "в календарь" здесь не уводит с вкладки (мы уже на ней) —

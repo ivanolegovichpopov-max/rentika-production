@@ -629,12 +629,18 @@ tr.row-draggable.drag-over { box-shadow: inset 0 2px 0 var(--accent); background
   display: inline-flex; align-items: center; gap: 4px; padding: 5px 5px 5px 12px; border-radius: 16px;
   background: var(--col-select-soft); color: var(--ink); font-size: 12.5px; font-weight: 600; white-space: nowrap;
 }
-.cal-col-indicator button {
+.cal-col-indicator .cal-col-close {
   display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border-radius: 50%;
   border: none; background: var(--surface); color: var(--ink-secondary); cursor: pointer; flex: none;
 }
-.cal-col-indicator button:hover { background: var(--surface-2); color: var(--ink); }
-.cal-col-indicator button svg { width: 12px; height: 12px; }
+.cal-col-indicator .cal-col-close:hover { background: var(--surface-2); color: var(--ink); }
+.cal-col-indicator .cal-col-close svg { width: 12px; height: 12px; }
+/* Кнопка "Забронировать" по выделенному диапазону (53-й проход, пункт 2) — текстовая пилюля, а не круглая иконка-кнопка, как .cal-col-close. */
+.cal-col-indicator .cal-col-book {
+  display: flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 10px; flex: none;
+  border: none; background: var(--surface); color: var(--accent); font: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer;
+}
+.cal-col-indicator .cal-col-book:hover { background: var(--surface-2); }
 .cal-fill {
   position: absolute; top: 3px; bottom: 3px; left: 3px; right: 3px; border-radius: 4px;
   display: flex; align-items: center; justify-content: center; overflow: hidden; pointer-events: none;
