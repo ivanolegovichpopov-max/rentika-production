@@ -9,7 +9,7 @@
  *   EmployeeDetailPanel), отдельного backend-эндпоинта не заводим — тот же
  *   подход, что уже используется для остальных списков в проекте.
  */
-import type { ActivityLogEntry, Employee, EmployeeWorkload } from "../../../api/types";
+import type { ActivityLogEntry, Employee, EmployeeWorkload, EmployeeWorkloadTimeseriesPoint } from "../../../api/types";
 import { toCsv } from "../../../lib/csv";
 import { activityDetails, activityLabel } from "./activityLabels";
 
@@ -74,8 +74,37 @@ export function exportEmployeesCsv(employees: Employee[], positionTitle: (id: st
 // Экспорт сводки нагрузки (67-й проход — до этого "Экспорт CSV" на вкладке
 // «Активность» выгружал только журнал, саму таблицу нагрузки с трендом
 // нельзя было сохранить отдельно).
-export function exportWorkloadCsv(workload: EmployeeWorkload[], filenamePrefix: string) {
+//
+// dailyPoints (доп. проход после 67-го, "делаем всё") — необязательная карта
+// employee_id -> точки из /workload/timeseries: если передана, в CSV
+// добавляется по столбцу на каждый день с суммарной нагрузкой за день (то
+// же сложение трёх метрик, что и у спарклайна в UI, см. workloadTrend.tsx) —
+// раньше сама таблица нагрузки в UI уже показывала дневную динамику
+// картинкой, а CSV — только итог за весь период, без разбивки по дням.
+// Список дат — объединение по всем сотрудникам (обычно совпадает, т.к. все
+// запрашиваются с одним и тем же ?days= в один момент времени, но на
+// всякий случай не полагаемся на порядок/полноту у конкретного сотрудника).
+export function exportWorkloadCsv(
+  workload: EmployeeWorkload[],
+  filenamePrefix: string,
+  dailyPoints?: Record<string, EmployeeWorkloadTimeseriesPoint[]>
+) {
   const header = ["employee", "rentals_created", "client_notes", "rental_photos"];
-  const rows = workload.map((w) => [w.employee_name, String(w.rentals_created), String(w.client_notes), String(w.rental_photos)]);
-  downloadCsv(toCsv(header, rows), `${filenamePrefix} ${new Date().toISOString().slice(0, 10)}.csv`);
+  const allDates =
+    dailyPoints && Object.keys(dailyPoints).length > 0
+      ? Array.from(new Set(Object.values(dailyPoints).flatMap((points) => points.map((p) => p.date)))).sort()
+      : [];
+  const fullHeader = [...header, ...allDates];
+  const rows = workload.map((w) => {
+    const points = dailyPoints?.[w.employee_id] ?? [];
+    const byDate = new Map(points.map((p) => [p.date, p.rentals_created + p.client_notes + p.rental_photos]));
+    return [
+      w.employee_name,
+      String(w.rentals_created),
+      String(w.client_notes),
+      String(w.rental_photos),
+      ...allDates.map((d) => String(byDate.get(d) ?? 0)),
+    ];
+  });
+  downloadCsv(toCsv(fullHeader, rows), `${filenamePrefix} ${new Date().toISOString().slice(0, 10)}.csv`);
 }

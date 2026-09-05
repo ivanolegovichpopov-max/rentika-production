@@ -14,7 +14,7 @@ import type { ActivityLogEntry, ActivityLogPage, Employee, EmployeeWorkload, Emp
 import { Badge, EMPLOYEE_STATUS_META } from "../../../lib/statusMeta";
 import { initials, tenureLabel } from "../../../lib/format";
 import { WorkloadSparkline, trendBadge } from "./workloadTrend";
-import { IconClose, IconEdit, IconHistory, IconMail, IconMessages, IconRestore, IconTrendUp } from "../../../lib/icons";
+import { IconAlert, IconClose, IconEdit, IconHistory, IconMail, IconMessages, IconRestore, IconTrendUp } from "../../../lib/icons";
 import { activityDetails, activityLabel } from "./activityLabels";
 import { exportActivityCsv } from "./csv";
 
@@ -23,6 +23,18 @@ const PERIODS: { key: "7" | "30" | "90" | "all"; label: string }[] = [
   { key: "30", label: "30 дней" },
   { key: "90", label: "90 дней" },
   { key: "all", label: "Весь период" },
+];
+
+// Мини-индикатор процесса найма (доп. проход после 67-го, п.6) — три шага,
+// каждый — просто производная от уже имеющихся полей Employee, без нового
+// состояния на бэке: "приглашён" верно всегда (иначе карточки бы не было),
+// "2FA включена"/"первый вход" — по totp_enabled/last_login_at. Раньше,
+// чтобы понять, на каком шаге застрял конкретный человек, приходилось
+// сопоставлять статус и "последний вход" в голове.
+const ONBOARDING_STEPS: { key: string; label: string; done: (e: Employee) => boolean }[] = [
+  { key: "invited", label: "Приглашён", done: () => true },
+  { key: "2fa", label: "2FA включена", done: (e) => e.totp_enabled === true },
+  { key: "login", label: "Первый вход", done: (e) => !!e.last_login_at },
 ];
 
 function fmtDateTime(iso: string): string {
@@ -34,6 +46,7 @@ export function EmployeeDetailPanel({
   businessId,
   employee,
   positionTitle,
+  positionRequires2fa,
   workload,
   onClose,
   onOpenEdit,
@@ -44,6 +57,12 @@ export function EmployeeDetailPanel({
   businessId: string;
   employee: Employee;
   positionTitle: string;
+  // Требует ли текущая должность сотрудника обязательную 2FA (доп. проход
+  // после 67-го, п.15 "подсветка пробела в защите") — передаётся родителем
+  // (у него уже загружен весь список positions, здесь второго запроса не
+  // заводим). undefined для владельца/без должности — там принудительная
+  // 2FA не применяется.
+  positionRequires2fa?: boolean;
   // Сводка нагрузки этого сотрудника — передаётся уже загруженной родителем
   // (EmployeesTab.tsx уже запрашивает /workload для всей команды на
   // вкладке «Активность»), лишний персональный запрос за теми же данными
@@ -141,6 +160,33 @@ export function EmployeeDetailPanel({
 
       <div className="slideover-section">
         <h4>Профиль</h4>
+        {!employee.is_owner && (
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "4px", marginBottom: "10px", fontSize: "11.5px" }}>
+            {ONBOARDING_STEPS.map((step, i) => {
+              const done = step.done(employee);
+              return (
+                <span key={step.key} style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                  {i > 0 && <span className="muted" style={{ opacity: 0.6 }}>→</span>}
+                  <span className={done ? undefined : "muted"} style={{ color: done ? "var(--good-ink)" : undefined, fontWeight: done ? 600 : 400 }}>
+                    {done ? "✓" : "○"} {step.label}
+                  </span>
+                </span>
+              );
+            })}
+          </div>
+        )}
+        {positionRequires2fa && employee.totp_enabled === false && (
+          // Пробел в защите (доп. проход после 67-го, п.15) — должность
+          // требует обязательную 2FA, но у самого аккаунта она не включена;
+          // на бэке это не блокируется задним числом (require_2fa проверяется
+          // при входе, а не ретроактивно для уже действующих сессий/паролей),
+          // поэтому владельцу стоит явно показать разрыв, а не полагаться на
+          // то, что он сам сопоставит два разных экрана.
+          <div className="form-note" style={{ marginBottom: "10px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <IconAlert style={{ width: 13, height: 13, flexShrink: 0 }} />
+            Должность требует обязательную 2FA, но у сотрудника она не включена
+          </div>
+        )}
         <div style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "13px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
             <IconMail /> {employee.email ?? "—"}

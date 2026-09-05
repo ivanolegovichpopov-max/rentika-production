@@ -40,9 +40,19 @@ export function WorkloadSparkline({ values, tone = "accent" }: { values: number[
  *    вообще было (иначе "рост с нуля" у любого новичка считался бы
  *    аномалией, что не полезно). Сравнение недоступно при периоде "весь"
  *    (см. *_prev === null) — тогда функция ничего не подсвечивает. */
+// Пороги по умолчанию — как и раньше, ×2.5 рост / ×0.3 спад. Настраиваемость
+// (доп. проход после 67-го, "делаем всё") — владелец может счесть эвристику
+// слишком/недостаточно чувствительной в зависимости от размера команды и
+// типичного разброса нагрузки; сама формула сравнения не изменилась, только
+// пороги вынесены наружу (см. ANOMALY_SENSITIVITY в EmployeesTab.tsx —
+// пресеты, а не произвольный ввод числа, чтобы не заводить лишнюю валидацию
+// для того, что по сути является грубой эвристикой, а не точной настройкой).
+export const DEFAULT_ANOMALY_THRESHOLDS = { growth: 2.5, drop: 0.3 };
+
 export function workloadAnomaly(
   w: { rentals_created: number; client_notes: number; rental_photos: number; rentals_created_prev: number | null; client_notes_prev: number | null; rental_photos_prev: number | null },
-  isActive: boolean
+  isActive: boolean,
+  thresholds: { growth: number; drop: number } = DEFAULT_ANOMALY_THRESHOLDS
 ): string | null {
   if (w.rentals_created_prev === null) return null; // период "весь" — сравнивать не с чем
   const total = w.rentals_created + w.client_notes + w.rental_photos;
@@ -50,8 +60,8 @@ export function workloadAnomaly(
   const totalPrev = (w.rentals_created_prev ?? 0) + (w.client_notes_prev ?? 0) + (w.rental_photos_prev ?? 0);
   if (totalPrev > 0) {
     const ratio = total / totalPrev;
-    if (ratio >= 2.5) return "Резкий рост нагрузки";
-    if (ratio <= 0.3) return "Резкий спад нагрузки";
+    if (ratio >= thresholds.growth) return "Резкий рост нагрузки";
+    if (ratio <= thresholds.drop) return "Резкий спад нагрузки";
   }
   return null;
 }

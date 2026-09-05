@@ -14,6 +14,14 @@
  * новый пароль" (сервер сам придумывает пароль вместо владельца — см.
  * POST .../reset-password, отдельно от ручного поля "Новый пароль" ниже,
  * которое по-прежнему работает как раньше).
+ *
+ * Доп. проход после 67-го ("делаем всё") — загруженное фото теперь всегда
+ * обрезается по центру в квадрат и уменьшается до PHOTO_OUTPUT_SIZE px
+ * (см. resizeAndCropToSquare) ПЕРЕД тем, как попасть в photoUrl/на сервер:
+ * раньше фото просто сохранялось как есть (только проверка размера файла),
+ * так что не-квадратное фото сжималось/растягивалось только в CSS
+ * (object-fit: cover) на конкретных местах показа — само сохранённое
+ * изображение оставалось непредсказуемого размера и соотношения сторон.
  */
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../../../api/client";
@@ -22,16 +30,49 @@ import { Dropdown } from "../../../components/Dropdown";
 import { IconClose } from "../../../lib/icons";
 import { formatPhoneInput, initials } from "../../../lib/format";
 
-// Тот же предохранитель, что и у логотипа бизнеса (AccountSettings.tsx) —
-// своего файлового хранилища у проекта нет, фото сотрудника хранится прямо
-// в столбце employees.photo_url.
-const MAX_PHOTO_BYTES = 300 * 1024;
+// Свой файловый лимит теперь на ИСХОДНЫЙ файл (доп. проход после 67-го) —
+// щедрее прежнего, т.к. итоговый результат всё равно ужимается до
+// PHOTO_OUTPUT_SIZE px через canvas ниже; этот порог — просто защита от
+// попытки скормить сюда откровенно не-фото (видео, RAW и т.п.), а не расчёт
+// на то, что итоговый data:URL уложится в него без обработки.
+const MAX_ORIGINAL_PHOTO_BYTES = 8 * 1024 * 1024;
+// Сторона квадрата после обрезки по центру, px — тот же порядок величины,
+// что и у аватаров в интерфейсе (крупнее самого крупного места показа —
+// 48px в этой же модалке — с запасом под Retina-экраны).
+const PHOTO_OUTPUT_SIZE = 256;
 
-function readFileAsDataUrl(file: File): Promise<string> {
+// Центрированная обрезка в квадрат + уменьшение (доп. проход после 67-го,
+// п.5 "клиентский ресайз/кроп фото"): раньше загруженное фото сохранялось
+// как есть, каким бы оно ни было по размеру/пропорциям — здесь же всегда
+// приводится к одному и тому же квадратному формату ДО сохранения, а не
+// только визуально на конкретной странице через object-fit: cover.
+function resizeAndCropToSquare(file: File, size: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
+    reader.onerror = () => reject(reader.error ?? new Error("Не удалось прочитать файл"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Не удалось прочитать изображение"));
+      img.onload = () => {
+        const side = Math.min(img.naturalWidth, img.naturalHeight) || 1;
+        const sx = (img.naturalWidth - side) / 2;
+        const sy = (img.naturalHeight - side) / 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          // Окружение без 2D-канваса (в проекте не встречалось, но на всякий
+          // случай не блокируем загрузку фото целиком) — используем исходный
+          // файл как есть, тем же способом, что и до этого прохода.
+          resolve(reader.result as string);
+          return;
+        }
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      img.src = reader.result as string;
+    };
     reader.readAsDataURL(file);
   });
 }
@@ -73,15 +114,15 @@ export function EditEmployeeModal({
       setError("Выберите файл изображения (PNG, JPG…)");
       return;
     }
-    if (file.size > MAX_PHOTO_BYTES) {
-      setError(`Файл слишком большой (максимум ${Math.round(MAX_PHOTO_BYTES / 1024)} КБ) — уменьшите изображение.`);
+    if (file.size > MAX_ORIGINAL_PHOTO_BYTES) {
+      setError(`Файл слишком большой (максимум ${Math.round(MAX_ORIGINAL_PHOTO_BYTES / 1024 / 1024)} МБ)`);
       return;
     }
     setPhotoBusy(true);
     try {
-      setPhotoUrl(await readFileAsDataUrl(file));
+      setPhotoUrl(await resizeAndCropToSquare(file, PHOTO_OUTPUT_SIZE));
     } catch {
-      setError("Не удалось прочитать файл");
+      setError("Не удалось обработать изображение");
     } finally {
       setPhotoBusy(false);
       if (photoInputRef.current) photoInputRef.current.value = "";

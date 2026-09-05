@@ -119,6 +119,69 @@ async def create_position(
     return _position_out(db, position, 0)
 
 
+@router.post("/{position_id}/duplicate", response_model=PositionOut, status_code=status.HTTP_201_CREATED)
+async def duplicate_position(
+    position_id: uuid.UUID, ctx: BusinessContext = Depends(get_business_context), db: Session = Depends(get_db)
+):
+    """Полное дублирование должности одной кнопкой (доп. проход после
+    67-го) — в отличие от copy_permissions выше (который переносит ТОЛЬКО
+    матрицу прав на уже существующую карточку), здесь заводится НОВАЯ
+    должность сразу со всем: тем же цветом, описанием, требованием 2FA и
+    правами источника. Типичный сценарий — несколько почти одинаковых
+    ролей ("Менеджер смены 1", "Менеджер смены 2"), где раньше приходилось
+    сначала создать пустую карточку, а потом отдельно копировать права на
+    неё через copy-permissions."""
+    _require_owner(ctx)
+    source = db.get(Position, position_id)
+    if source is None or source.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Должность не найдена")
+
+    existing = db.scalars(select(Position).where(Position.business_id == ctx.business_id)).all()
+    existing_titles = {p.title for p in existing}
+    # Название с суффиксом "(копия)", а при конфликте — "(копия 2)", "(копия
+    # 3)" и т.д., а не сразу 400 с просьбой переименовать вручную: сама суть
+    # действия — "нажал кнопку и сразу получил рабочую карточку".
+    new_title = f"{source.title} (копия)"
+    suffix = 2
+    while new_title in existing_titles:
+        new_title = f"{source.title} (копия {suffix})"
+        suffix += 1
+
+    next_sort_order = (max((p.sort_order for p in existing), default=-1)) + 1
+    position = Position(
+        business_id=ctx.business_id,
+        title=new_title,
+        sort_order=next_sort_order,
+        color=source.color,
+        description=source.description,
+        require_2fa=source.require_2fa,
+    )
+    db.add(position)
+    db.flush()
+
+    source_perms = {
+        row.resource: row.level for row in db.scalars(select(Permission).where(Permission.position_id == source.id)).all()
+    }
+    for resource in ResourceType:
+        db.add(Permission(position_id=position.id, resource=resource, level=source_perms.get(resource, PermissionLevel.none)))
+
+    log_action(
+        db,
+        business_id=ctx.business_id,
+        user_id=ctx.user.id,
+        action="duplicate",
+        resource="position",
+        resource_id=str(position.id),
+        meta={"source_position_id": str(source.id), "source_title": source.title, "new_title": new_title},
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Должность с таким названием уже существует")
+    return _position_out(db, position, 0)
+
+
 @router.post("/reorder", response_model=list[PositionOut])
 async def reorder_positions(
     body: PositionReorder, ctx: BusinessContext = Depends(get_business_context), db: Session = Depends(get_db)

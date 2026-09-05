@@ -57,6 +57,9 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   // reorder/update_require_2fa — 66-й проход, "Должности и права".
   "position:reorder": "Изменён порядок должностей",
   "position:update_require_2fa": "Изменено требование двухфакторной аутентификации для должности",
+  // duplicate (доп. проход после 67-го, "делаем всё") — полное дублирование
+  // должности одной кнопкой (см. POST .../positions/{id}/duplicate).
+  "position:duplicate": "Должность дублирована",
   "equipment:create": "Оборудование добавлено",
   "equipment:update": "Оборудование изменено",
   "equipment:delete": "Оборудование удалено",
@@ -182,6 +185,13 @@ export function activityDetails(entry: ActivityLogEntry): string[] {
   }
   if (entry.resource === "position" && entry.action === "create" && "copied_permissions_from" in meta) {
     lines.push("права скопированы с другой должности");
+  }
+  // duplicate (доп. проход после 67-го) — meta.source_title/new_title пишутся
+  // в duplicate_position (app/api/routes/positions.py); показываем, с какой
+  // должности была сделана копия — сама новая запись создаётся уже с
+  // остальными деталями (цвет/описание/2FA/права) без отдельного "было".
+  if (entry.resource === "position" && entry.action === "duplicate" && "source_title" in meta) {
+    lines.push(`копия должности «${String(meta.source_title)}»`);
   }
   return lines;
 }

@@ -1600,6 +1600,11 @@ button.cat-filter-option:disabled:hover { background: none; }
 .toast-success { border-left-color: var(--good); }
 .toast-icon { flex: none; color: var(--critical); display: flex; align-items: center; margin-top: 1px; }
 .toast-message { flex: 1; word-break: break-word; }
+/* Кнопка-действие в тосте (доп. проход после 67-го, "Отменить" после
+   массового отключения) — flex: none, чтобы не растягивалась наравне с
+   текстом сообщения, и небольшой отступ сверху, чтобы визуально совпадать
+   по высоте с однострочным сообщением. */
+.toast-action { flex: none; white-space: nowrap; }
 .toast-close { flex: none; width: 24px; height: 24px; margin: -4px -4px 0 0; }
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(-8px); }

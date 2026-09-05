@@ -20,17 +20,30 @@ import { IconAlert, IconClose } from "../lib/icons";
  *   ...
  *   notify("Не удалось удалить"); // type по умолчанию "error"
  *   notify("Категория изменена у 3 из 5. Ошибок: 2.", "info");
+ *
+ * Необязательная кнопка-действие в самом уведомлении (доп. проход после
+ * 67-го, "Отменить" после массового отключения сотрудников) — четвёртый
+ * параметр; клик по ней сразу закрывает тост, отдельно от авто-скрытия по
+ * таймеру:
+ *
+ *   notify("Отключено 3 сотрудника", "success", { label: "Отменить", onClick: undoBulkDisable });
  */
 type ToastType = "error" | "info" | "success";
+
+interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
 
 interface ToastItem {
   id: number;
   message: string;
   type: ToastType;
+  action?: ToastAction;
 }
 
 interface ToastContextValue {
-  notify: (message: string, type?: ToastType) => void;
+  notify: (message: string, type?: ToastType, action?: ToastAction) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -52,10 +65,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const notify = useCallback(
-    (message: string, type: ToastType = "error") => {
+    (message: string, type: ToastType = "error", action?: ToastAction) => {
       const id = nextId.current++;
-      setItems((prev) => [...prev, { id, message, type }]);
-      window.setTimeout(() => dismiss(id), AUTO_DISMISS_MS[type]);
+      setItems((prev) => [...prev, { id, message, type, action }]);
+      // С кнопкой-действием держим тост дольше обычного (10 с) — иначе
+      // "Отменить" рискует исчезнуть раньше, чем владелец успеет заметить
+      // уведомление и нажать её.
+      window.setTimeout(() => dismiss(id), action ? 10000 : AUTO_DISMISS_MS[type]);
     },
     [dismiss]
   );
@@ -72,6 +88,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               </span>
             )}
             <span className="toast-message">{t.message}</span>
+            {t.action && (
+              <button
+                type="button"
+                className="btn btn-sm toast-action"
+                onClick={() => {
+                  t.action!.onClick();
+                  dismiss(t.id);
+                }}
+              >
+                {t.action.label}
+              </button>
+            )}
             <button type="button" className="icon-btn toast-close" onClick={() => dismiss(t.id)} title="Закрыть">
               <IconClose />
             </button>

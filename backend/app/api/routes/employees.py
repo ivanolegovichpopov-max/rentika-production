@@ -67,12 +67,14 @@ async def _generate_valid_temporary_password() -> str:
     raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Не удалось сгенерировать временный пароль, попробуйте ещё раз")
 
 
-def _employee_out(employee: Employee, email: str | None, last_login_at=None) -> EmployeeOut:
-    # phone/notes видны тому же кругу, что email/last_login_at (владелец/
-    # платформенный админ) — вызывающий код уже решил это, передав сюда
-    # либо реальный email, либо None (см. list_employees ниже, где решение
-    # принимается явно; остальные вызовы — invite/update/import/bulk — все
-    # защищены _require_owner, там email всегда настоящий). photo_url,
+def _employee_out(
+    employee: Employee, email: str | None, last_login_at=None, totp_enabled: bool | None = None
+) -> EmployeeOut:
+    # phone/notes/totp_enabled видны тому же кругу, что email/last_login_at
+    # (владелец/платформенный админ) — вызывающий код уже решил это, передав
+    # сюда либо реальный email, либо None (см. list_employees ниже, где
+    # решение принимается явно; остальные вызовы — invite/update/import/bulk
+    # — все защищены _require_owner, там email всегда настоящий). photo_url,
     # в отличие от них, видно ВСЕЙ команде — это аватар, не приватный
     # контакт (см. Employee.photo_url).
     return EmployeeOut(
@@ -88,6 +90,7 @@ def _employee_out(employee: Employee, email: str | None, last_login_at=None) -> 
         phone=employee.phone if email is not None else None,
         notes=employee.notes if email is not None else None,
         photo_url=employee.photo_url,
+        totp_enabled=totp_enabled if email is not None else None,
     )
 
 
@@ -96,19 +99,24 @@ async def list_employees(ctx: BusinessContext = Depends(get_business_context), d
     # Список сотрудников виден всей команде (см. блок "Команда" в сайдбаре
     # дашборда) без отдельного ACL-права — просто по факту членства в
     # бизнесе, управление (invite/update/disable) отдельно защищено
-    # _require_owner на мутирующих эндпоинтах ниже. Email и last_login_at —
-    # исключение (64-й/65-й проходы): чужие адреса почты и время последнего
-    # входа обычным сотрудникам не показываем, только владельцу/платформенному
-    # админу (ctx.full_access), поэтому join с User делаем всегда (дёшево), а
-    # оба поля кладём в ответ условно.
+    # _require_owner на мутирующих эндпоинтах ниже. Email, last_login_at и
+    # totp_enabled — исключение (64-й/65-й/пост-67-й проходы): эти данные о
+    # чужом аккаунте обычным сотрудникам не показываем, только владельцу/
+    # платформенному админу (ctx.full_access), поэтому join с User делаем
+    # всегда (дёшево), а поля кладём в ответ условно.
     rows = db.execute(
-        select(Employee, User.email, User.last_login_at)
+        select(Employee, User.email, User.last_login_at, User.totp_enabled)
         .join(User, User.id == Employee.user_id)
         .where(Employee.business_id == ctx.business_id)
     ).all()
     return [
-        _employee_out(employee, email if ctx.full_access else None, last_login_at if ctx.full_access else None)
-        for employee, email, last_login_at in rows
+        _employee_out(
+            employee,
+            email if ctx.full_access else None,
+            last_login_at if ctx.full_access else None,
+            totp_enabled if ctx.full_access else None,
+        )
+        for employee, email, last_login_at, totp_enabled in rows
     ]
 
 
@@ -177,7 +185,10 @@ async def invite_employee(
     )
     db.commit()
     db.refresh(employee)
-    return _employee_out(employee, body.email)
+    # totp_enabled=False — у только что созданного пользователя 2FA
+    # физически не может быть включена (ставится через отдельный поток
+    # user/2fa/setup после первого входа).
+    return _employee_out(employee, body.email, totp_enabled=False)
 
 
 @router.patch("/{employee_id}", response_model=EmployeeOut)
@@ -293,7 +304,12 @@ async def update_employee(
         )
     db.commit()
     db.refresh(employee)
-    return _employee_out(employee, user.email if user else None, user.last_login_at if user else None)
+    return _employee_out(
+        employee,
+        user.email if user else None,
+        user.last_login_at if user else None,
+        user.totp_enabled if user else None,
+    )
 
 
 @router.delete("/{employee_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -363,15 +379,15 @@ async def bulk_update_employees(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Указанная должность не найдена в этом бизнесе")
 
     rows = db.execute(
-        select(Employee, User.email, User.last_login_at)
+        select(Employee, User.email, User.last_login_at, User.totp_enabled)
         .join(User, User.id == Employee.user_id)
         .where(Employee.business_id == ctx.business_id, Employee.id.in_(body.employee_ids))
     ).all()
-    found_ids = {employee.id for employee, _, _ in rows}
+    found_ids = {employee.id for employee, _, _, _ in rows}
     skipped = len(set(body.employee_ids)) - len(found_ids)
 
     updated: list[EmployeeOut] = []
-    for employee, email, last_login_at in rows:
+    for employee, email, last_login_at, totp_enabled in rows:
         if employee.is_owner:
             skipped += 1
             continue
@@ -381,7 +397,7 @@ async def bulk_update_employees(
             employee.position_id = body.position_id
         if body.status is not None:
             employee.status = body.status
-        updated.append(_employee_out(employee, email, last_login_at))
+        updated.append(_employee_out(employee, email, last_login_at, totp_enabled))
 
     if updated:
         log_action(
@@ -429,6 +445,15 @@ async def employee_activity(
         default=None,
         description="Фильтр по типу ресурса (66-й проход) — например 'employee', 'position', 'rental'; значения те же, что в поле resource ответа",
     ),
+    resource_id: str | None = Query(
+        default=None,
+        description=(
+            "Фильтр по конкретному экземпляру ресурса (доп. проход после 67-го, "
+            "мини-история изменений одной конкретной должности на её карточке) — "
+            "например id одной должности; используется вместе с resource='position', "
+            "но проверяется независимо, как и остальные фильтры."
+        ),
+    ),
     action: str | None = Query(
         default=None,
         description="Фильтр по типу действия (66-й проход) — например 'create', 'update', 'delete'; значения те же, что в поле action ответа",
@@ -451,6 +476,8 @@ async def employee_activity(
     # приходилось искать глазами среди всех событий подряд.
     if resource is not None:
         filters.append(AuditLog.resource == resource)
+    if resource_id is not None:
+        filters.append(AuditLog.resource_id == resource_id)
     if action is not None:
         # Список действий через запятую (67-й проход, пресет "Критичные
         # действия" на фронте) — например "delete,disable,update_permissions,
@@ -709,7 +736,15 @@ async def import_employees(
             db.add(employee)
             db.flush()
             db.refresh(employee)
-            results.append(EmployeeImportRowResult(row=row_num, ok=True, name=name, employee=_employee_out(employee, email)))
+            # user может быть уже существующим аккаунтом (тот же email уже
+            # зарегистрирован в другом бизнесе, см. проверку выше) — тогда
+            # totp_enabled у него мог быть выставлен раньше, это не всегда
+            # свежесозданный пользователь с гарантированным False.
+            results.append(
+                EmployeeImportRowResult(
+                    row=row_num, ok=True, name=name, employee=_employee_out(employee, email, totp_enabled=user.totp_enabled)
+                )
+            )
             created_count += 1
         except ValueError as exc:
             results.append(EmployeeImportRowResult(row=row_num, ok=False, name=name or f"строка {row_num}", error=str(exc)))

@@ -22,6 +22,7 @@ import type {
   Employee,
   EmployeeWorkload,
   EmployeeWorkloadTimeseries,
+  EmployeeWorkloadTimeseriesPoint,
   Position,
   PermissionLevel,
   ResourceType,
@@ -29,7 +30,7 @@ import type {
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { Dropdown } from "../../components/Dropdown";
-import { IconAlert, IconEdit, IconGrip, IconHistory, IconMessages, IconRestore, IconSearch, IconTrash, IconTrendUp } from "../../lib/icons";
+import { IconAlert, IconCopy, IconEdit, IconGrip, IconHistory, IconMessages, IconRestore, IconSearch, IconTrash, IconTrendUp } from "../../lib/icons";
 import { initials, pluralRu, positionColorStyle, POSITION_COLORS } from "../../lib/format";
 import { Badge, EMPLOYEE_STATUS_META } from "../../lib/statusMeta";
 import { activityDetails, activityLabel } from "./employees/activityLabels";
@@ -37,7 +38,7 @@ import { exportActivityCsv, exportEmployeesCsv, exportWorkloadCsv } from "./empl
 import { EditEmployeeModal } from "./employees/EditEmployeeModal";
 import { EmployeeDetailPanel } from "./employees/EmployeeDetailPanel";
 import { EmployeeImportModal } from "./employees/EmployeeImportModal";
-import { WorkloadSparkline, trendBadge, workloadAnomaly } from "./employees/workloadTrend";
+import { DEFAULT_ANOMALY_THRESHOLDS, WorkloadSparkline, trendBadge, workloadAnomaly } from "./employees/workloadTrend";
 
 const RESOURCES: { key: ResourceType; label: string }[] = [
   { key: "equipment", label: "Оборудование" },
@@ -134,6 +135,17 @@ function isPendingTooLong(emp: Employee): boolean {
 // запятую (см. employee_activity в app/api/routes/employees.py).
 const CRITICAL_ACTIONS = "delete,disable,update_permissions,update_require_2fa,reset_password,bulk_update";
 
+// Настраиваемая чувствительность подсветки аномалий в сводке нагрузки (доп.
+// проход после 67-го, п.13) — пресеты, а не свободный ввод числа: сама
+// эвристика (workloadAnomaly в employees/workloadTrend.tsx) остаётся грубой
+// прикидкой, а не точной аналитикой, так что три градации чувствительности
+// достаточно и не требуют валидации произвольного значения от владельца.
+const ANOMALY_SENSITIVITY: { key: string; label: string; growth: number; drop: number }[] = [
+  { key: "low", label: "Низкая чувствительность", growth: 4, drop: 0.25 },
+  { key: "normal", label: "Обычная чувствительность", growth: 2.5, drop: 0.3 },
+  { key: "high", label: "Высокая чувствительность", growth: 1.8, drop: 0.5 },
+];
+
 export function EmployeesTab({
   businessId,
   highlightEmployee,
@@ -215,6 +227,11 @@ export function EmployeesTab({
   // Недоступно при периоде "весь" — сам /workload/timeseries принимает
   // только 1..90 дней.
   const [teamTrend, setTeamTrend] = useState<Record<string, number[]>>({});
+  // Те же точки, но без предварительного сложения трёх метрик (доп. проход
+  // после 67-го, п.12) — нужны CSV-экспорту сводки нагрузки для постолбцовой
+  // разбивки по дням (см. exportWorkloadCsv), сам спарклайн по-прежнему
+  // читает teamTrend выше.
+  const [teamTrendPoints, setTeamTrendPoints] = useState<Record<string, EmployeeWorkloadTimeseriesPoint[]>>({});
 
   const { notify } = useToast();
 
@@ -223,6 +240,12 @@ export function EmployeesTab({
   const [teamSearch, setTeamSearch] = useState("");
   const [teamPositionFilter, setTeamPositionFilter] = useState(""); // "" — все, "none" — без должности, иначе id должности
   const [teamDormantOnly, setTeamDormantOnly] = useState(false);
+  // "Зависшие приглашения" (доп. проход после 67-го, п.3) — отдельный чипс от
+  // "Давно не заходил" выше: у ещё не принявших приглашение сотрудников
+  // last_login_at всегда null, но isDormantEmployee() их сознательно не
+  // считает (см. её докстринг) — здесь ровно обратный случай, только
+  // "invited" и только "давно висит" (см. isPendingTooLong).
+  const [teamPendingOnly, setTeamPendingOnly] = useState(false);
   const [teamSort, setTeamSort] = useState<{ key: "name" | "status" | "created_at" | "last_login_at"; dir: "asc" | "desc" }>({
     key: "name",
     dir: "asc",
@@ -236,6 +259,15 @@ export function EmployeesTab({
   const [dragPositionId, setDragPositionId] = useState<string | null>(null);
   const [reorderBusy, setReorderBusy] = useState(false);
   const [reverseMatrix, setReverseMatrix] = useState(false);
+  // Поиск в обратной матрице "по сотрудникам" (доп. проход после 67-го, п.9)
+  // — своё поле, отдельное от positionSearch выше (тот ищет по названию
+  // должности и относится к списку карточек, не к матрице).
+  const [reverseMatrixSearch, setReverseMatrixSearch] = useState("");
+  // Свёрнутая мини-история изменений должности (доп. проход после 67-го,
+  // п.11) — набор открытых карточек + подгруженные записи журнала по каждой
+  // (лениво, по клику, отдельным запросом с фильтром resource_id).
+  const [openPositionHistory, setOpenPositionHistory] = useState<Set<string>>(new Set());
+  const [positionHistory, setPositionHistory] = useState<Record<string, ActivityLogEntry[]>>({});
 
   // «Активность» — фильтр журнала по разделу/действию, сортировка нагрузки
   // (66-й проход).
@@ -245,6 +277,13 @@ export function EmployeesTab({
     key: "name",
     dir: "asc",
   });
+  // Фильтр сводки нагрузки по должности (доп. проход после 67-го, п.14) —
+  // тот же idiom значений, что и teamPositionFilter выше ("" — все, "none" —
+  // без должности, иначе id).
+  const [workloadPositionFilter, setWorkloadPositionFilter] = useState("");
+  // Настраиваемая чувствительность подсветки аномалий (доп. проход после
+  // 67-го, п.13) — см. ANOMALY_SENSITIVITY выше.
+  const [anomalySensitivityKey, setAnomalySensitivityKey] = useState("normal");
 
   useEffect(() => {
     if (!highlightEmployee || loading) return;
@@ -369,6 +408,17 @@ export function EmployeesTab({
     return positions.find((p) => p.id === emp.position_id)?.permissions.find((perm) => perm.resource === resource)?.level ?? "none";
   }
 
+  // Пробел в защите: должность требует обязательную 2FA, а у самого
+  // аккаунта она не включена (доп. проход после 67-го, п.15). totp_enabled
+  // === false — именно false, а не null/undefined ("скрыто" — но здесь
+  // владелец видит вкладку целиком, так что это не должно происходить, кроме
+  // разве что момента до первой загрузки).
+  function position2faGap(emp: Employee): boolean {
+    if (emp.is_owner || !emp.position_id) return false;
+    const pos = positions.find((p) => p.id === emp.position_id);
+    return !!pos?.require_2fa && emp.totp_enabled === false;
+  }
+
   const teamPositionOptions = [
     { value: "", label: "Все должности" },
     { value: "none", label: "Без должности" },
@@ -381,11 +431,22 @@ export function EmployeesTab({
 
   const filteredEmployees = useMemo(() => {
     const q = teamSearch.trim().toLowerCase();
+    // Поиск по телефону (доп. проход после 67-го, п.2) — по цифрам, без
+    // учёта форматирования (+7 900 123-45-67 ищется и как "9001234567", и
+    // как "900-123", и как введено полностью — formatPhoneInput в поле
+    // редактирования всегда приводит номер к одному и тому же виду, но
+    // владелец может искать частями без пробелов/дефисов).
+    const qDigits = q.replace(/\D/g, "");
     let list = employees.filter((emp) => {
-      if (q && !emp.name.toLowerCase().includes(q) && !(emp.email ?? "").toLowerCase().includes(q)) return false;
+      if (q) {
+        const matchesText = emp.name.toLowerCase().includes(q) || (emp.email ?? "").toLowerCase().includes(q);
+        const matchesPhone = qDigits.length > 0 && (emp.phone ?? "").replace(/\D/g, "").includes(qDigits);
+        if (!matchesText && !matchesPhone) return false;
+      }
       if (teamPositionFilter === "none" && emp.position_id) return false;
       if (teamPositionFilter && teamPositionFilter !== "none" && emp.position_id !== teamPositionFilter) return false;
       if (teamDormantOnly && !isDormantEmployee(emp)) return false;
+      if (teamPendingOnly && !isPendingTooLong(emp)) return false;
       return true;
     });
     const dir = teamSort.dir === "desc" ? -1 : 1;
@@ -411,7 +472,7 @@ export function EmployeesTab({
       }
     });
     return list;
-  }, [employees, teamSearch, teamPositionFilter, teamDormantOnly, teamSort]);
+  }, [employees, teamSearch, teamPositionFilter, teamDormantOnly, teamPendingOnly, teamSort]);
 
   // Массовые действия (67-й проход) — выбор всегда сужается до того, что
   // реально видно под текущими фильтрами/поиском, иначе владелец мог бы
@@ -437,8 +498,18 @@ export function EmployeesTab({
 
   const sortedWorkload = useMemo(() => {
     if (!workload) return null;
+    // Фильтр по должности (доп. проход после 67-го, п.14) — чисто клиентский,
+    // через employees (сам EmployeeWorkload должности не хранит).
+    let list = workload;
+    if (workloadPositionFilter) {
+      list = workload.filter((w) => {
+        const emp = employees.find((e) => e.id === w.employee_id);
+        if (workloadPositionFilter === "none") return !!emp && !emp.position_id && !emp.is_owner;
+        return emp?.position_id === workloadPositionFilter;
+      });
+    }
     const dir = workloadSort.dir === "desc" ? -1 : 1;
-    return [...workload].sort((a, b) => {
+    return [...list].sort((a, b) => {
       switch (workloadSort.key) {
         case "rentals":
           return (a.rentals_created - b.rentals_created) * dir;
@@ -450,7 +521,7 @@ export function EmployeesTab({
           return a.employee_name.localeCompare(b.employee_name, "ru") * dir;
       }
     });
-  }, [workload, workloadSort]);
+  }, [workload, workloadSort, workloadPositionFilter, employees]);
 
   // Спарклайн дневной динамики в сводке нагрузки (67-й проход) — один запрос
   // на сотрудника из текущей сводки (список обычно небольшой — это не
@@ -460,6 +531,7 @@ export function EmployeesTab({
   useEffect(() => {
     if (!isOwner || !workload || period === "all") {
       setTeamTrend({});
+      setTeamTrendPoints({});
       return;
     }
     let cancelled = false;
@@ -467,11 +539,17 @@ export function EmployeesTab({
       workload.map((w) =>
         api
           .get<EmployeeWorkloadTimeseries>(`/businesses/${businessId}/employees/${w.employee_id}/workload/timeseries?days=${period}`)
-          .then((res) => [w.employee_id, res.points.map((pt) => pt.rentals_created + pt.client_notes + pt.rental_photos)] as const)
-          .catch(() => [w.employee_id, []] as const)
+          .then((res) => [w.employee_id, res.points] as const)
+          .catch(() => [w.employee_id, [] as EmployeeWorkloadTimeseriesPoint[]] as const)
       )
     ).then((entries) => {
-      if (!cancelled) setTeamTrend(Object.fromEntries(entries));
+      if (cancelled) return;
+      setTeamTrendPoints(Object.fromEntries(entries));
+      setTeamTrend(
+        Object.fromEntries(
+          entries.map(([id, points]) => [id, points.map((pt) => pt.rentals_created + pt.client_notes + pt.rental_photos)])
+        )
+      );
     });
     return () => {
       cancelled = true;
@@ -633,10 +711,66 @@ export function EmployeesTab({
   async function handleApplyPreset(positionId: string, presetKey: string) {
     const preset = PERMISSION_PRESETS.find((p) => p.key === presetKey);
     if (!preset) return;
+    const position = positions.find((p) => p.id === positionId);
+    // Подтверждение (доп. проход после 67-го, п.7) — раньше пресет
+    // применялся мгновенно и молча заменял текущие права должности целиком
+    // (PUT .../permissions — не merge, см. handlePermissionChange рядом),
+    // без возможности передумать в последний момент.
+    if (
+      !(await confirm(
+        `Применить пресет «${preset.label}» к должности «${position?.title ?? ""}»? Текущие права этой должности будут заменены.`,
+        { confirmLabel: "Применить" }
+      ))
+    )
+      return;
     const updated = RESOURCES.map(({ key }) => ({ resource: key, level: preset.levels[key] ?? "none" }));
-    await api.put(`/businesses/${businessId}/positions/${positionId}/permissions`, { permissions: updated });
-    await load();
-    loadActivity(activityFilter, period);
+    try {
+      await api.put(`/businesses/${businessId}/positions/${positionId}/permissions`, { permissions: updated });
+      await load();
+      loadActivity(activityFilter, period);
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : "Не удалось применить пресет");
+    }
+  }
+
+  // Полное дублирование должности (доп. проход после 67-го, п.8) — в
+  // отличие от "скопировать права с другой должности" выше (переносит
+  // только матрицу прав на УЖЕ существующую должность), здесь одной кнопкой
+  // создаётся совершенно НОВАЯ должность — клон названия (с авто-суффиксом
+  // "(копия)"/"(копия N)", см. duplicate_position на бэке), цвета, описания,
+  // требования 2FA и всех прав источника разом.
+  async function handleDuplicatePosition(id: string) {
+    try {
+      await api.post(`/businesses/${businessId}/positions/${id}/duplicate`);
+      await load();
+      loadActivity(activityFilter, period);
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : "Не удалось дублировать должность");
+    }
+  }
+
+  // Мини-история изменений одной должности (доп. проход после 67-го, п.11)
+  // — сворачиваемая, подгружается лениво по первому раскрытию, отдельным
+  // запросом с новым фильтром resource_id (см. employee_activity в
+  // app/api/routes/employees.py), а не смешивается с общим журналом на
+  // вкладке «Активность».
+  function togglePositionHistory(id: string) {
+    setOpenPositionHistory((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+        return next;
+      }
+      next.add(id);
+      if (!positionHistory[id]) {
+        const qs = new URLSearchParams({ resource: "position", resource_id: id, limit: "10" });
+        api
+          .get<ActivityLogPage>(`/businesses/${businessId}/employees/activity?${qs.toString()}`)
+          .then((page) => setPositionHistory((prevHistory) => ({ ...prevHistory, [id]: page.items })))
+          .catch(() => setPositionHistory((prevHistory) => ({ ...prevHistory, [id]: [] })));
+      }
+      return next;
+    });
   }
 
   function toggleTeamSelected(id: string) {
@@ -650,6 +784,27 @@ export function EmployeesTab({
 
   async function handleBulkAssignPosition() {
     if (!bulkPositionId || selectedTeamIds.size === 0) return;
+    // Предупреждение о 2FA (доп. проход после 67-го, п.4) — назначаемая
+    // должность требует обязательную 2FA, а часть выбранных сотрудников её
+    // не включили; сам бэкенд это не блокирует (require_2fa проверяется при
+    // входе, а не при назначении должности), так что без предупреждения
+    // владелец узнал бы об этом только когда сотрудник не смог войти.
+    if (bulkPositionId !== "none") {
+      const targetPosition = positions.find((p) => p.id === bulkPositionId);
+      if (targetPosition?.require_2fa) {
+        const without2fa = [...selectedTeamIds].filter((id) => {
+          const emp = employees.find((e) => e.id === id);
+          return emp && emp.totp_enabled === false;
+        });
+        if (without2fa.length > 0) {
+          const ok = await confirm(
+            `У ${pluralEmployees(without2fa.length)} из выбранных не включена двухфакторная аутентификация, а должность «${targetPosition.title}» требует её. Всё равно назначить должность?`,
+            { confirmLabel: "Назначить" }
+          );
+          if (!ok) return;
+        }
+      }
+    }
     setBulkBusy(true);
     try {
       const body =
@@ -672,17 +827,33 @@ export function EmployeesTab({
   async function handleBulkDisable() {
     if (selectedTeamIds.size === 0) return;
     if (!(await confirm(`Отключить доступ ${pluralEmployees(selectedTeamIds.size)}?`, { danger: true, confirmLabel: "Отключить" }))) return;
+    const ids = [...selectedTeamIds];
     setBulkBusy(true);
     try {
-      await api.post(`/businesses/${businessId}/employees/bulk-update`, { employee_ids: [...selectedTeamIds], status: "disabled" });
+      await api.post(`/businesses/${businessId}/employees/bulk-update`, { employee_ids: ids, status: "disabled" });
       setSelectedTeamIds(new Set());
       await load();
       loadWorkload(period);
       loadActivity(activityFilter, period);
+      // "Отменить" (доп. проход после 67-го, п.17) — то же массовое действие
+      // в обратную сторону, тем же bulk-update; тост держится дольше обычного
+      // именно для таких кнопок (см. AUTO_DISMISS_MS/action в Toast.tsx).
+      notify(`Отключено ${pluralEmployees(ids.length)}`, "success", { label: "Отменить", onClick: () => void handleUndoBulkDisable(ids) });
     } catch (err) {
       notify(err instanceof ApiError ? err.message : "Не удалось отключить выбранных сотрудников");
     } finally {
       setBulkBusy(false);
+    }
+  }
+
+  async function handleUndoBulkDisable(ids: string[]) {
+    try {
+      await api.post(`/businesses/${businessId}/employees/bulk-update`, { employee_ids: ids, status: "active" });
+      await load();
+      loadWorkload(period);
+      loadActivity(activityFilter, period);
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : "Не удалось отменить отключение");
     }
   }
 
@@ -786,7 +957,7 @@ export function EmployeesTab({
               <IconSearch style={{ position: "absolute", left: "9px", top: "50%", transform: "translateY(-50%)", width: 14, height: 14, color: "var(--muted)" }} />
               <input
                 style={{ paddingLeft: "28px", width: "100%" }}
-                placeholder="Поиск по имени или email…"
+                placeholder="Поиск по имени, email или телефону…"
                 value={teamSearch}
                 onChange={(e) => setTeamSearch(e.target.value)}
               />
@@ -803,12 +974,34 @@ export function EmployeesTab({
                 Давно не заходил
               </button>
             )}
+            {isOwner && (
+              <button
+                className={"btn btn-sm" + (teamPendingOnly ? " btn-primary" : "")}
+                onClick={() => setTeamPendingOnly((v) => !v)}
+                title={`Приглашение не подтверждено ${PENDING_INVITE_DAYS}+ дней`}
+              >
+                Зависшие приглашения
+              </button>
+            )}
             {isOwner && filteredEmployees.length > 0 && (
               // Экспорт СПИСКА команды (67-й проход) — экспортируется текущий
               // отфильтрованный список (см. exportEmployeesCsv), а не весь
               // employees, тем же принципом, что и остальные CSV в проекте.
               <button className="btn btn-sm" onClick={() => exportEmployeesCsv(filteredEmployees, positionTitle)}>
                 Экспорт CSV
+              </button>
+            )}
+            {isOwner && selectedTeamIds.size > 0 && (
+              // Экспорт только выбранных (доп. проход после 67-го, п.1) —
+              // отдельная кнопка рядом: экспорт списка выше по-прежнему берёт
+              // весь filteredEmployees, эта — только отмеченные чекбоксом
+              // строки (полезно, когда нужно выгрузить конкретную подборку, а
+              // не подгонять фильтры под неё).
+              <button
+                className="btn btn-sm"
+                onClick={() => exportEmployeesCsv(filteredEmployees.filter((e) => selectedTeamIds.has(e.id)), positionTitle)}
+              >
+                Экспорт выбранных ({selectedTeamIds.size})
               </button>
             )}
           </div>
@@ -897,6 +1090,7 @@ export function EmployeesTab({
               {filteredEmployees.map((emp) => {
                 const clickable = isOwner && !emp.is_owner;
                 const pendingTooLong = isPendingTooLong(emp);
+                const gap2fa = position2faGap(emp);
                 return (
                   <tr
                     key={emp.id}
@@ -934,6 +1128,15 @@ export function EmployeesTab({
                             style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
                           >
                             <IconAlert style={{ width: 11, height: 11 }} /> зависло
+                          </span>
+                        )}
+                        {gap2fa && (
+                          <span
+                            className="badge tone-warning"
+                            title="Должность требует обязательную 2FA, но у сотрудника она не включена"
+                            style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
+                          >
+                            <IconAlert style={{ width: 11, height: 11 }} /> нет 2FA
                           </span>
                         )}
                       </div>
@@ -1010,15 +1213,32 @@ export function EmployeesTab({
           )}
 
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", margin: "12px 0" }}>
-            <div style={{ position: "relative", maxWidth: "260px", flex: "1 1 200px" }}>
-              <IconSearch style={{ position: "absolute", left: "9px", top: "50%", transform: "translateY(-50%)", width: 14, height: 14, color: "var(--muted)" }} />
-              <input
-                style={{ paddingLeft: "28px", width: "100%" }}
-                placeholder="Поиск по названию должности…"
-                value={positionSearch}
-                onChange={(e) => setPositionSearch(e.target.value)}
-              />
-            </div>
+            {reverseMatrix ? (
+              // Поиск по сотрудникам в обратной матрице (доп. проход после
+              // 67-го, п.9) — у списка карточек "по должностям" уже был свой
+              // поиск (positionSearch ниже), у матрицы "по сотрудникам" его
+              // не было вовсе, хотя команда может быть не меньше самого
+              // списка должностей.
+              <div style={{ position: "relative", maxWidth: "260px", flex: "1 1 200px" }}>
+                <IconSearch style={{ position: "absolute", left: "9px", top: "50%", transform: "translateY(-50%)", width: 14, height: 14, color: "var(--muted)" }} />
+                <input
+                  style={{ paddingLeft: "28px", width: "100%" }}
+                  placeholder="Поиск по имени сотрудника…"
+                  value={reverseMatrixSearch}
+                  onChange={(e) => setReverseMatrixSearch(e.target.value)}
+                />
+              </div>
+            ) : (
+              <div style={{ position: "relative", maxWidth: "260px", flex: "1 1 200px" }}>
+                <IconSearch style={{ position: "absolute", left: "9px", top: "50%", transform: "translateY(-50%)", width: 14, height: 14, color: "var(--muted)" }} />
+                <input
+                  style={{ paddingLeft: "28px", width: "100%" }}
+                  placeholder="Поиск по названию должности…"
+                  value={positionSearch}
+                  onChange={(e) => setPositionSearch(e.target.value)}
+                />
+              </div>
+            )}
             <button className={"btn btn-sm" + (reverseMatrix ? " btn-primary" : "")} onClick={() => setReverseMatrix((v) => !v)}>
               {reverseMatrix ? "Показать по должностям" : "Показать по сотрудникам"}
             </button>
@@ -1062,32 +1282,41 @@ export function EmployeesTab({
                 </tr>
               </thead>
               <tbody>
-                {employees.map((emp) => {
-                  const clickable = isOwner && !emp.is_owner;
-                  return (
-                    <tr
-                      key={emp.id}
-                      data-clickable={clickable ? "true" : undefined}
-                      onClick={clickable ? () => setOpenEmployeeId(emp.id) : undefined}
-                    >
-                      <td>{emp.name}{emp.is_owner && <span className="badge badge-owner" style={{ marginLeft: "6px" }}>владелец</span>}</td>
-                      <td className="muted">{emp.is_owner ? "—" : positionTitle(emp.position_id)}</td>
-                      {RESOURCES.map(({ key }) => (
-                        <td key={key} className="muted">{LEVEL_LABEL[employeeLevel(emp, key)]}</td>
-                      ))}
-                    </tr>
-                  );
-                })}
+                {employees
+                  .filter((emp) => !reverseMatrixSearch.trim() || emp.name.toLowerCase().includes(reverseMatrixSearch.trim().toLowerCase()))
+                  .map((emp) => {
+                    const clickable = isOwner && !emp.is_owner;
+                    return (
+                      <tr
+                        key={emp.id}
+                        data-clickable={clickable ? "true" : undefined}
+                        onClick={clickable ? () => setOpenEmployeeId(emp.id) : undefined}
+                      >
+                        <td>{emp.name}{emp.is_owner && <span className="badge badge-owner" style={{ marginLeft: "6px" }}>владелец</span>}</td>
+                        <td className="muted">{emp.is_owner ? "—" : positionTitle(emp.position_id)}</td>
+                        {RESOURCES.map(({ key }) => (
+                          <td key={key} className="muted">{LEVEL_LABEL[employeeLevel(emp, key)]}</td>
+                        ))}
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
             </div>
           ) : (
             <>
               {filteredPositions.length === 0 && <div className="empty-note">Ничего не найдено по запросу «{positionSearch}»</div>}
-              {filteredPositions.map((p) => (
+              {filteredPositions.map((p) => {
+                // "Пустая" должность (доп. проход после 67-го, п.10) — все
+                // пять разделов на "нет доступа": скорее всего, недооформленная
+                // должность, которую забыли настроить, а не осознанное решение
+                // (для осознанного "вообще без доступа" тоже есть готовый
+                // пресет "Без доступа" — этот бейдж не мешает его применять).
+                const isEmptyPosition = RESOURCES.every(({ key }) => (p.permissions.find((perm) => perm.resource === key)?.level ?? "none") === "none");
+                return (
                 <div
-                  className={"card dash-block-cell" + (dragPositionId === p.id ? " dragging" : "")}
                   key={p.id}
+                  className={"card dash-block-cell" + (dragPositionId === p.id ? " dragging" : "")}
                   style={{ marginTop: "1rem" }}
                   onDragOver={
                     positionsDraggable
@@ -1109,8 +1338,15 @@ export function EmployeesTab({
                       : undefined
                   }
                 >
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1, minWidth: 0 }}>
+                  {/* flexWrap на самой верхней строке карточки (доп. проход
+                      после 67-го) — после добавления кнопок "Дублировать"/
+                      "История" (п.8/п.11) группа из четырёх иконок перестала
+                      помещаться рядом с названием+бейджами на узких экранах
+                      и накладывалась на них; перенос кнопок на отдельную
+                      строку вместо наложения — тот же принцип отзывчивости,
+                      что и у формы редактирования ниже (см. п.18). */}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1, minWidth: 0, flexWrap: "wrap" }}>
                       {isOwner && (
                         <span
                           draggable={positionsDraggable}
@@ -1131,9 +1367,16 @@ export function EmployeesTab({
                         </span>
                       )}
                       {editingPosition?.id === p.id ? (
+                        // Отзывчивость на узком экране (доп. проход после
+                        // 67-го, п.18) — .table-wrap ниже разворачивает
+                        // горизонтальный скролл только для <table>, у этой
+                        // формы своей обёртки не было: flexWrap на самой
+                        // форме уже стоял, но minWidth:0 на полях не был
+                        // задан, поэтому на узких экранах строка вылезала за
+                        // пределы карточки вместо переноса на новую строку.
                         <form
                           className="inline-form"
-                          style={{ flex: 1, flexWrap: "wrap" }}
+                          style={{ flex: "1 1 260px", flexWrap: "wrap", minWidth: 0 }}
                           onSubmit={(e) => {
                             e.preventDefault();
                             handleSavePositionEdit(p.id, editingPosition.title, editingPosition.color, editingPosition.description);
@@ -1141,10 +1384,11 @@ export function EmployeesTab({
                         >
                           <input
                             autoFocus
+                            style={{ flex: "1 1 140px", minWidth: 0 }}
                             value={editingPosition.title}
                             onChange={(e) => setEditingPosition({ ...editingPosition, title: e.target.value })}
                           />
-                          <div style={{ minWidth: "140px" }}>
+                          <div style={{ flex: "1 1 140px", minWidth: 0 }}>
                             <Dropdown
                               value={editingPosition.color}
                               onChange={(v) => setEditingPosition({ ...editingPosition, color: v })}
@@ -1154,7 +1398,7 @@ export function EmployeesTab({
                           </div>
                           <input
                             placeholder="Описание"
-                            style={{ minWidth: "180px" }}
+                            style={{ flex: "1 1 180px", minWidth: 0 }}
                             value={editingPosition.description}
                             onChange={(e) => setEditingPosition({ ...editingPosition, description: e.target.value })}
                           />
@@ -1178,11 +1422,24 @@ export function EmployeesTab({
                           )}
                           <h3 style={{ margin: 0 }}>{p.title}</h3>
                           <span className="badge" title="Сколько сотрудников сейчас на этой должности">{pluralEmployees(p.employee_count)}</span>
+                          {isEmptyPosition && (
+                            <span className="badge tone-warning" title="Ни на один из пяти разделов нет доступа">без доступа ни к чему</span>
+                          )}
                         </>
                       )}
                     </div>
                     {editingPosition?.id !== p.id && isOwner && (
                       <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                        <button
+                          className={"btn btn-sm" + (openPositionHistory.has(p.id) ? " btn-primary" : "")}
+                          onClick={() => togglePositionHistory(p.id)}
+                          title="История изменений этой должности"
+                        >
+                          <IconHistory />
+                        </button>
+                        <button className="btn btn-sm" onClick={() => handleDuplicatePosition(p.id)} title="Дублировать должность целиком">
+                          <IconCopy />
+                        </button>
                         <button
                           className="btn btn-sm"
                           onClick={() => setEditingPosition({ id: p.id, title: p.title, color: p.color ?? "", description: p.description ?? "" })}
@@ -1200,6 +1457,33 @@ export function EmployeesTab({
                       </div>
                     )}
                   </div>
+                  {openPositionHistory.has(p.id) && (
+                    // Мини-история должности (доп. проход после 67-го, п.11)
+                    // — свои последние изменения прямо на карточке, без
+                    // похода на общий журнал вкладки «Активность» и ручного
+                    // выставления там фильтров по разделу/сотруднику.
+                    <div className="form-note" style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                      {positionHistory[p.id] === undefined ? (
+                        <span className="muted">Загрузка…</span>
+                      ) : positionHistory[p.id].length === 0 ? (
+                        <span className="muted">Изменений пока не было</span>
+                      ) : (
+                        positionHistory[p.id].map((entry) => (
+                          <div key={entry.id} style={{ fontSize: "12px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: "8px" }}>
+                              <span style={{ fontWeight: 600 }}>{activityLabel(entry)}</span>
+                              <span className="muted" style={{ whiteSpace: "nowrap" }}>
+                                {new Date(entry.created_at).toLocaleDateString("ru-RU")}
+                              </span>
+                            </div>
+                            {activityDetails(entry).map((line, i) => (
+                              <div key={i} className="muted" style={{ marginTop: "1px" }}>{line}</div>
+                            ))}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
                   {p.description && editingPosition?.id !== p.id && (
                     <div className="muted" style={{ fontSize: "12.5px", marginTop: "4px" }}>{p.description}</div>
                   )}
@@ -1301,7 +1585,8 @@ export function EmployeesTab({
                   </table>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </>
           )}
         </>
@@ -1322,10 +1607,28 @@ export function EmployeesTab({
               <IconTrendUp /> Нагрузка команды
             </h2>
             {workload && workload.length > 0 && (
-              <button className="btn btn-sm" onClick={() => exportWorkloadCsv(workload, "Нагрузка команды")}>
+              <button className="btn btn-sm" onClick={() => exportWorkloadCsv(workload, "Нагрузка команды", teamTrendPoints)}>
                 Экспорт CSV
               </button>
             )}
+          </div>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", margin: "10px 0" }}>
+            {/* Фильтр сводки по должности (доп. проход после 67-го, п.14) —
+                тот же список опций, что и на «Команде» выше. */}
+            <div style={{ minWidth: "180px" }}>
+              <Dropdown value={workloadPositionFilter} onChange={setWorkloadPositionFilter} placeholder="Все должности" options={teamPositionOptions} />
+            </div>
+            {/* Настраиваемая чувствительность аномалий (доп. проход после
+                67-го, п.13) — влияет только на подсветку ниже, сами числа в
+                таблице не пересчитываются. */}
+            <div style={{ minWidth: "220px" }}>
+              <Dropdown
+                value={anomalySensitivityKey}
+                onChange={setAnomalySensitivityKey}
+                placeholder="Обычная чувствительность"
+                options={ANOMALY_SENSITIVITY.map((s) => ({ value: s.key, label: s.label }))}
+              />
+            </div>
           </div>
           {workload === null ? (
             <div className="muted">Загрузка…</div>
@@ -1372,7 +1675,9 @@ export function EmployeesTab({
                   // выше) — карточку для него не открываем по той же причине.
                   const emp = employees.find((e) => e.id === w.employee_id);
                   const clickable = emp && !emp.is_owner;
-                  const anomaly = workloadAnomaly(w, emp?.status === "active");
+                  const thresholds = ANOMALY_SENSITIVITY.find((s) => s.key === anomalySensitivityKey) ?? DEFAULT_ANOMALY_THRESHOLDS;
+                  const anomaly = workloadAnomaly(w, emp?.status === "active", thresholds);
+                  const gap2fa = emp && position2faGap(emp);
                   const trend = teamTrend[w.employee_id];
                   return (
                     <tr
@@ -1385,6 +1690,15 @@ export function EmployeesTab({
                         {anomaly && (
                           <span className="badge tone-warning" title={anomaly} style={{ marginLeft: "6px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
                             <IconAlert style={{ width: 11, height: 11 }} /> {anomaly}
+                          </span>
+                        )}
+                        {gap2fa && (
+                          <span
+                            className="badge tone-warning"
+                            title="Должность требует обязательную 2FA, но у сотрудника она не включена"
+                            style={{ marginLeft: "6px", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                          >
+                            <IconAlert style={{ width: 11, height: 11 }} /> нет 2FA
                           </span>
                         )}
                       </td>
@@ -1498,6 +1812,7 @@ export function EmployeesTab({
           businessId={businessId}
           employee={openEmployee}
           positionTitle={positionTitle(openEmployee.position_id)}
+          positionRequires2fa={positions.find((p) => p.id === openEmployee.position_id)?.require_2fa}
           workload={workload?.find((w) => w.employee_id === openEmployee.id)}
           onClose={() => setOpenEmployeeId(null)}
           onOpenEdit={() => {
