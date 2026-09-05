@@ -100,6 +100,41 @@ export function tenureLabel(createdAtIso: string): string {
   return `${months} ${pluralRu(months, "месяц", "месяца", "месяцев")}`;
 }
 
+/** Фиксированная палитра цветов должности (67-й проход, "Должности и права"
+ * — карточки были визуально неотличимы кроме названия). Ключи должны точно
+ * совпадать с POSITION_COLORS на бэке (app/schemas/business.py) — сервер
+ * отклоняет любой другой ключ на create/PATCH должности. Переиспользуем уже
+ * существующие тематические CSS-переменные (--accent/--good/... — те же,
+ * что и у статус-бейджей/календаря), кроме "серого" и "розового", для
+ * которых готового токена не было — так палитра остаётся согласованной с
+ * остальным интерфейсом и уже адаптирована под тёмную тему без отдельной
+ * работы. */
+export const POSITION_COLORS: { key: string; label: string; cssVar: string }[] = [
+  { key: "gray", label: "Серый", cssVar: "--muted" },
+  { key: "blue", label: "Синий", cssVar: "--accent" },
+  { key: "green", label: "Зелёный", cssVar: "--good" },
+  { key: "purple", label: "Фиолетовый", cssVar: "--today" },
+  { key: "orange", label: "Оранжевый", cssVar: "--warning" },
+  { key: "red", label: "Красный", cssVar: "--critical" },
+  { key: "teal", label: "Бирюзовый", cssVar: "--col-select" },
+  { key: "pink", label: "Розовый", cssVar: "--pos-pink" },
+];
+
+/** Инлайн-стиль бейджа/карточки должности под её цвет — через color-mix()
+ * поверх текущих --surface/--ink/--border, поэтому одна и та же формула
+ * автоматически даёт читаемый результат в обеих темах, без дублирования
+ * под каждую тему отдельно (как это сделано для остальных токенов в
+ * styles.css). null/незнакомый ключ — нейтральный серый. */
+export function positionColorStyle(color: string | null | undefined): { background: string; color: string; border: string } {
+  const found = POSITION_COLORS.find((c) => c.key === color);
+  const cssVar = found ? found.cssVar : "--muted";
+  return {
+    background: `color-mix(in srgb, var(${cssVar}) 16%, var(--surface))`,
+    color: `color-mix(in srgb, var(${cssVar}) 70%, var(--ink))`,
+    border: `1px solid color-mix(in srgb, var(${cssVar}) 32%, var(--border))`,
+  };
+}
+
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";

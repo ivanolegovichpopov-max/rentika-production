@@ -10,11 +10,11 @@
  */
 import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
-import type { ActivityLogEntry, ActivityLogPage, Employee, EmployeeWorkload } from "../../../api/types";
+import type { ActivityLogEntry, ActivityLogPage, Employee, EmployeeWorkload, EmployeeWorkloadTimeseries } from "../../../api/types";
 import { Badge, EMPLOYEE_STATUS_META } from "../../../lib/statusMeta";
 import { initials, tenureLabel } from "../../../lib/format";
-import { trendBadge } from "./workloadTrend";
-import { IconClose, IconEdit, IconHistory, IconMail, IconRestore, IconTrendUp } from "../../../lib/icons";
+import { WorkloadSparkline, trendBadge } from "./workloadTrend";
+import { IconClose, IconEdit, IconHistory, IconMail, IconMessages, IconRestore, IconTrendUp } from "../../../lib/icons";
 import { activityDetails, activityLabel } from "./activityLabels";
 import { exportActivityCsv } from "./csv";
 
@@ -39,6 +39,7 @@ export function EmployeeDetailPanel({
   onOpenEdit,
   onDisable,
   onReactivate,
+  onMessage,
 }: {
   businessId: string;
   employee: Employee;
@@ -52,9 +53,18 @@ export function EmployeeDetailPanel({
   onOpenEdit: () => void;
   onDisable: () => void;
   onReactivate: () => void;
+  // "Написать сообщение" (67-й проход) — переключает вкладку на «Сообщения»
+  // и открывает/находит личный диалог с этим сотрудником (см. onMessageEmployee
+  // в EmployeesTab.tsx / navigate(messageEmployeeId) в Dashboard.tsx).
+  // Отсутствует, если владелец открыл карточку не из основного дашборда.
+  onMessage?: () => void;
 }) {
   const [period, setPeriod] = useState<"7" | "30" | "90" | "all">("30");
   const [activity, setActivity] = useState<ActivityLogEntry[] | null>(null);
+  // Дневная динамика для спарклайна (67-й проход) — свой отдельный запрос,
+  // т.к. /workload (переданный родителем через проп workload) не содержит
+  // постолбцовой разбивки по дням, только итог за период и предыдущий.
+  const [trend, setTrend] = useState<number[] | null>(null);
 
   useEffect(() => {
     setActivity(null);
@@ -67,18 +77,37 @@ export function EmployeeDetailPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [businessId, employee.id, period]);
 
+  useEffect(() => {
+    if (period === "all") {
+      setTrend(null);
+      return;
+    }
+    api
+      .get<EmployeeWorkloadTimeseries>(`/businesses/${businessId}/employees/${employee.id}/workload/timeseries?days=${period}`)
+      .then((res) => setTrend(res.points.map((pt) => pt.rentals_created + pt.client_notes + pt.rental_photos)))
+      .catch(() => setTrend(null));
+  }, [businessId, employee.id, period]);
+
   const statusMeta = EMPLOYEE_STATUS_META[employee.status];
 
   return (
     <div className="slideover">
       <div className="slideover-head">
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span
-            className={"avatar avatar-emp-" + employee.status}
-            style={{ width: 36, height: 36, fontSize: "14px" }}
-          >
-            {initials(employee.name)}
-          </span>
+          {employee.photo_url ? (
+            <img
+              src={employee.photo_url}
+              alt=""
+              style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+            />
+          ) : (
+            <span
+              className={"avatar avatar-emp-" + employee.status}
+              style={{ width: 36, height: 36, fontSize: "14px" }}
+            >
+              {initials(employee.name)}
+            </span>
+          )}
           <div>
             <h3>{employee.name}</h3>
             <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "4px" }}>
@@ -96,6 +125,11 @@ export function EmployeeDetailPanel({
         <button className="btn btn-sm" onClick={onOpenEdit}>
           <IconEdit /> Редактировать
         </button>
+        {onMessage && (
+          <button className="btn btn-sm" onClick={onMessage}>
+            <IconMessages /> Написать сообщение
+          </button>
+        )}
         {employee.status === "disabled" ? (
           <button className="btn btn-sm" onClick={onReactivate}>
             <IconRestore /> Включить
@@ -111,6 +145,7 @@ export function EmployeeDetailPanel({
           <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
             <IconMail /> {employee.email ?? "—"}
           </div>
+          {employee.phone && <div>{employee.phone}</div>}
           <div className="muted">
             {/* См. Employee.last_login_at — null означает "ни разу не входил",
                 а не "скрыто" (видимость самого поля уже решена на бэке тем
@@ -120,6 +155,13 @@ export function EmployeeDetailPanel({
           <div className="muted">
             В команде с {new Date(employee.created_at).toLocaleDateString("ru-RU")} ({tenureLabel(employee.created_at)})
           </div>
+          {employee.notes && (
+            // Заметка владельца о сотруднике (67-й проход) — видна только
+            // владельцу/платформенному админу (та же видимость, что email/
+            // телефон, см. _employee_out на бэке), поэтому показываем прямо
+            // здесь без дополнительного скрытия на фронте.
+            <div className="form-note" style={{ marginTop: "4px", whiteSpace: "pre-wrap" }}>{employee.notes}</div>
+          )}
         </div>
       </div>
 
@@ -128,6 +170,11 @@ export function EmployeeDetailPanel({
           <h4 style={{ display: "flex", alignItems: "center", gap: "6px" }}>
             <IconTrendUp /> Нагрузка
           </h4>
+          {trend && trend.length >= 2 && (
+            <div style={{ margin: "4px 0 10px" }}>
+              <WorkloadSparkline values={trend} />
+            </div>
+          )}
           <div style={{ display: "flex", gap: "14px", flexWrap: "wrap" }}>
             <div>
               <div style={{ fontSize: "18px", fontWeight: 700 }}>

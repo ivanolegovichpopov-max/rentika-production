@@ -318,6 +318,10 @@ function DashboardShell({
   // паттерн, что и highlightEmployee выше (см. докстринг пропа focus в
   // CalendarTab.tsx).
   const [calendarFocus, setCalendarFocus] = useState<{ date: string; signal: number } | null>(null);
+  // Открыть диалог с конкретным сотрудником при переходе на "Сообщения" из
+  // карточки сотрудника (67-й проход, кнопка "Написать сообщение") — тот же
+  // счётчиковый паттерн, см. докстринг startDmWith в MessagesTab.tsx.
+  const [startDmWith, setStartDmWith] = useState<{ employeeId: string; signal: number } | null>(null);
 
   /** Переход между разделами со сбросом поиска и (опционально) выставлением
    * фильтра — аналог обработчика "dash-stat"/"filter-by-category" в демо. */
@@ -330,6 +334,7 @@ function DashboardShell({
       finance30?: boolean;
       highlightEmployeeId?: string;
       calendarFocusDate?: string;
+      messageEmployeeId?: string;
     }
   ) {
     setView(target);
@@ -339,6 +344,7 @@ function DashboardShell({
     if (opts?.finance30) setFinancePeriod(periodFor("30", rentals));
     if (opts?.highlightEmployeeId) setHighlightEmployee((prev) => ({ id: opts.highlightEmployeeId!, signal: (prev?.signal ?? 0) + 1 }));
     if (opts?.calendarFocusDate) setCalendarFocus((prev) => ({ date: opts.calendarFocusDate!, signal: (prev?.signal ?? 0) + 1 }));
+    if (opts?.messageEmployeeId) setStartDmWith((prev) => ({ employeeId: opts.messageEmployeeId!, signal: (prev?.signal ?? 0) + 1 }));
   }
 
   const activeEmployees = employees.filter((e) => e.status !== "disabled");
@@ -600,7 +606,14 @@ function DashboardShell({
                 />
               )}
               {view === "finance" && <FinanceTab period={financePeriod} setPeriod={setFinancePeriod} />}
-              {view === "employees" && <EmployeesTab businessId={businessId} highlightEmployee={highlightEmployee} isOwner={isOwner} />}
+              {view === "employees" && (
+                <EmployeesTab
+                  businessId={businessId}
+                  highlightEmployee={highlightEmployee}
+                  isOwner={isOwner}
+                  onMessageEmployee={(employeeId) => navigate("messages", { messageEmployeeId: employeeId })}
+                />
+              )}
               {view === "messages" && (
                 <MessagesTab
                   businessId={businessId}
@@ -608,6 +621,7 @@ function DashboardShell({
                   messagingPermission={messagingPermission}
                   onMessagingPermissionChange={setMessagingPermission}
                   onUnreadTotalChange={setUnreadTotal}
+                  startDmWith={startDmWith}
                 />
               )}
               {view === "profile" && (

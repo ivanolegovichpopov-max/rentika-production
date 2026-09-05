@@ -123,6 +123,19 @@ class Position(Base):
     # распространяется на владельца бизнеса (у него нет position_id) и на
     # платформенного админа.
     require_2fa: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Цвет карточки должности (67-й проход, обзор страницы «Сотрудники») —
+    # один из фиксированных ключей палитры на фронте (см. POSITION_COLORS в
+    # lib/format.ts), а не произвольный hex: так бейджи должности везде в
+    # интерфейсе (карточка должности, строка в "Команде", реверс-матрица)
+    # красятся одной и той же готовой парой фон/текст, без риска, что
+    # владелец подберёт нечитаемое сочетание. NULL — цвет не задан, в UI
+    # используется нейтральный серый.
+    color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Короткое описание обязанностей должности (67-й проход) — раньше у
+    # должности было только название, без пояснения, что за роль и чем
+    # занимается человек с ней; чисто информационное поле, ни на что не
+    # влияет технически.
+    description: Mapped[str | None] = mapped_column(Text(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (UniqueConstraint("business_id", "title", name="uq_position_business_title"),)
@@ -167,6 +180,25 @@ class Employee(Base):
     status: Mapped[EmployeeStatus] = mapped_column(
         Enum(EmployeeStatus, name="employee_status"), default=EmployeeStatus.active, nullable=False
     )
+    # Телефон сотрудника (67-й проход) — раньше единственным контактом в
+    # карточке был email; если человек не отвечает на почту, дозвониться
+    # через CRM было нечем. Свободный текст, не валидируется строгим
+    # форматом (номера бывают разных стран/форматов записи), видимость та
+    # же, что у email/last_login_at — только владельцу/платформенному
+    # админу (см. _employee_out в app/api/routes/employees.py).
+    phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Заметки о сотруднике (67-й проход) — тот же смысл, что ClientNote у
+    # клиента, но проще: одно текстовое поле, а не лента отдельных записей
+    # (для сотрудника это не так критично — карточку правит только
+    # владелец, конкурентное редактирование не сценарий). Видно ТОЛЬКО
+    # владельцу/платформенному админу — вообще не отдаётся самому
+    # сотруднику и остальной команде ни при каких обстоятельствах.
+    notes: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    # Фото сотрудника (67-й проход) — тот же idiom, что Business.logo_url:
+    # data: URL, закодированный на фронте до отправки (см. компонент
+    # загрузки фото в EditEmployeeModal.tsx), а не файл на диске/в
+    # object-storage. NULL — фото не задано, в UI показываются инициалы.
+    photo_url: Mapped[str | None] = mapped_column(Text(), nullable=True)
     # Личная настройка дашборда (какие плашки/панели скрыты, их переименованные
     # подписи) — JSON-строка {"hidden": [...], "labels": {...}}, см.
     # app/schemas/business.py::DashboardPrefs. Хранится per-Employee (то есть

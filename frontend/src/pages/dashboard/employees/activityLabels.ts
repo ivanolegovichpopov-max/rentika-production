@@ -39,10 +39,21 @@ export const ACTIVITY_LABELS: Record<string, string> = {
   // — итог массового CSV-импорта (см. import_employees в employees.py).
   "employee:activate": "Сотрудник подтвердил приглашение (первый вход)",
   "employee:import": "Импортированы сотрудники",
+  // bulk_update (67-й проход) — массовое действие сразу над несколькими
+  // сотрудниками (см. bulk_update_employees в app/api/routes/employees.py).
+  "employee:bulk_update": "Массовое действие над сотрудниками",
   "position:create": "Должность создана",
   "position:rename": "Должность переименована",
+  // update (67-й проход) — изменение цвета и/или описания должности БЕЗ
+  // переименования (см. update_position в app/api/routes/positions.py);
+  // если title тоже менялся — по-прежнему пишется как "rename" выше.
+  "position:update": "Оформление должности изменено",
   "position:delete": "Должность удалена",
   "position:update_permissions": "Изменены права должности",
+  // copy_permissions (67-й проход) — копирование матрицы прав с другой
+  // должности на уже существующую (не при создании, см. copy_permissions_from
+  // выше для создания — это отдельное, более раннее действие).
+  "position:copy_permissions": "Права скопированы с другой должности",
   // reorder/update_require_2fa — 66-й проход, "Должности и права".
   "position:reorder": "Изменён порядок должностей",
   "position:update_require_2fa": "Изменено требование двухфакторной аутентификации для должности",
@@ -124,9 +135,32 @@ export function activityDetails(entry: ActivityLogEntry): string[] {
       }`);
     }
     if ("status_before" in meta) lines.push(`статус: ${statusLabel(meta.status_before)} → ${statusLabel(meta.status_after)}`);
+    // Телефон/заметки/фото (67-й проход) — само содержимое заметок/фото в
+    // meta не пишется (см. update_employee в employees.py), только факт.
+    if ("phone_before" in meta) lines.push(`телефон: ${meta.phone_before ? String(meta.phone_before) : "—"} → ${meta.phone_after ? String(meta.phone_after) : "—"}`);
+    if (meta.notes_changed) lines.push("заметки изменены");
+    if (meta.photo_changed) lines.push("фото изменено");
   }
-  if (entry.resource === "position" && entry.action === "rename" && "title_before" in meta) {
-    lines.push(`название: ${String(meta.title_before)} → ${String(meta.title_after)}`);
+  if (entry.resource === "employee" && entry.action === "bulk_update") {
+    const ids = Array.isArray(meta.employee_ids) ? meta.employee_ids.length : 0;
+    if (ids) lines.push(`сотрудников: ${ids}`);
+    if (meta.clear_position) lines.push("должность снята");
+    else if (meta.position_id) lines.push("назначена должность");
+    if (meta.status) lines.push(`статус: ${statusLabel(meta.status)}`);
+  }
+  if (entry.resource === "position" && (entry.action === "rename" || entry.action === "update")) {
+    if ("title_before" in meta) lines.push(`название: ${String(meta.title_before)} → ${String(meta.title_after)}`);
+    if ("color_before" in meta) lines.push(`цвет изменён`);
+    if ("description_before" in meta) lines.push(`описание изменено`);
+  }
+  if (entry.resource === "position" && entry.action === "copy_permissions" && "source_title" in meta) {
+    lines.push(`права скопированы с должности «${String(meta.source_title)}»`);
+    if (Array.isArray(meta.changes)) {
+      for (const change of meta.changes as Record<string, unknown>[]) {
+        const resource = typeof change.resource === "string" ? change.resource : "";
+        lines.push(`${RESOURCE_LABELS[resource] ?? resource}: ${levelLabel(change.level_before)} → ${levelLabel(change.level_after)}`);
+      }
+    }
   }
   // update_permissions (66-й проход) — meta.changes: список только
   // ИЗМЕНИВШИХСЯ ресурсов с {resource, level_before, level_after} (см.

@@ -43,6 +43,12 @@ export interface Position {
   require_2fa: boolean;
   // Сколько сотрудников сейчас на этой должности (66-й проход).
   employee_count: number;
+  // Цвет карточки (67-й проход) — один из ключей POSITION_COLORS (lib/format.ts),
+  // не произвольный CSS-цвет. null — цвет не задан, показываем нейтральный.
+  color: string | null;
+  // Короткое описание обязанностей должности (67-й проход) — чисто
+  // информационное поле.
+  description: string | null;
 }
 
 export interface Employee {
@@ -63,6 +69,15 @@ export interface Employee {
   is_owner: boolean;
   status: "invited" | "active" | "disabled";
   created_at: string;
+  // Телефон (67-й проход) — та же видимость, что email/last_login_at:
+  // null для всех, кроме владельца/платформенного админа.
+  phone: string | null;
+  // Заметки владельца о сотруднике (67-й проход) — видны ТОЛЬКО
+  // владельцу/платформенному админу, строже даже email.
+  notes: string | null;
+  // Фото/аватар (67-й проход) — в отличие от phone/notes/email, видно
+  // ВСЕЙ команде: data: URL или null (тогда в UI — инициалы).
+  photo_url: string | null;
 }
 
 // Одна запись общего журнала действий по бизнесу (64-й проход) — см.
@@ -113,6 +128,34 @@ export interface EmployeeImportResult {
   created: number;
   failed: number;
   results: EmployeeImportRowResult[];
+}
+
+// Результат массового действия над несколькими сотрудниками (67-й проход) —
+// см. EmployeeBulkUpdateResult на бэке.
+export interface EmployeeBulkUpdateResult {
+  updated: Employee[];
+  // Сколько id из запроса пропущено (владелец бизнеса или не найден).
+  skipped: number;
+}
+
+// Ответ на генерацию нового временного пароля (67-й проход) — показывается
+// владельцу ОДИН раз, дальше не хранится и не запрашивается повторно.
+export interface EmployeeResetPasswordResult {
+  temporary_password: string;
+}
+
+// Одна точка дневной динамики нагрузки сотрудника (67-й проход) — см.
+// EmployeeWorkloadTimeseriesOut на бэке, используется для мини-графика в
+// EmployeeDetailPanel.tsx.
+export interface EmployeeWorkloadTimeseriesPoint {
+  date: string;
+  rentals_created: number;
+  client_notes: number;
+  rental_photos: number;
+}
+
+export interface EmployeeWorkloadTimeseries {
+  points: EmployeeWorkloadTimeseriesPoint[];
 }
 
 export interface Equipment {

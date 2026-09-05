@@ -1,5 +1,6 @@
 import csv
 import io
+import secrets
 import uuid
 from datetime import timedelta
 
@@ -20,12 +21,17 @@ from app.models.user import User
 from app.schemas.business import (
     ActivityLogEntry,
     ActivityLogPage,
+    EmployeeBulkUpdate,
+    EmployeeBulkUpdateResult,
     EmployeeImportResult,
     EmployeeImportRowResult,
     EmployeeInvite,
     EmployeeOut,
+    EmployeeResetPasswordResult,
     EmployeeUpdate,
     EmployeeWorkloadOut,
+    EmployeeWorkloadTimeseriesOut,
+    EmployeeWorkloadTimeseriesPoint,
 )
 
 router = APIRouter(prefix="/businesses/{business_id}/employees", tags=["employees"])
@@ -38,7 +44,37 @@ def _require_owner(ctx: BusinessContext) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Управление сотрудниками доступно только владельцу бизнеса")
 
 
+def _generate_temporary_password() -> str:
+    """Случайный пароль для reset_password (67-й проход) — сгенерированный
+    сервером, а не придуманный владельцем вручную. token_urlsafe(12) даёт
+    16 символов из URL-safe base64 — заведомо длиннее password_min_length
+    (12) и не встречается в списках утечек; validate_password_policy всё
+    равно перепроверяется в цикле на случай маловероятного совпадения с
+    HIBP или общим списком, чтобы не отдать владельцу пароль, который тут
+    же будет отклонён при попытке сотрудника сменить его самостоятельно."""
+    return secrets.token_urlsafe(12)
+
+
+async def _generate_valid_temporary_password() -> str:
+    for _ in range(5):
+        candidate = _generate_temporary_password()
+        try:
+            await validate_password_policy(candidate)
+        except PasswordPolicyError:
+            continue
+        return candidate
+    # Практически недостижимо (см. докстринг выше), но не оставляем без ответа.
+    raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Не удалось сгенерировать временный пароль, попробуйте ещё раз")
+
+
 def _employee_out(employee: Employee, email: str | None, last_login_at=None) -> EmployeeOut:
+    # phone/notes видны тому же кругу, что email/last_login_at (владелец/
+    # платформенный админ) — вызывающий код уже решил это, передав сюда
+    # либо реальный email, либо None (см. list_employees ниже, где решение
+    # принимается явно; остальные вызовы — invite/update/import/bulk — все
+    # защищены _require_owner, там email всегда настоящий). photo_url,
+    # в отличие от них, видно ВСЕЙ команде — это аватар, не приватный
+    # контакт (см. Employee.photo_url).
     return EmployeeOut(
         id=employee.id,
         user_id=employee.user_id,
@@ -49,6 +85,9 @@ def _employee_out(employee: Employee, email: str | None, last_login_at=None) -> 
         is_owner=employee.is_owner,
         status=employee.status,
         created_at=employee.created_at,
+        phone=employee.phone if email is not None else None,
+        notes=employee.notes if email is not None else None,
+        photo_url=employee.photo_url,
     )
 
 
@@ -113,6 +152,7 @@ async def invite_employee(
         user_id=user.id,
         name=body.name,
         position_id=body.position_id,
+        phone=body.phone,
         # invited, а не сразу active (66-й проход) — раньше это поле
         # существовало только в модели/схемах и никогда фактически не
         # использовалось: любой приглашённый сотрудник считался активным
@@ -184,8 +224,18 @@ async def update_employee(
         prev_position = db.get(Position, employee.position_id)
         position_before_title = prev_position.title if prev_position else None
 
+    phone_before = employee.phone
+    notes_before = employee.notes
+    photo_before = employee.photo_url
+
     if body.name is not None:
         employee.name = body.name
+    if "phone" in body.model_fields_set:
+        employee.phone = body.phone
+    if "notes" in body.model_fields_set:
+        employee.notes = body.notes
+    if "photo_url" in body.model_fields_set:
+        employee.photo_url = body.photo_url
     position_after_title = position_before_title
     if "position_id" in body.model_fields_set:
         if body.position_id is not None:
@@ -210,6 +260,16 @@ async def update_employee(
     if body.status is not None and body.status != status_before:
         change_meta["status_before"] = status_before.value
         change_meta["status_after"] = body.status.value
+    if "phone" in body.model_fields_set and employee.phone != phone_before:
+        change_meta["phone_before"] = phone_before
+        change_meta["phone_after"] = employee.phone
+    # Само содержимое заметок/фото в журнал не пишем (см. Employee.notes/
+    # photo_url) — заметки могут быть длинным приватным текстом, а фото —
+    # огромной data:-строкой; журналу достаточно факта изменения.
+    if "notes" in body.model_fields_set and employee.notes != notes_before:
+        change_meta["notes_changed"] = True
+    if "photo_url" in body.model_fields_set and employee.photo_url != photo_before:
+        change_meta["photo_changed"] = True
 
     user = db.get(User, employee.user_id)
     if body.new_password is not None:
@@ -250,6 +310,99 @@ async def remove_employee(
     employee.status = EmployeeStatus.disabled
     log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="disable", resource="employee", resource_id=str(employee_id))
     db.commit()
+
+
+@router.post("/{employee_id}/reset-password", response_model=EmployeeResetPasswordResult)
+async def reset_employee_password(
+    employee_id: uuid.UUID,
+    ctx: BusinessContext = Depends(get_business_context),
+    db: Session = Depends(get_db),
+):
+    """Сгенерировать новый временный пароль сотруднику одной кнопкой
+    (67-й проход) — раньше единственный способ сбросить забытый/потерянный
+    пароль был через "Редактировать" → вручную придумать и ввести новый
+    пароль в new_password (см. update_employee выше, этот способ по-прежнему
+    работает). Здесь пароль генерирует сам сервер (см.
+    _generate_valid_temporary_password) и отдаёт его владельцу ОДИН раз в
+    ответе — дальше владелец передаёт его сотруднику лично, как и обычный
+    temporary_password при приглашении (см. PRODUCTION_ARCHITECTURE.md —
+    почтовая доставка вне рамок текущей версии)."""
+    _require_owner(ctx)
+    employee = db.get(Employee, employee_id)
+    if employee is None or employee.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сотрудник не найден")
+    if employee.is_owner:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Нельзя изменить запись владельца бизнеса")
+
+    user = db.get(User, employee.user_id)
+    new_password = await _generate_valid_temporary_password()
+    if user is not None:
+        user.password_hash = hash_password(new_password)
+    log_action(db, business_id=ctx.business_id, user_id=ctx.user.id, action="reset_password", resource="employee", resource_id=str(employee_id))
+    db.commit()
+    return EmployeeResetPasswordResult(temporary_password=new_password)
+
+
+@router.post("/bulk-update", response_model=EmployeeBulkUpdateResult)
+async def bulk_update_employees(
+    body: EmployeeBulkUpdate,
+    ctx: BusinessContext = Depends(get_business_context),
+    db: Session = Depends(get_db),
+):
+    """Массовое действие над несколькими сотрудниками сразу (67-й проход) —
+    см. докстринг EmployeeBulkUpdate. position_id/clear_position и status —
+    оба независимы и оба необязательны, но применяются одинаково для ВСЕХ
+    перечисленных id за одну транзакцию с одной записью в журнале (не по
+    записи на сотрудника — иначе журнал захламляется десятками одинаковых
+    строк при большой команде)."""
+    _require_owner(ctx)
+
+    if body.position_id is not None:
+        position = db.get(Position, body.position_id)
+        if position is None or position.business_id != ctx.business_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Указанная должность не найдена в этом бизнесе")
+
+    rows = db.execute(
+        select(Employee, User.email, User.last_login_at)
+        .join(User, User.id == Employee.user_id)
+        .where(Employee.business_id == ctx.business_id, Employee.id.in_(body.employee_ids))
+    ).all()
+    found_ids = {employee.id for employee, _, _ in rows}
+    skipped = len(set(body.employee_ids)) - len(found_ids)
+
+    updated: list[EmployeeOut] = []
+    for employee, email, last_login_at in rows:
+        if employee.is_owner:
+            skipped += 1
+            continue
+        if body.clear_position:
+            employee.position_id = None
+        elif body.position_id is not None:
+            employee.position_id = body.position_id
+        if body.status is not None:
+            employee.status = body.status
+        updated.append(_employee_out(employee, email, last_login_at))
+
+    if updated:
+        log_action(
+            db,
+            business_id=ctx.business_id,
+            user_id=ctx.user.id,
+            action="bulk_update",
+            resource="employee",
+            resource_id=f"{len(updated)} сотрудников",
+            meta={
+                "employee_ids": [str(e.id) for e in updated],
+                "position_id": str(body.position_id) if body.position_id else None,
+                "clear_position": body.clear_position,
+                "status": body.status.value if body.status else None,
+            },
+        )
+        db.commit()
+    else:
+        db.rollback()
+
+    return EmployeeBulkUpdateResult(updated=updated, skipped=skipped)
 
 
 # ============================================================
@@ -299,7 +452,15 @@ async def employee_activity(
     if resource is not None:
         filters.append(AuditLog.resource == resource)
     if action is not None:
-        filters.append(AuditLog.action == action)
+        # Список действий через запятую (67-й проход, пресет "Критичные
+        # действия" на фронте) — например "delete,disable,update_permissions,
+        # update_require_2fa,reset_password,bulk_update"; одно значение без
+        # запятой работает как и раньше (точное совпадение).
+        action_values = [a.strip() for a in action.split(",") if a.strip()]
+        if len(action_values) == 1:
+            filters.append(AuditLog.action == action_values[0])
+        elif action_values:
+            filters.append(AuditLog.action.in_(action_values))
     rows = db.execute(
         select(AuditLog, Employee.name)
         # Условие на business_id прямо в ON, не в WHERE — по той же причине,
@@ -395,6 +556,60 @@ async def employee_workload(
         )
         for e in employees
     ]
+
+
+@router.get("/{employee_id}/workload/timeseries", response_model=EmployeeWorkloadTimeseriesOut)
+async def employee_workload_timeseries(
+    employee_id: uuid.UUID,
+    ctx: BusinessContext = Depends(get_business_context),
+    db: Session = Depends(get_db),
+    days: int = Query(default=30, ge=1, le=90, description="Сколько последних дней показать (для мини-графика в карточке)"),
+):
+    """Дневная динамика нагрузки ОДНОГО сотрудника (67-й проход) — см.
+    EmployeeWorkloadTimeseriesOut. В отличие от /workload выше, здесь не
+    просто счётчик и не дельта к предыдущему периоду, а по одной точке на
+    каждый день — для мини-графика (спарклайна) в EmployeeDetailPanel.tsx.
+    Отдаём максимум 90 дней и только по одному сотруднику за раз — так
+    объём данных остаётся небольшим (3 запроса по business_id+employee_id,
+    группировка по дню — в Python, а не SQL date_trunc, чтобы одинаково
+    работать и на Postgres в проде, и на SQLite в тестах)."""
+    _require_owner(ctx)
+    employee = db.get(Employee, employee_id)
+    if employee is None or employee.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сотрудник не найден")
+
+    since = utcnow() - timedelta(days=days)
+
+    def _daily_counts(model, employee_column) -> dict[str, int]:
+        rows = db.scalars(
+            select(model.created_at).where(
+                model.business_id == ctx.business_id, employee_column == employee_id, model.created_at >= since
+            )
+        ).all()
+        counts: dict[str, int] = {}
+        for created_at in rows:
+            key = created_at.date().isoformat()
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    rentals_by_day = _daily_counts(Rental, Rental.created_by_employee_id)
+    notes_by_day = _daily_counts(ClientNote, ClientNote.employee_id)
+    photos_by_day = _daily_counts(RentalPhoto, RentalPhoto.employee_id)
+
+    today = utcnow().date()
+    points = []
+    for offset in range(days - 1, -1, -1):
+        day = today - timedelta(days=offset)
+        key = day.isoformat()
+        points.append(
+            EmployeeWorkloadTimeseriesPoint(
+                date=key,
+                rentals_created=rentals_by_day.get(key, 0),
+                client_notes=notes_by_day.get(key, 0),
+                rental_photos=photos_by_day.get(key, 0),
+            )
+        )
+    return EmployeeWorkloadTimeseriesOut(points=points)
 
 
 @router.post("/import", response_model=EmployeeImportResult)

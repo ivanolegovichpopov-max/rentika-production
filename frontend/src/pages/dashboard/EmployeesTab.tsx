@@ -21,6 +21,7 @@ import type {
   ActivityLogPage,
   Employee,
   EmployeeWorkload,
+  EmployeeWorkloadTimeseries,
   Position,
   PermissionLevel,
   ResourceType,
@@ -28,15 +29,15 @@ import type {
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useToast } from "../../components/Toast";
 import { Dropdown } from "../../components/Dropdown";
-import { IconEdit, IconGrip, IconHistory, IconRestore, IconSearch, IconTrash, IconTrendUp } from "../../lib/icons";
-import { initials, pluralRu } from "../../lib/format";
+import { IconAlert, IconEdit, IconGrip, IconHistory, IconMessages, IconRestore, IconSearch, IconTrash, IconTrendUp } from "../../lib/icons";
+import { initials, pluralRu, positionColorStyle, POSITION_COLORS } from "../../lib/format";
 import { Badge, EMPLOYEE_STATUS_META } from "../../lib/statusMeta";
 import { activityDetails, activityLabel } from "./employees/activityLabels";
-import { exportActivityCsv } from "./employees/csv";
+import { exportActivityCsv, exportEmployeesCsv, exportWorkloadCsv } from "./employees/csv";
 import { EditEmployeeModal } from "./employees/EditEmployeeModal";
 import { EmployeeDetailPanel } from "./employees/EmployeeDetailPanel";
 import { EmployeeImportModal } from "./employees/EmployeeImportModal";
-import { trendBadge } from "./employees/workloadTrend";
+import { WorkloadSparkline, trendBadge, workloadAnomaly } from "./employees/workloadTrend";
 
 const RESOURCES: { key: ResourceType; label: string }[] = [
   { key: "equipment", label: "Оборудование" },
@@ -47,6 +48,21 @@ const RESOURCES: { key: ResourceType; label: string }[] = [
 ];
 
 const LEVEL_LABEL: Record<PermissionLevel, string> = { none: "Нет доступа", view: "Просмотр", edit: "Просмотр и редактирование" };
+
+// Пресеты прав (67-й проход — "пресеты прав одной кнопкой" вместо
+// выставления каждого из пяти ресурсов вручную). Применяются через тот же
+// PUT .../permissions, что и ручное изменение одного ресурса (см.
+// handleApplyPreset) — отдельного backend-эндпоинта не требуется.
+const PERMISSION_PRESETS: { key: string; label: string; levels: Partial<Record<ResourceType, PermissionLevel>> }[] = [
+  { key: "none", label: "Без доступа", levels: {} },
+  { key: "view_all", label: "Только просмотр", levels: { equipment: "view", clients: "view", rentals: "view", finance: "view", employees: "view" } },
+  { key: "full_access", label: "Полный доступ", levels: { equipment: "edit", clients: "edit", rentals: "edit", finance: "edit", employees: "edit" } },
+  {
+    key: "sales_no_finance",
+    label: "Продажи без финансов",
+    levels: { equipment: "edit", clients: "edit", rentals: "edit", finance: "none", employees: "none" },
+  },
+];
 
 const PAGE_TABS: { key: "team" | "positions" | "activity"; label: string }[] = [
   { key: "team", label: "Команда" },
@@ -98,10 +114,31 @@ function pluralEmployees(n: number): string {
   return `${n} ${pluralRu(n, "сотрудник", "сотрудника", "сотрудников")}`;
 }
 
+// "Зависшее" приглашение (67-й проход) — статус "Приглашён" не подсвечивался
+// никак, даже если человек неделями не подтверждал вход, хотя ровно этот
+// случай стоит напомнить владельцу отдельно от "давно не заходил" (которое
+// вообще не считается для ещё не принявших приглашение, см. isDormantEmployee
+// выше). Employee.created_at ~ момент приглашения (строка Employee создаётся
+// именно тогда, отдельного invited_at на бэке нет).
+const PENDING_INVITE_DAYS = 7;
+
+function isPendingTooLong(emp: Employee): boolean {
+  if (emp.status !== "invited") return false;
+  const days = (Date.now() - new Date(emp.created_at).getTime()) / 86400000;
+  return days >= PENDING_INVITE_DAYS;
+}
+
+// Пресет "Критичные действия" в фильтре журнала (67-й проход) — одним
+// кликом сузить журнал до действий, которые стоит проверить в первую
+// очередь при разборе инцидента; бэкенд поддерживает список action через
+// запятую (см. employee_activity в app/api/routes/employees.py).
+const CRITICAL_ACTIONS = "delete,disable,update_permissions,update_require_2fa,reset_password,bulk_update";
+
 export function EmployeesTab({
   businessId,
   highlightEmployee,
   isOwner,
+  onMessageEmployee,
 }: {
   businessId: string;
   // Сотрудник, к строке которого нужно проскроллить и на секунду подсветить
@@ -121,6 +158,10 @@ export function EmployeesTab({
   // админа — как уже сделано на других вкладках (см. isOwner в
   // EquipmentTab.tsx/MessagesTab.tsx/DashboardTab.tsx).
   isOwner: boolean;
+  // Открыть личный диалог с сотрудником на вкладке "Сообщения" (67-й
+  // проход, "написать сообщение" из карточки сотрудника) — Dashboard.tsx
+  // переключает вкладку и передаёт id дальше в MessagesTab.
+  onMessageEmployee?: (employeeId: string) => void;
 }) {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
@@ -133,8 +174,22 @@ export function EmployeesTab({
   const [inviteForm, setInviteForm] = useState({ email: "", name: "", position_id: "", temporary_password: "" });
 
   const [newPositionTitle, setNewPositionTitle] = useState("");
-  const [renamingPosition, setRenamingPosition] = useState<{ id: string; value: string } | null>(null);
+  const [newPositionColor, setNewPositionColor] = useState("");
+  const [newPositionDescription, setNewPositionDescription] = useState("");
+  // 67-й проход: рядом с переименованием теперь редактируются и цвет/
+  // описание — одной формой, а не тремя отдельными.
+  const [editingPosition, setEditingPosition] = useState<{ id: string; title: string; color: string; description: string } | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  // Массовые действия в "Команде" (67-й проход) — набор выбранных строк +
+  // состояние применения; выбор сбрасывается при смене фильтров/поиска,
+  // чтобы случайно не задеть сотрудника, скрытого текущим фильтром.
+  const [selectedTeamIds, setSelectedTeamIds] = useState<Set<string>>(new Set());
+  const [bulkPositionId, setBulkPositionId] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  // Копирование прав на уже СУЩЕСТВУЮЩУЮ должность (67-й проход) — источник,
+  // выбранный в мини-форме на конкретной карточке; ключ — id карточки, куда
+  // копируем, значение — id карточки-источника.
+  const [copyPermissionsTarget, setCopyPermissionsTarget] = useState<{ targetId: string; sourceId: string } | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
@@ -153,6 +208,13 @@ export function EmployeesTab({
   const [activityLoadingMore, setActivityLoadingMore] = useState(false);
   const [activityFilter, setActivityFilter] = useState("");
   const [workload, setWorkload] = useState<EmployeeWorkload[] | null>(null);
+  // Дневная динамика для спарклайна в сводке нагрузки (67-й проход) — карта
+  // employee_id -> дневные суммы (аренды+заметки+фото), подгружается отдельно
+  // от /workload (у него нет постолбцовой разбивки по дням), по одному
+  // запросу на сотрудника из уже показанной сводки (см. useEffect ниже).
+  // Недоступно при периоде "весь" — сам /workload/timeseries принимает
+  // только 1..90 дней.
+  const [teamTrend, setTeamTrend] = useState<Record<string, number[]>>({});
 
   const { notify } = useToast();
 
@@ -285,6 +347,17 @@ export function EmployeesTab({
     return positions.find((p) => p.id === id)?.title ?? "—";
   }
 
+  // Цветной бейдж должности (67-й проход) — в таблице «Команда» вместо
+  // простого текста, если у должности выбран цвет (см. POSITION_COLORS в
+  // lib/format.ts); без цвета — как и раньше, просто название.
+  function positionBadge(id: string | null) {
+    if (!id) return "—";
+    const pos = positions.find((p) => p.id === id);
+    if (!pos) return "—";
+    if (!pos.color) return pos.title;
+    return <span className="badge" style={positionColorStyle(pos.color)}>{pos.title}</span>;
+  }
+
   // Матрица прав "наоборот" — по сотрудникам, а не по должностям (66-й
   // проход, дополнительный пункт обзора). Чисто клиентское вычисление по уже
   // загруженным employees/positions — своего эндпоинта не требует. Владелец
@@ -340,6 +413,18 @@ export function EmployeesTab({
     return list;
   }, [employees, teamSearch, teamPositionFilter, teamDormantOnly, teamSort]);
 
+  // Массовые действия (67-й проход) — выбор всегда сужается до того, что
+  // реально видно под текущими фильтрами/поиском, иначе владелец мог бы
+  // случайно применить действие к скрытому фильтром сотруднику, не видя его
+  // в списке.
+  useEffect(() => {
+    setSelectedTeamIds((prev) => {
+      const visible = new Set(filteredEmployees.map((e) => e.id));
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [filteredEmployees]);
+
   const filteredPositions = useMemo(() => {
     const q = positionSearch.trim().toLowerCase();
     return q ? positions.filter((p) => p.title.toLowerCase().includes(q)) : positions;
@@ -366,6 +451,33 @@ export function EmployeesTab({
       }
     });
   }, [workload, workloadSort]);
+
+  // Спарклайн дневной динамики в сводке нагрузки (67-й проход) — один запрос
+  // на сотрудника из текущей сводки (список обычно небольшой — это не
+  // хот-путь, вкладка «Активность» открывается вручную владельцем). "Весь
+  // период" не поддерживается самим /workload/timeseries (только 1..90
+  // дней) — тогда спарклайн просто не показываем.
+  useEffect(() => {
+    if (!isOwner || !workload || period === "all") {
+      setTeamTrend({});
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      workload.map((w) =>
+        api
+          .get<EmployeeWorkloadTimeseries>(`/businesses/${businessId}/employees/${w.employee_id}/workload/timeseries?days=${period}`)
+          .then((res) => [w.employee_id, res.points.map((pt) => pt.rentals_created + pt.client_notes + pt.rental_photos)] as const)
+          .catch(() => [w.employee_id, []] as const)
+      )
+    ).then((entries) => {
+      if (!cancelled) setTeamTrend(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workload, period, isOwner, businessId]);
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault();
@@ -399,9 +511,14 @@ export function EmployeesTab({
       // того чтобы каждая новая похожая роль всегда начиналась с "чистого
       // листа" (все права none) и владелец вручную выставлял их заново.
       copy_permissions_from: copyPermissionsFrom || null,
+      // Цвет/описание (67-й проход) — необязательны уже при создании.
+      color: newPositionColor || null,
+      description: newPositionDescription.trim() || null,
     });
     setNewPositionTitle("");
     setCopyPermissionsFrom("");
+    setNewPositionColor("");
+    setNewPositionDescription("");
     await load();
     loadActivity(activityFilter, period);
   }
@@ -434,6 +551,17 @@ export function EmployeesTab({
 
   async function handleToggleRequire2fa(position: Position) {
     const nextValue = !position.require_2fa;
+    // Подтверждение только на ВЫКЛЮЧЕНИЕ (67-й проход, "защита от
+    // обнуления прав") — включить обязательную 2FA безопасно в любой
+    // момент, а вот снять уже действующее требование стоит переспросить:
+    // это осознанное понижение защиты, а не рутинная настройка.
+    if (!nextValue) {
+      const ok = await confirm(
+        `Отключить обязательную двухфакторную аутентификацию для должности «${position.title}»? Сотрудники на этой должности смогут входить без второго фактора.`,
+        { danger: true, confirmLabel: "Отключить" }
+      );
+      if (!ok) return;
+    }
     // Оптимистичное обновление (66-й проход) — без него контролируемый
     // чекбокс визуально "откатывался" бы обратно сразу после клика: onChange
     // здесь асинхронный (await api.patch), а React пересобирает checked из
@@ -449,15 +577,31 @@ export function EmployeesTab({
     }
   }
 
-  async function handleRenamePosition(id: string, title: string) {
+  async function handleSavePositionEdit(id: string, title: string, color: string, description: string) {
     if (!title.trim()) return;
     try {
-      await api.patch(`/businesses/${businessId}/positions/${id}`, { title: title.trim() });
-      setRenamingPosition(null);
+      await api.patch(`/businesses/${businessId}/positions/${id}`, {
+        title: title.trim(),
+        color: color || null,
+        description: description.trim() || null,
+      });
+      setEditingPosition(null);
       await load();
       loadActivity(activityFilter, period);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Не удалось переименовать должность");
+      setError(err instanceof ApiError ? err.message : "Не удалось сохранить изменения должности");
+    }
+  }
+
+  async function handleCopyPermissionsOnto(targetId: string, sourceId: string) {
+    if (!sourceId) return;
+    try {
+      await api.post(`/businesses/${businessId}/positions/${targetId}/copy-permissions`, { source_position_id: sourceId });
+      setCopyPermissionsTarget(null);
+      await load();
+      loadActivity(activityFilter, period);
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : "Не удалось скопировать права");
     }
   }
 
@@ -484,6 +628,62 @@ export function EmployeesTab({
     await api.put(`/businesses/${businessId}/positions/${positionId}/permissions`, { permissions: updated });
     await load();
     loadActivity(activityFilter, period);
+  }
+
+  async function handleApplyPreset(positionId: string, presetKey: string) {
+    const preset = PERMISSION_PRESETS.find((p) => p.key === presetKey);
+    if (!preset) return;
+    const updated = RESOURCES.map(({ key }) => ({ resource: key, level: preset.levels[key] ?? "none" }));
+    await api.put(`/businesses/${businessId}/positions/${positionId}/permissions`, { permissions: updated });
+    await load();
+    loadActivity(activityFilter, period);
+  }
+
+  function toggleTeamSelected(id: string) {
+    setSelectedTeamIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleBulkAssignPosition() {
+    if (!bulkPositionId || selectedTeamIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      const body =
+        bulkPositionId === "none"
+          ? { employee_ids: [...selectedTeamIds], clear_position: true }
+          : { employee_ids: [...selectedTeamIds], position_id: bulkPositionId };
+      await api.post(`/businesses/${businessId}/employees/bulk-update`, body);
+      setSelectedTeamIds(new Set());
+      setBulkPositionId("");
+      await load();
+      loadActivity(activityFilter, period);
+      loadWorkload(period);
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : "Не удалось применить массовое действие");
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function handleBulkDisable() {
+    if (selectedTeamIds.size === 0) return;
+    if (!(await confirm(`Отключить доступ ${pluralEmployees(selectedTeamIds.size)}?`, { danger: true, confirmLabel: "Отключить" }))) return;
+    setBulkBusy(true);
+    try {
+      await api.post(`/businesses/${businessId}/employees/bulk-update`, { employee_ids: [...selectedTeamIds], status: "disabled" });
+      setSelectedTeamIds(new Set());
+      await load();
+      loadWorkload(period);
+      loadActivity(activityFilter, period);
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : "Не удалось отключить выбранных сотрудников");
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   async function handleDisableEmployee(id: string) {
@@ -603,11 +803,65 @@ export function EmployeesTab({
                 Давно не заходил
               </button>
             )}
+            {isOwner && filteredEmployees.length > 0 && (
+              // Экспорт СПИСКА команды (67-й проход) — экспортируется текущий
+              // отфильтрованный список (см. exportEmployeesCsv), а не весь
+              // employees, тем же принципом, что и остальные CSV в проекте.
+              <button className="btn btn-sm" onClick={() => exportEmployeesCsv(filteredEmployees, positionTitle)}>
+                Экспорт CSV
+              </button>
+            )}
           </div>
 
+          {isOwner && selectedTeamIds.size > 0 && (
+            // Панель массовых действий (67-й проход) — появляется только
+            // когда что-то выбрано, чтобы не занимать место постоянно.
+            <div className="card" style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", marginBottom: "10px" }}>
+              <strong style={{ fontSize: "13px" }}>{pluralEmployees(selectedTeamIds.size)} выбрано</strong>
+              <div style={{ minWidth: "200px" }}>
+                <Dropdown
+                  value={bulkPositionId}
+                  onChange={setBulkPositionId}
+                  placeholder="Назначить должность…"
+                  options={[
+                    { value: "", label: "Назначить должность…" },
+                    { value: "none", label: "Без должности" },
+                    ...positions.map((p) => ({ value: p.id, label: p.title })),
+                  ]}
+                />
+              </div>
+              <button className="btn btn-sm btn-primary" onClick={handleBulkAssignPosition} disabled={!bulkPositionId || bulkBusy}>
+                Применить
+              </button>
+              <button className="btn btn-sm btn-danger-ghost" onClick={handleBulkDisable} disabled={bulkBusy}>
+                Отключить выбранных
+              </button>
+              <button className="btn btn-sm" onClick={() => setSelectedTeamIds(new Set())} disabled={bulkBusy}>
+                Снять выбор
+              </button>
+            </div>
+          )}
+
+          <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
+                {isOwner && (
+                  <th style={{ width: "30px" }}>
+                    <input
+                      type="checkbox"
+                      checked={
+                        filteredEmployees.filter((e) => !e.is_owner).length > 0 &&
+                        filteredEmployees.filter((e) => !e.is_owner).every((e) => selectedTeamIds.has(e.id))
+                      }
+                      onChange={() => {
+                        const selectable = filteredEmployees.filter((e) => !e.is_owner).map((e) => e.id);
+                        const allSelected = selectable.length > 0 && selectable.every((id) => selectedTeamIds.has(id));
+                        setSelectedTeamIds(allSelected ? new Set() : new Set(selectable));
+                      }}
+                    />
+                  </th>
+                )}
                 <th className="sortable" onClick={() => toggleTeamSort("name")}>
                   Сотрудник
                   <span className={"sort-arrow" + (teamSort.key === "name" ? "" : " sort-arrow-idle")}>
@@ -615,6 +869,7 @@ export function EmployeesTab({
                   </span>
                 </th>
                 {isOwner && <th>Email</th>}
+                {isOwner && <th>Телефон</th>}
                 <th>Должность</th>
                 <th className="sortable" onClick={() => toggleTeamSort("status")}>
                   Статус
@@ -636,11 +891,12 @@ export function EmployeesTab({
             <tbody>
               {filteredEmployees.length === 0 && (
                 <tr>
-                  <td colSpan={isOwner ? 6 : 4} className="empty-note">Никого не найдено по текущим фильтрам</td>
+                  <td colSpan={isOwner ? 8 : 4} className="empty-note">Никого не найдено по текущим фильтрам</td>
                 </tr>
               )}
               {filteredEmployees.map((emp) => {
                 const clickable = isOwner && !emp.is_owner;
+                const pendingTooLong = isPendingTooLong(emp);
                 return (
                   <tr
                     key={emp.id}
@@ -649,17 +905,42 @@ export function EmployeesTab({
                     data-clickable={clickable ? "true" : undefined}
                     onClick={clickable ? () => setOpenEmployeeId(emp.id) : undefined}
                   >
+                    {isOwner && (
+                      <td onClick={(e) => e.stopPropagation()}>
+                        {!emp.is_owner && (
+                          <input type="checkbox" checked={selectedTeamIds.has(emp.id)} onChange={() => toggleTeamSelected(emp.id)} />
+                        )}
+                      </td>
+                    )}
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        <span className={"avatar avatar-emp-" + emp.status} style={{ width: 26, height: 26, fontSize: "10.5px" }}>
-                          {initials(emp.name)}
-                        </span>
+                        {emp.photo_url ? (
+                          <img
+                            src={emp.photo_url}
+                            alt=""
+                            style={{ width: 26, height: 26, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+                          />
+                        ) : (
+                          <span className={"avatar avatar-emp-" + emp.status} style={{ width: 26, height: 26, fontSize: "10.5px" }}>
+                            {initials(emp.name)}
+                          </span>
+                        )}
                         {emp.name}
                         {emp.is_owner && <span className="badge badge-owner">владелец</span>}
+                        {pendingTooLong && (
+                          <span
+                            className="badge tone-warning"
+                            title={`Приглашение не подтверждено ${PENDING_INVITE_DAYS}+ дней`}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
+                          >
+                            <IconAlert style={{ width: 11, height: 11 }} /> зависло
+                          </span>
+                        )}
                       </div>
                     </td>
                     {isOwner && <td className="muted">{emp.email ?? "—"}</td>}
-                    <td>{emp.is_owner ? "—" : positionTitle(emp.position_id)}</td>
+                    {isOwner && <td className="muted">{emp.phone ?? "—"}</td>}
+                    <td>{emp.is_owner ? "—" : positionBadge(emp.position_id)}</td>
                     <td><Badge meta={EMPLOYEE_STATUS_META[emp.status]} /></td>
                     {isOwner && (
                       <td className="muted">
@@ -667,6 +948,11 @@ export function EmployeesTab({
                       </td>
                     )}
                     <td style={{ display: "flex", gap: "6px", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+                      {isOwner && !emp.is_owner && onMessageEmployee && (
+                        <button className="btn btn-sm" onClick={() => onMessageEmployee(emp.id)} title="Написать сообщение">
+                          <IconMessages />
+                        </button>
+                      )}
                       {isOwner && !emp.is_owner && (
                         <button className="btn btn-sm" onClick={() => setEditingEmployee(emp)} title="Редактировать">
                           <IconEdit />
@@ -686,14 +972,29 @@ export function EmployeesTab({
               })}
             </tbody>
           </table>
+          </div>
         </>
       )}
 
       {pageTab === "positions" && (
         <>
           {isOwner && (
-            <form className="inline-form" onSubmit={handleCreatePosition}>
+            <form className="inline-form" onSubmit={handleCreatePosition} style={{ flexWrap: "wrap" }}>
               <input placeholder="Название новой должности" value={newPositionTitle} onChange={(e) => setNewPositionTitle(e.target.value)} />
+              <div style={{ minWidth: "140px" }}>
+                <Dropdown
+                  value={newPositionColor}
+                  onChange={setNewPositionColor}
+                  placeholder="Без цвета"
+                  options={[{ value: "", label: "Без цвета" }, ...POSITION_COLORS.map((c) => ({ value: c.key, label: c.label }))]}
+                />
+              </div>
+              <input
+                placeholder="Описание (необязательно)"
+                style={{ minWidth: "180px" }}
+                value={newPositionDescription}
+                onChange={(e) => setNewPositionDescription(e.target.value)}
+              />
               {positions.length > 0 && (
                 <div style={{ minWidth: "220px" }}>
                   <Dropdown
@@ -730,28 +1031,56 @@ export function EmployeesTab({
             // редактирование прав по-прежнему происходит в обычном виде "по
             // должностям" ниже, чтобы не заводить два места с одной и той же
             // логикой записи.
+            <div className="table-wrap">
             <table className="data-table compact">
               <thead>
                 <tr>
                   <th>Сотрудник</th>
                   <th>Должность</th>
                   {RESOURCES.map(({ key, label }) => (
-                    <th key={key}>{label}</th>
+                    <th key={key}>
+                      {label}
+                      {key === "employees" && (
+                        // Подсказка (67-й проход, "сквозное") — право на
+                        // "Сотрудники" регулирует только видимость вкладки,
+                        // не администрирование персонала (приглашение,
+                        // отключение, права — везде отдельная проверка
+                        // "только владелец", см. _require_owner в positions.py
+                        // и employees.py). Без этой пометки легко подумать,
+                        // что "edit" здесь даёт подчинённому право управлять
+                        // командой.
+                        <span
+                          className="muted"
+                          title="Только видимость вкладки «Сотрудники». Приглашать, отключать и менять права может только владелец — независимо от этого права."
+                          style={{ marginLeft: "4px", cursor: "help" }}
+                        >
+                          <IconAlert style={{ width: 11, height: 11 }} />
+                        </span>
+                      )}
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {employees.map((emp) => (
-                  <tr key={emp.id}>
-                    <td>{emp.name}{emp.is_owner && <span className="badge badge-owner" style={{ marginLeft: "6px" }}>владелец</span>}</td>
-                    <td className="muted">{emp.is_owner ? "—" : positionTitle(emp.position_id)}</td>
-                    {RESOURCES.map(({ key }) => (
-                      <td key={key} className="muted">{LEVEL_LABEL[employeeLevel(emp, key)]}</td>
-                    ))}
-                  </tr>
-                ))}
+                {employees.map((emp) => {
+                  const clickable = isOwner && !emp.is_owner;
+                  return (
+                    <tr
+                      key={emp.id}
+                      data-clickable={clickable ? "true" : undefined}
+                      onClick={clickable ? () => setOpenEmployeeId(emp.id) : undefined}
+                    >
+                      <td>{emp.name}{emp.is_owner && <span className="badge badge-owner" style={{ marginLeft: "6px" }}>владелец</span>}</td>
+                      <td className="muted">{emp.is_owner ? "—" : positionTitle(emp.position_id)}</td>
+                      {RESOURCES.map(({ key }) => (
+                        <td key={key} className="muted">{LEVEL_LABEL[employeeLevel(emp, key)]}</td>
+                      ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+            </div>
           ) : (
             <>
               {filteredPositions.length === 0 && <div className="empty-note">Ничего не найдено по запросу «{positionSearch}»</div>}
@@ -801,33 +1130,64 @@ export function EmployeesTab({
                           <IconGrip />
                         </span>
                       )}
-                      {renamingPosition?.id === p.id ? (
+                      {editingPosition?.id === p.id ? (
                         <form
                           className="inline-form"
-                          style={{ flex: 1 }}
+                          style={{ flex: 1, flexWrap: "wrap" }}
                           onSubmit={(e) => {
                             e.preventDefault();
-                            handleRenamePosition(p.id, renamingPosition.value);
+                            handleSavePositionEdit(p.id, editingPosition.title, editingPosition.color, editingPosition.description);
                           }}
                         >
                           <input
                             autoFocus
-                            value={renamingPosition.value}
-                            onChange={(e) => setRenamingPosition({ id: p.id, value: e.target.value })}
+                            value={editingPosition.title}
+                            onChange={(e) => setEditingPosition({ ...editingPosition, title: e.target.value })}
+                          />
+                          <div style={{ minWidth: "140px" }}>
+                            <Dropdown
+                              value={editingPosition.color}
+                              onChange={(v) => setEditingPosition({ ...editingPosition, color: v })}
+                              placeholder="Без цвета"
+                              options={[{ value: "", label: "Без цвета" }, ...POSITION_COLORS.map((c) => ({ value: c.key, label: c.label }))]}
+                            />
+                          </div>
+                          <input
+                            placeholder="Описание"
+                            style={{ minWidth: "180px" }}
+                            value={editingPosition.description}
+                            onChange={(e) => setEditingPosition({ ...editingPosition, description: e.target.value })}
                           />
                           <button type="submit" className="btn btn-sm btn-primary">Сохранить</button>
-                          <button type="button" className="btn btn-sm" onClick={() => setRenamingPosition(null)}>Отмена</button>
+                          <button type="button" className="btn btn-sm" onClick={() => setEditingPosition(null)}>Отмена</button>
                         </form>
                       ) : (
                         <>
+                          {p.color && (
+                            <span
+                              title="Цвет должности"
+                              style={{
+                                width: 12,
+                                height: 12,
+                                borderRadius: "50%",
+                                flexShrink: 0,
+                                background: `var(${POSITION_COLORS.find((c) => c.key === p.color)?.cssVar ?? "--muted"})`,
+                                border: "1px solid var(--border)",
+                              }}
+                            />
+                          )}
                           <h3 style={{ margin: 0 }}>{p.title}</h3>
                           <span className="badge" title="Сколько сотрудников сейчас на этой должности">{pluralEmployees(p.employee_count)}</span>
                         </>
                       )}
                     </div>
-                    {renamingPosition?.id !== p.id && isOwner && (
+                    {editingPosition?.id !== p.id && isOwner && (
                       <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                        <button className="btn btn-sm" onClick={() => setRenamingPosition({ id: p.id, value: p.title })} title="Переименовать">
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => setEditingPosition({ id: p.id, title: p.title, color: p.color ?? "", description: p.description ?? "" })}
+                          title="Редактировать"
+                        >
                           <IconEdit />
                         </button>
                         <button
@@ -840,13 +1200,62 @@ export function EmployeesTab({
                       </div>
                     )}
                   </div>
+                  {p.description && editingPosition?.id !== p.id && (
+                    <div className="muted" style={{ fontSize: "12.5px", marginTop: "4px" }}>{p.description}</div>
+                  )}
                   {isOwner && (
                     <label style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "10px", fontSize: "12.5px" }} className="muted">
                       <input type="checkbox" checked={p.require_2fa} onChange={() => handleToggleRequire2fa(p)} />
                       Обязательная двухфакторная аутентификация для этой должности
                     </label>
                   )}
-                  <table className="data-table compact" style={{ marginTop: "10px" }}>
+                  {isOwner && (
+                    <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center", marginTop: "10px" }}>
+                      {/* Пресеты прав (67-й проход) — одной кнопкой вместо
+                          выставления каждого из пяти ресурсов вручную; PUT
+                          применяется целиком (см. handleApplyPreset), поэтому
+                          перед применением стоит предупредить, что текущие
+                          права будут заменены. */}
+                      {PERMISSION_PRESETS.map((preset) => (
+                        <button
+                          key={preset.key}
+                          className="btn btn-sm"
+                          title="Заменит текущие права этой должности"
+                          onClick={() => handleApplyPreset(p.id, preset.key)}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                      {copyPermissionsTarget?.targetId === p.id ? (
+                        <>
+                          <div style={{ minWidth: "180px" }}>
+                            <Dropdown
+                              value={copyPermissionsTarget.sourceId}
+                              onChange={(v) => setCopyPermissionsTarget({ targetId: p.id, sourceId: v })}
+                              placeholder="Выбрать должность…"
+                              options={positions.filter((other) => other.id !== p.id).map((other) => ({ value: other.id, label: other.title }))}
+                            />
+                          </div>
+                          <button
+                            className="btn btn-sm btn-primary"
+                            disabled={!copyPermissionsTarget.sourceId}
+                            onClick={() => handleCopyPermissionsOnto(p.id, copyPermissionsTarget.sourceId)}
+                          >
+                            Скопировать
+                          </button>
+                          <button className="btn btn-sm" onClick={() => setCopyPermissionsTarget(null)}>Отмена</button>
+                        </>
+                      ) : (
+                        positions.length > 1 && (
+                          <button className="btn btn-sm" onClick={() => setCopyPermissionsTarget({ targetId: p.id, sourceId: "" })}>
+                            Скопировать права с другой должности
+                          </button>
+                        )
+                      )}
+                    </div>
+                  )}
+                  <div className="table-wrap" style={{ marginTop: "10px" }}>
+                  <table className="data-table compact">
                     <thead>
                       <tr>
                         <th>Раздел</th>
@@ -858,7 +1267,18 @@ export function EmployeesTab({
                         const current = p.permissions.find((perm) => perm.resource === key)?.level ?? "none";
                         return (
                           <tr key={key}>
-                            <td>{label}</td>
+                            <td>
+                              {label}
+                              {key === "employees" && (
+                                <span
+                                  className="muted"
+                                  title="Только видимость вкладки «Сотрудники». Приглашать, отключать и менять права может только владелец — независимо от этого права."
+                                  style={{ marginLeft: "4px", cursor: "help" }}
+                                >
+                                  <IconAlert style={{ width: 11, height: 11 }} />
+                                </span>
+                              )}
+                            </td>
                             <td>
                               {isOwner ? (
                                 <Dropdown
@@ -879,6 +1299,7 @@ export function EmployeesTab({
                       })}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               ))}
             </>
@@ -896,14 +1317,22 @@ export function EmployeesTab({
             ))}
           </div>
 
-          <h2 style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <IconTrendUp /> Нагрузка команды
-          </h2>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
+            <h2 style={{ display: "flex", alignItems: "center", gap: "6px", margin: 0 }}>
+              <IconTrendUp /> Нагрузка команды
+            </h2>
+            {workload && workload.length > 0 && (
+              <button className="btn btn-sm" onClick={() => exportWorkloadCsv(workload, "Нагрузка команды")}>
+                Экспорт CSV
+              </button>
+            )}
+          </div>
           {workload === null ? (
             <div className="muted">Загрузка…</div>
           ) : workload.length === 0 ? (
             <div className="empty-note">Активных сотрудников пока нет</div>
           ) : (
+            <div className="table-wrap">
             <table className="data-table compact">
               <thead>
                 <tr>
@@ -931,6 +1360,7 @@ export function EmployeesTab({
                       {workloadSort.key === "photos" ? (workloadSort.dir === "desc" ? "▼" : "▲") : "↕"}
                     </span>
                   </th>
+                  <th>Динамика по дням</th>
                 </tr>
               </thead>
               <tbody>
@@ -942,21 +1372,32 @@ export function EmployeesTab({
                   // выше) — карточку для него не открываем по той же причине.
                   const emp = employees.find((e) => e.id === w.employee_id);
                   const clickable = emp && !emp.is_owner;
+                  const anomaly = workloadAnomaly(w, emp?.status === "active");
+                  const trend = teamTrend[w.employee_id];
                   return (
                     <tr
                       key={w.employee_id}
                       data-clickable={clickable ? "true" : undefined}
                       onClick={clickable ? () => setOpenEmployeeId(w.employee_id) : undefined}
                     >
-                      <td>{w.employee_name}</td>
+                      <td>
+                        {w.employee_name}
+                        {anomaly && (
+                          <span className="badge tone-warning" title={anomaly} style={{ marginLeft: "6px", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                            <IconAlert style={{ width: 11, height: 11 }} /> {anomaly}
+                          </span>
+                        )}
+                      </td>
                       <td>{w.rentals_created}{trendBadge(w.rentals_created, w.rentals_created_prev)}</td>
                       <td>{w.client_notes}{trendBadge(w.client_notes, w.client_notes_prev)}</td>
                       <td>{w.rental_photos}{trendBadge(w.rental_photos, w.rental_photos_prev)}</td>
+                      <td>{trend && trend.length >= 2 ? <WorkloadSparkline values={trend} /> : <span className="muted">—</span>}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+            </div>
           )}
 
           <div style={{ marginTop: "2rem", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
@@ -990,6 +1431,18 @@ export function EmployeesTab({
               value={activityAction}
               onChange={(e) => changeActivityAction(e.target.value)}
             />
+            {/* Пресет "Критичные действия" (67-й проход) — быстрый фильтр для
+                разбора инцидентов: удаления/отключения/изменения прав/2FA/
+                сброс пароля/массовые действия одним кликом, без ручного
+                перебора action в поле выше. Бэкенд принимает список action
+                через запятую (см. employee_activity в employees.py). */}
+            <button
+              className={"btn btn-sm" + (activityAction === CRITICAL_ACTIONS ? " btn-primary" : "")}
+              onClick={() => changeActivityAction(activityAction === CRITICAL_ACTIONS ? "" : CRITICAL_ACTIONS)}
+              title="Удаления, отключения, изменения прав/2FA, сброс пароля, массовые действия"
+            >
+              Критичные действия
+            </button>
           </div>
           {activityItems === null ? (
             <div className="muted">Загрузка…</div>
@@ -1052,6 +1505,7 @@ export function EmployeesTab({
           }}
           onDisable={() => handleDisableEmployee(openEmployee.id)}
           onReactivate={() => handleReactivateEmployee(openEmployee.id)}
+          onMessage={onMessageEmployee ? () => onMessageEmployee(openEmployee.id) : undefined}
         />
       )}
 

@@ -44,6 +44,11 @@
   --seq-5: #1A73E8;
   --seq-6: #174EA6;
   --brand-deep: #0B3D91;
+  /* Цвет должности "Розовый" (67-й проход, палитра карточек в "Должности и
+     права") — единственный из восьми цветов без готового тематического
+     токена, остальные семь переиспользуют существующие --accent/--good/...
+     (см. POSITION_COLORS в lib/format.ts). */
+  --pos-pink: #D01884;
   --shadow-sm: 0 1px 2px 0 rgba(60,64,67,0.15), 0 1px 3px 1px rgba(60,64,67,0.10);
   --shadow-lg: 0 4px 8px 0 rgba(60,64,67,0.20), 0 8px 24px 4px rgba(60,64,67,0.14);
   --focus-ring: 0 0 0 3px rgba(26,115,232,0.30);
@@ -71,6 +76,7 @@
     --col-select: #6DD0DE; --col-select-soft: rgba(109,208,222,0.22);
     --seq-1: #1B2C42; --seq-2: #23395A; --seq-3: #2F4E7D; --seq-4: #3F6BAA; --seq-5: #5E90D6; --seq-6: #8AB4F8;
     --brand-deep: #3E63A6;
+    --pos-pink: #F49AC1;
     --shadow-sm: 0 1px 2px 0 rgba(0,0,0,0.35), 0 1px 3px 1px rgba(0,0,0,0.25);
     --shadow-lg: 0 4px 12px 0 rgba(0,0,0,0.45), 0 8px 28px 4px rgba(0,0,0,0.35);
     --focus-ring: 0 0 0 3px rgba(138,180,248,0.35);
@@ -91,6 +97,7 @@
   --col-select: #6DD0DE; --col-select-soft: rgba(109,208,222,0.22);
   --seq-1: #1B2C42; --seq-2: #23395A; --seq-3: #2F4E7D; --seq-4: #3F6BAA; --seq-5: #5E90D6; --seq-6: #8AB4F8;
   --brand-deep: #3E63A6;
+  --pos-pink: #F49AC1;
   --shadow-sm: 0 1px 2px 0 rgba(0,0,0,0.35), 0 1px 3px 1px rgba(0,0,0,0.25);
   --shadow-lg: 0 4px 12px 0 rgba(0,0,0,0.45), 0 8px 28px 4px rgba(0,0,0,0.35);
   --focus-ring: 0 0 0 3px rgba(138,180,248,0.35);
@@ -878,6 +885,12 @@ dialog#confirm-modal::backdrop { background: rgba(0,0,0,0.4); }
    (двадцатый проход, п.4 обзора). */
 .field-row-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
 .field-hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+
+/* Небольшой акцентный блок для одноразовой информации в форме (67-й проход
+   — сгенерированный временный пароль в EditEmployeeModal.tsx, "показывается
+   один раз"), тот же принцип видимости, что и .backup-codes у 2FA, но
+   компактнее (однострочный текст, а не блок кода). */
+.form-note { font-size: 12.5px; background: var(--accent-soft); color: var(--ink); border-radius: 8px; padding: 8px 10px; }
 
 /* ---------- DatePicker (components/DatePicker.tsx) — свой попап-календарь
    взамен нативного `<input type="date">` (57-58-й проходы, обзор с

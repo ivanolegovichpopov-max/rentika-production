@@ -168,12 +168,22 @@ export function MessagesTab({
   messagingPermission,
   onMessagingPermissionChange,
   onUnreadTotalChange,
+  startDmWith,
 }: {
   businessId: string;
   isOwner: boolean;
   messagingPermission: MessagingPermission;
   onMessagingPermissionChange: (mode: MessagingPermission) => void;
   onUnreadTotalChange: (total: number) => void;
+  // Открыть (или создать) личный диалог с конкретным сотрудником сразу при
+  // переходе сюда (67-й проход, кнопка "Написать сообщение" в карточке
+  // сотрудника на вкладке "Сотрудники") — тот же счётчиковый паттерн
+  // signal, что и highlightEmployee/calendarFocus в Dashboard.tsx, чтобы
+  // повторный клик по уже открытому диалогу срабатывал снова. Бэкенд сам
+  // находит существующий DM с этим собеседником или создаёт новый (см.
+  // create_conversation в app/api/routes/messaging.py) — фронту не нужно
+  // искать его среди уже загруженных conversations.
+  startDmWith?: { employeeId: string; signal: number } | null;
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationsLoaded, setConversationsLoaded] = useState(false);
@@ -207,6 +217,14 @@ export function MessagesTab({
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [businessId]);
+
+  useEffect(() => {
+    if (!startDmWith) return;
+    void createConversation("dm", [startDmWith.employeeId]).catch((err) => {
+      notify(err instanceof ApiError ? err.message : "Не удалось открыть диалог с этим сотрудником");
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startDmWith?.employeeId, startDmWith?.signal]);
 
   function loadThread(id: string, opts?: { silent?: boolean }) {
     if (!opts?.silent) setThreadLoaded(false);

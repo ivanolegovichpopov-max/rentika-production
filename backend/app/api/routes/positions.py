@@ -10,6 +10,7 @@ from app.core.deps import BusinessContext, get_business_context
 from app.database import get_db
 from app.models.business import Employee, Permission, Position, PermissionLevel, ResourceType
 from app.schemas.business import (
+    PositionCopyPermissions,
     PositionCreate,
     PositionOut,
     PositionRequire2FAUpdate,
@@ -52,6 +53,8 @@ def _position_out(db: Session, position: Position, employee_count: int) -> Posit
         sort_order=position.sort_order,
         require_2fa=position.require_2fa,
         employee_count=employee_count,
+        color=position.color,
+        description=position.description,
     )
 
 
@@ -73,7 +76,13 @@ async def create_position(
     # Новая карточка — в конец списка по текущему ручному порядку, не по
     # алфавиту/дате создания (см. Position.sort_order).
     next_sort_order = (max((p.sort_order for p in existing), default=-1)) + 1
-    position = Position(business_id=ctx.business_id, title=body.title, sort_order=next_sort_order)
+    position = Position(
+        business_id=ctx.business_id,
+        title=body.title,
+        sort_order=next_sort_order,
+        color=body.color,
+        description=body.description,
+    )
     db.add(position)
     db.flush()
 
@@ -141,7 +150,7 @@ async def reorder_positions(
 
 
 @router.patch("/{position_id}", response_model=PositionOut)
-async def rename_position(
+async def update_position(
     position_id: uuid.UUID,
     body: PositionUpdate,
     ctx: BusinessContext = Depends(get_business_context),
@@ -153,27 +162,53 @@ async def rename_position(
     удаление (DELETE ниже) редактировать уже умели. UniqueConstraint
     business_id+title — при конфликте отдаём то же читаемое 400, что и на
     создании должности с уже занятым названием (см. create_position выше,
-    где сама ошибка ловится на уровне БД, а не заранее)."""
+    где сама ошибка ловится на уровне БД, а не заранее).
+
+    67-й проход добавил сюда независимо изменяемые color/description —
+    каждое поле применяется, только если реально пришло в теле запроса
+    (см. model_fields_set), поэтому можно прислать один только цвет или
+    одно только описание, не трогая остальное. Название действия в журнале
+    сохраняем "rename", если title изменился (совместимость с фильтром
+    action=rename и существующими тестами/данными) — и новое "update",
+    когда меняются ТОЛЬКО color/description без title."""
     _require_owner(ctx)
     position = db.get(Position, position_id)
     if position is None or position.business_id != ctx.business_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Должность не найдена")
 
     title_before = position.title
-    position.title = body.title
-    log_action(
-        db,
-        business_id=ctx.business_id,
-        user_id=ctx.user.id,
-        action="rename",
-        resource="position",
-        resource_id=str(position_id),
-        # title_before/title_after — тот же idiom "<поле>_before"/"<поле>_after",
-        # что и editDetails() в RentalHistorySection.tsx на фронте, чтобы
-        # журнал действий сотрудников мог показать "было → стало", а не
-        # только факт переименования без деталей.
-        meta={"title_before": title_before, "title_after": body.title} if title_before != body.title else None,
-    )
+    color_before = position.color
+    description_before = position.description
+
+    fields = body.model_fields_set
+    if "title" in fields and body.title is not None:
+        position.title = body.title
+    if "color" in fields:
+        position.color = body.color
+    if "description" in fields:
+        position.description = body.description
+
+    change_meta: dict = {}
+    if position.title != title_before:
+        change_meta["title_before"] = title_before
+        change_meta["title_after"] = position.title
+    if position.color != color_before:
+        change_meta["color_before"] = color_before
+        change_meta["color_after"] = position.color
+    if position.description != description_before:
+        change_meta["description_before"] = description_before
+        change_meta["description_after"] = position.description
+
+    if change_meta:
+        log_action(
+            db,
+            business_id=ctx.business_id,
+            user_id=ctx.user.id,
+            action="rename" if "title_before" in change_meta else "update",
+            resource="position",
+            resource_id=str(position_id),
+            meta=change_meta,
+        )
     try:
         db.commit()
     except IntegrityError:
@@ -226,6 +261,64 @@ async def update_permissions(
         resource="position",
         resource_id=str(position_id),
         meta={"changes": changes} if changes else None,
+    )
+    db.commit()
+
+    counts = _employee_counts(db, ctx.business_id)
+    return _position_out(db, position, counts.get(position.id, 0))
+
+
+@router.post("/{position_id}/copy-permissions", response_model=PositionOut)
+async def copy_permissions(
+    position_id: uuid.UUID,
+    body: PositionCopyPermissions,
+    ctx: BusinessContext = Depends(get_business_context),
+    db: Session = Depends(get_db),
+):
+    """Скопировать матрицу прав с другой должности на уже существующую
+    (67-й проход) — та же логика копирования, что и copy_permissions_from
+    при СОЗДАНИИ должности (см. create_position), но применимая к уже
+    заведённой карточке: если "эталонная" должность позже поменяла права,
+    применить их на другую должность одной кнопкой, а не вручную ресурс за
+    ресурсом через обычную матрицу."""
+    _require_owner(ctx)
+    position = db.get(Position, position_id)
+    if position is None or position.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Должность не найдена")
+    if body.source_position_id == position_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Нельзя скопировать права должности на саму себя")
+    source = db.get(Position, body.source_position_id)
+    if source is None or source.business_id != ctx.business_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Должность-источник для копирования прав не найдена")
+
+    source_levels = {
+        row.resource: row.level
+        for row in db.scalars(select(Permission).where(Permission.position_id == source.id)).all()
+    }
+    before_levels = {
+        row.resource: row.level
+        for row in db.scalars(select(Permission).where(Permission.position_id == position_id)).all()
+    }
+    changes = []
+    for resource in ResourceType:
+        new_level = source_levels.get(resource, PermissionLevel.none)
+        prev_level = before_levels.get(resource, PermissionLevel.none)
+        if prev_level != new_level:
+            changes.append({"resource": resource.value, "level_before": prev_level.value, "level_after": new_level.value})
+        perm = db.scalar(select(Permission).where(Permission.position_id == position_id, Permission.resource == resource))
+        if perm:
+            perm.level = new_level
+        else:
+            db.add(Permission(position_id=position_id, resource=resource, level=new_level))
+
+    log_action(
+        db,
+        business_id=ctx.business_id,
+        user_id=ctx.user.id,
+        action="copy_permissions",
+        resource="position",
+        resource_id=str(position_id),
+        meta={"source_position_id": str(source.id), "source_title": source.title, "changes": changes} if changes else None,
     )
     db.commit()
 

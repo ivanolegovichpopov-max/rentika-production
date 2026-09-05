@@ -27,6 +27,20 @@ class BusinessLogoUpdate(BaseModel):
     logo_url: str | None = Field(default=None, max_length=2_000_000)
 
 
+# Фиксированная палитра цветов должности (67-й проход) — те же ключи, что
+# POSITION_COLORS на фронте (lib/format.ts): каждому ключу там соответствует
+# готовая пара фон/текст, подобранная под обе темы. Ограничиваем набором, а
+# не произвольным hex/CSS-значением, чтобы бейджи должности везде в
+# интерфейсе оставались читаемыми и согласованными между собой.
+POSITION_COLORS = {"gray", "blue", "green", "purple", "orange", "red", "teal", "pink"}
+
+
+def _validate_position_color(value: str | None) -> str | None:
+    if value is not None and value not in POSITION_COLORS:
+        raise ValueError(f"Недопустимый цвет должности. Разрешены: {', '.join(sorted(POSITION_COLORS))}")
+    return value
+
+
 class PositionCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     # Копировать права с уже существующей должности (66-й проход) — вместо
@@ -36,6 +50,14 @@ class PositionCreate(BaseModel):
     # бизнесу (см. create_position), иначе 404; если не задано — прежнее
     # поведение (все права none).
     copy_permissions_from: uuid.UUID | None = None
+    # Цвет и описание (67-й проход) — см. Position.color/description.
+    color: str | None = None
+    description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("color")
+    @classmethod
+    def _check_color(cls, value: str | None) -> str | None:
+        return _validate_position_color(value)
 
 
 class PermissionIn(BaseModel):
@@ -56,6 +78,9 @@ class PositionOut(BaseModel):
     # "Команду" и вручную считать по фильтру, чтобы понять, можно ли
     # безопасно удалить должность или переименовать её без сюрпризов.
     employee_count: int = 0
+    # Цвет и описание (67-й проход) — см. Position.color/description.
+    color: str | None = None
+    description: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -64,12 +89,31 @@ class PositionUpdatePermissions(BaseModel):
     permissions: list[PermissionIn]
 
 
-class PositionUpdate(BaseModel):
-    """Переименование должности (64-й проход — раньше название задавалось
-    только при создании и дальше было неизменным; DELETE на должность уже
-    существовал на бэке, а PATCH на переименование — нет)."""
+class PositionCopyPermissions(BaseModel):
+    """Скопировать матрицу прав с другой должности этого же бизнеса на УЖЕ
+    существующую должность (67-й проход) — раньше copy_permissions_from
+    работал только при создании (PositionCreate); если после создания
+    "эталонная" должность поменялась, применить те же права на уже
+    заведённую должность можно было только вручную, ресурс за ресурсом."""
 
-    title: str = Field(min_length=1, max_length=255)
+    source_position_id: uuid.UUID
+
+
+class PositionUpdate(BaseModel):
+    """Переименование/оформление должности. Изначально (64-й проход) — только
+    переименование; 67-й проход добавил необязательные color/description,
+    независимо изменяемые через тот же PATCH (различаем "не передано" через
+    model_fields_set в роуте, а не через значение None, тем же способом,
+    что и EmployeeUpdate.position_id)."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    color: str | None = None
+    description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("color")
+    @classmethod
+    def _check_color(cls, value: str | None) -> str | None:
+        return _validate_position_color(value)
 
 
 class PositionReorder(BaseModel):
@@ -92,6 +136,9 @@ class EmployeeInvite(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     position_id: uuid.UUID | None = None
     temporary_password: str = Field(min_length=12, max_length=128)
+    # Телефон (67-й проход) — необязателен при приглашении, можно добавить
+    # позже через редактирование карточки.
+    phone: str | None = Field(default=None, max_length=64)
 
 
 class EmployeeOut(BaseModel):
@@ -118,6 +165,18 @@ class EmployeeOut(BaseModel):
     is_owner: bool
     status: EmployeeStatus
     created_at: datetime
+    # Телефон (67-й проход) — та же видимость, что email/last_login_at:
+    # None для всех, кроме владельца/платформенного админа (см. _employee_out).
+    phone: str | None = None
+    # Заметки владельца о сотруднике (67-й проход) — видны ТОЛЬКО
+    # владельцу/платформенному админу, даже строже email: остальной
+    # команде это поле не отдаётся никогда, независимо от ctx.full_access
+    # самого сотрудника (см. _employee_out).
+    notes: str | None = None
+    # Фото (67-й проход) — в отличие от phone/notes/email, видно ВСЕЙ
+    # команде наравне со списком сотрудников: это аватар, а не приватный
+    # контакт, и помогает узнавать коллег в общих списках.
+    photo_url: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -132,6 +191,62 @@ class EmployeeUpdate(BaseModel):
     # был бессилен что-либо сделать. Проверяется той же политикой пароля,
     # что и при приглашении (см. update_employee).
     new_password: str | None = Field(default=None, min_length=12, max_length=128)
+    # Телефон/заметки/фото (67-й проход) — независимо изменяемые/очищаемые
+    # поля, различаем "не передано" через model_fields_set в роуте (тот же
+    # приём, что и у position_id), а не через None, иначе поле нельзя было
+    # бы явно очистить.
+    phone: str | None = Field(default=None, max_length=64)
+    notes: str | None = Field(default=None, max_length=4000)
+    photo_url: str | None = Field(default=None, max_length=2_000_000)
+
+
+class EmployeeBulkUpdate(BaseModel):
+    """Массовое действие над несколькими сотрудниками сразу (67-й проход) —
+    раньше назначить должность или отключить можно было только по одному,
+    строка за строкой; при активной команде это быстро становится
+    утомительным. Владелец выбирает, что применить: должность (или явная
+    очистка) и/или статус — оба поля необязательны и независимы, можно
+    передать только одно из них."""
+
+    employee_ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
+    position_id: uuid.UUID | None = None
+    clear_position: bool = False
+    status: EmployeeStatus | None = None
+
+
+class EmployeeBulkUpdateResult(BaseModel):
+    updated: list[EmployeeOut]
+    # Сколько строк из employee_ids пропущено, потому что это владелец
+    # бизнеса (его нельзя менять массовым действием — та же защита, что и у
+    # обычного PATCH/DELETE одного сотрудника) или id не найден в этом бизнесе.
+    skipped: int
+
+
+class EmployeeResetPasswordResult(BaseModel):
+    """Ответ на генерацию нового временного пароля (67-й проход) — пароль
+    отдаётся ОДИН раз в теле ответа (тот же принцип, что backup-коды 2FA:
+    показать один раз, дальше владелец сам передаёт его сотруднику лично),
+    нигде не логируется и не хранится в открытом виде."""
+
+    temporary_password: str
+
+
+class EmployeeWorkloadTimeseriesPoint(BaseModel):
+    date: str
+    rentals_created: int
+    client_notes: int
+    rental_photos: int
+
+
+class EmployeeWorkloadTimeseriesOut(BaseModel):
+    """Дневная динамика нагрузки ОДНОГО сотрудника (67-й проход) — раньше
+    тренд в EmployeeWorkloadOut был одним числом-дельтой к прошлому периоду
+    без картины "как менялось по дням"; здесь то же самое, но по дням, для
+    мини-графика в карточке сотрудника (см. EmployeeDetailPanel.tsx).
+    Считается только для одного сотрудника за раз (не для всей команды
+    сразу) — иначе объём данных растёт как сотрудники×дни×метрики."""
+
+    points: list[EmployeeWorkloadTimeseriesPoint]
 
 
 class ActivityLogEntry(BaseModel):
